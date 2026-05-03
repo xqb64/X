@@ -62,7 +62,7 @@ struct ReadFileResult read_file(const char *path)
       result.msg = "ferror";
       goto dealloc_then_close_then_end;
     } else {
-      if (feof(f)) {
+      if (feof(f) != 0) {
         result.msg = "feof";
         goto dealloc_then_close_then_end;
       }
