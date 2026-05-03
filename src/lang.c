@@ -13,8 +13,8 @@ struct ReadFileResult read_file(const char *path)
   struct ReadFileResult result;
   FILE *f;
   int seek_result;
-  size_t bytes_read;
   long offset;
+  size_t bytes_read;
   char *buf;
 
   result =
@@ -33,7 +33,7 @@ struct ReadFileResult read_file(const char *path)
     perror("fseek");
     result.is_ok = false;
     result.msg = "fseek";
-    goto end;
+    goto close_then_end;
   }
 
   offset = ftell(f);
@@ -41,7 +41,7 @@ struct ReadFileResult read_file(const char *path)
     perror("ftell");
     result.is_ok = false;
     result.msg = "ftell";
-    goto end;
+    goto close_then_end;
   }
 
   rewind(f);
@@ -51,16 +51,33 @@ struct ReadFileResult read_file(const char *path)
     perror("malloc");
     result.is_ok = false;
     result.msg = "malloc";
-    goto end;
+    goto close_then_end;
   }
 
   /* Let's ignore the return value of fread for now.  */
-  bytes_read = fread(buf, offset, 1L, f);
+  bytes_read = fread(buf, 1, offset, f);
+  if (bytes_read < (size_t) offset) {
+    result.is_ok = false;
+    if (ferror(f) != 0) {
+      perror("fread");
+      result.msg = "ferror";
+      goto dealloc_then_close_then_end;
+    } else {
+      if (feof(f)) {
+        result.msg = "feof";
+        goto dealloc_then_close_then_end;
+      }
+    }
+  } else {
+    buf[offset] = '\0';
+    result.contents = buf;
+    goto close_then_end;
+  }
 
-  buf[offset] = '\0';
+dealloc_then_close_then_end:
+  free(buf);
 
-  result.contents = buf;
-
+close_then_end:
   fclose(f);
 
 end:
