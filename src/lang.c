@@ -290,8 +290,10 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
         if (is_alpha(*tokenizer->src)) {
           vec_insert(&tokens, identifier(tokenizer));
         } else {
-          return (struct TokenizeResult){.tokens = {0}, .is_ok = false, .msg = "Encountered unexpected token"};  
-	}
+          return (struct TokenizeResult){.tokens = {0},
+                                         .is_ok = false,
+                                         .msg = "Encountered unexpected token"};
+        }
 
         break;
     }
