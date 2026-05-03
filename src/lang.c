@@ -1,43 +1,88 @@
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-char *read_file(const char *path)
+struct ReadFileResult {
+  bool is_ok;
+  char *msg;
+  char *contents;
+};
+
+struct ReadFileResult read_file(const char *path)
 {
+  struct ReadFileResult result;
   FILE *f;
+  int seek_result;
   size_t bytes_read;
-  long len;
+  long offset;
   char *buf;
+
+  result =
+      (struct ReadFileResult){.is_ok = true, .msg = NULL, .contents = NULL};
 
   f = fopen(path, "r");
   if (!f) {
     perror("fopen");
-    exit(1);
+    result.is_ok = false;
+    result.msg = "fopen";
+    goto end;
   }
 
-  fseek(f, 0L, SEEK_END);
-  len = ftell(f);
+  seek_result = fseek(f, 0L, SEEK_END);
+  if (seek_result != 0) {
+    perror("fseek");
+    result.is_ok = false;
+    result.msg = "fseek";
+    goto end;
+  }
+
+  offset = ftell(f);
+  if (offset == -1) {
+    perror("ftell");
+    result.is_ok = false;
+    result.msg = "ftell";
+    goto end;
+  }
+
   rewind(f);
 
-  buf = malloc(len + 1);
+  buf = malloc(offset + 1);
+  if (!buf) {
+    perror("malloc");
+    result.is_ok = false;
+    result.msg = "malloc";
+    goto end;
+  }
 
-  bytes_read = fread(buf, len, 1L, f);
+  /* Let's ignore the return value of fread for now.  */
+  bytes_read = fread(buf, offset, 1L, f);
 
-  buf[len] = '\0';
+  buf[offset] = '\0';
+
+  result.contents = buf;
 
   fclose(f);
 
-  return buf;
+end:
+  return result;
 }
 
 int main(void)
 {
   const char *path;
-  char *contents;
+  struct ReadFileResult read_file_result;
 
   path = "spam.x";
 
-  contents = read_file(path);
-  printf("%s", contents);
+  read_file_result = read_file(path);
+  if (!read_file_result.is_ok) {
+    fprintf(stderr, "Couldn't read file.\n");
+    goto end;
+  }
 
+  printf("%s", read_file_result.contents);
+
+end:
+  free(read_file_result.contents);
   return 0;
 }
