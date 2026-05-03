@@ -1,0 +1,9 @@
+BasedOnStyle: Google
+InsertBraces: true
+AllowShortFunctionsOnASingleLine: None
+AllowShortBlocksOnASingleLine: Never
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+BreakBeforeBraces: Linux
+SpaceAfterCStyleCast: true
+
