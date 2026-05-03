@@ -54,7 +54,6 @@ struct ReadFileResult read_file(const char *path)
     goto close_then_end;
   }
 
-  /* Let's ignore the return value of fread for now.  */
   bytes_read = fread(buf, 1, offset, f);
   if (bytes_read < (size_t) offset) {
     result.is_ok = false;
