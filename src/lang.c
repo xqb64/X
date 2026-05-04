@@ -101,6 +101,8 @@ enum TokenKind {
   TOKEN_STAR,
   TOKEN_SLASH,
   TOKEN_SEMICOLON,
+  TOKEN_ARROW,
+  TOKEN_I32,
   TOKEN_RBRACE,
   TOKEN_ERROR,
 };
@@ -242,6 +244,15 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
 
         break;
       }
+      case 'i': {
+        if (lookahead(tokenizer, 2, "32") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_I32, 3));
+        } else {
+          vec_insert(&tokens, identifier(tokenizer));
+        }
+
+        break;
+      }
       case 'r': {
         if (lookahead(tokenizer, 5, "eturn") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_RETURN, 6));
@@ -262,6 +273,14 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
       }
       case '+': {
         vec_insert(&tokens, mktoken(tokenizer, TOKEN_PLUS, 1));
+        break;
+      }
+      case '-': {
+        if (lookahead(tokenizer, 1, ">") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_ARROW, 2));
+        } else {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_MINUS, 1));
+        }
         break;
       }
       case '*': {
@@ -289,6 +308,8 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
         break;
       }
       default:
+
+        printf("tokenizer->src: %s\n", tokenizer->src);
 
         if (is_alpha(*tokenizer->src)) {
           vec_insert(&tokens, identifier(tokenizer));
@@ -328,6 +349,9 @@ void print_token(struct Token *token)
     case TOKEN_PLUS:
       printf("plus");
       break;
+    case TOKEN_MINUS:
+      printf("minus");
+      break;
     case TOKEN_STAR:
       printf("star");
       break;
@@ -345,6 +369,12 @@ void print_token(struct Token *token)
       break;
     case TOKEN_RPAREN:
       printf("RParen");
+      break;
+    case TOKEN_ARROW:
+      printf("arrow");
+      break;
+    case TOKEN_I32:
+      printf("i32");
       break;
     case TOKEN_ERROR:
       printf("ERROR");
@@ -421,6 +451,7 @@ enum StmtKind {
 struct StmtFn {
   char *name;
   char **params;
+  char *retval;
   VecStmt body;
 };
 
@@ -543,7 +574,7 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
 {
   struct ParseFnResult result;
   struct Token *token_fn, *token_id, *token_lparen, *token_void, *token_rparen,
-      *token_lbrace, *token_rbrace;
+      *token_arrow, *token_retval, *token_lbrace, *token_rbrace;
 
   result.is_ok = true;
   result.msg = NULL;
@@ -581,6 +612,19 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
                                   .msg = "Expected token ')' after 'void'"};
   }
 
+  token_arrow = consume(parser, TOKEN_ARROW);
+  if (!token_arrow) {
+    return (struct ParseFnResult){
+        .is_ok = false, .as.stmt = {0}, .msg = "Expected token '->' after ')'"};
+  }
+
+  token_retval = consume(parser, TOKEN_I32);
+  if (!token_retval) {
+    return (struct ParseFnResult){.is_ok = false,
+                                  .as.stmt = {0},
+                                  .msg = "Expected token 'i32' after '->'"};
+  }
+
   token_lbrace = consume(parser, TOKEN_LBRACE);
   if (!token_lbrace) {
     return (struct ParseFnResult){.is_ok = false,
@@ -607,6 +651,7 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
   stmt_fn.body = body.as.block.stmts;
   stmt_fn.name = own_string_n(token_id->start, token_id->len);
   stmt_fn.params = NULL;
+  stmt_fn.retval = own_string_n(token_retval->start, token_retval->len);
 
   struct Stmt stmt;
   stmt.kind = STMT_FN;
@@ -908,6 +953,7 @@ void print_stmt(struct Stmt *stmt)
       for (int i = 0; i < stmt->as.fn.body.len; i++) {
         print_stmt(&stmt->as.fn.body.data[i]);
       }
+      printf(", retval = %s)\n", stmt->as.fn.retval);
       break;
     }
     case STMT_BLOCK: {
@@ -978,7 +1024,9 @@ void free_stmt(struct Stmt *stmt)
 
 void free_ast(struct AST *ast)
 {
-  if (!ast) return;
+  if (!ast) {
+    return;
+  }
   for (int i = 0; i < ast->stmts.len; i++) {
     free_stmt(&ast->stmts.data[i]);
   }
