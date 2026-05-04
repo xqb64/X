@@ -978,6 +978,7 @@ void free_stmt(struct Stmt *stmt)
 
 void free_ast(struct AST *ast)
 {
+  if (!ast) return;
   for (int i = 0; i < ast->stmts.len; i++) {
     free_stmt(&ast->stmts.data[i]);
   }
