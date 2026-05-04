@@ -669,7 +669,7 @@ struct ParseFnResult factor(struct Parser *parser)
 
   left = left_res.as.expr;
   while (match(parser, 2, TOKEN_STAR, TOKEN_SLASH)) {
-    char *op = own_string_n(parser->prev->start, 1);
+    char *op = parser->prev->start;
 
     right_res = parse_literal(parser);
     if (!right_res.is_ok) {
@@ -688,7 +688,6 @@ struct ParseFnResult factor(struct Parser *parser)
         binexpr.kind = EXPR_BIN_DIV;
         break;
       default:
-        printf("op is %s\n", op);
         assert(0);
     }
 
@@ -715,7 +714,7 @@ struct ParseFnResult term(struct Parser *parser)
 
   left = left_res.as.expr;
   while (match(parser, 2, TOKEN_PLUS, TOKEN_MINUS)) {
-    char *op = own_string_n(parser->prev->start, 1);
+    char *op = parser->prev->start;
 
     right_res = factor(parser);
     if (!right_res.is_ok) {
@@ -935,9 +934,55 @@ void print_ast(struct AST *ast)
   }
 }
 
+void free_expr(struct Expr *expr)
+{
+  switch (expr->kind) {
+    case EXPR_LITERAL: {
+      break;
+    }
+    case EXPR_BINARY: {
+      free_expr(expr->as.binary.lhs);
+      free_expr(expr->as.binary.rhs);
+      free(expr->as.binary.lhs);
+      free(expr->as.binary.rhs);
+      break;
+    }
+  }
+}
+
+void free_stmt(struct Stmt *stmt)
+{
+  switch (stmt->kind) {
+    case STMT_FN: {
+      free(stmt->as.fn.name);
+      free(stmt->as.fn.params);
+      for (int i = 0; i < stmt->as.fn.body.len; i++) {
+        free_stmt(&stmt->as.fn.body.data[i]);
+      }
+      vec_free(&stmt->as.fn.body);
+      break;
+    }
+    case STMT_BLOCK: {
+      for (int i = 0; i < stmt->as.block.stmts.len; i++) {
+        free_stmt(&stmt->as.block.stmts.data[i]);
+      }
+      vec_free(&stmt->as.block.stmts);
+      break;
+    }
+    case STMT_RET: {
+      free_expr(&stmt->as.ret.val);
+      break;
+    }
+  }
+}
+
 void free_ast(struct AST *ast)
 {
-  return;
+  for (int i = 0; i < ast->stmts.len; i++) {
+    free_stmt(&ast->stmts.data[i]);
+  }
+  vec_free(&ast->stmts);
+  free(ast);
 }
 
 int main(void)
