@@ -1002,6 +1002,7 @@ void free_stmt(struct Stmt *stmt)
     case STMT_FN: {
       free(stmt->as.fn.name);
       free(stmt->as.fn.params);
+      free(stmt->as.fn.retval);
       for (int i = 0; i < stmt->as.fn.body.len; i++) {
         free_stmt(&stmt->as.fn.body.data[i]);
       }
@@ -1075,10 +1076,10 @@ struct IRFunction {
   VecIRInstr body;
 };
 
-typedef Vector(struct IRFunction) VecIRFunction;
+typedef Vector(struct IRFunction *) VecIRFunctionPtr;
 
 struct IRProgram {
-  VecIRFunction funcs;
+  VecIRFunctionPtr funcs;
 };
 
 struct IRValue *make_ir_var(void)
@@ -1166,6 +1167,20 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
   }
 }
 
+void free_ir_val(struct IRValue *val)
+{
+  switch (val->kind) {
+    case IRValue_CONST: {
+      break;
+    }
+    case IRValue_VAR: {
+      free(val->as.var);
+      break;
+    }
+  }
+  free(val);
+}
+
 void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
 {
   switch (stmt->kind) {
@@ -1178,7 +1193,11 @@ void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
       break;
     }
     case STMT_RET: {
-      irfy_expr(instrs, &stmt->as.ret.val);
+      struct IRValue *v;
+
+      v = irfy_expr(instrs, &stmt->as.ret.val);
+
+      free_ir_val(v);
     }
   }
 }
@@ -1214,15 +1233,17 @@ struct IrfyResult irfy_ast(struct AST *ast)
 {
   struct IRProgram prog;
   struct IrfyResult result;
-  VecIRFunction funcs = {0};
+  VecIRFunctionPtr funcs = {0};
 
   result.is_ok = true;
   result.msg = NULL;
 
   for (int i = 0; i < ast->stmts.len; i++) {
-    struct IRFunction *f = irfy_fn(&ast->stmts.data[i]);
+    struct IRFunction *f;
+
+    f = irfy_fn(&ast->stmts.data[i]);
     if (f) {
-      vec_insert(&funcs, *f);
+      vec_insert(&funcs, f);
     }
   }
 
@@ -1245,8 +1266,39 @@ void free_ast(struct AST *ast)
   free(ast);
 }
 
+void free_ir_instr(struct IRInstr *instr)
+{
+  switch (instr->kind) {
+    case IRInstr_BINARY: {
+      free_ir_val(instr->as.binary.lhs);
+      free_ir_val(instr->as.binary.rhs);
+      free_ir_val(instr->as.binary.dst);
+      break;
+    }
+    case IRInstr_RET: {
+      free_ir_val(&instr->as.ret.val);
+      break;
+    }
+    default:
+      assert(0);
+  }
+}
+
+void free_ir_fn(struct IRFunction *func)
+{
+  for (int i = 0; i < func->body.len; i++) {
+    free_ir_instr(&func->body.data[i]);
+  }
+  vec_free(&func->body);
+  free(func);
+}
+
 void free_ir_prog(struct IRProgram *prog)
 {
+  for (int i = 0; i < prog->funcs.len; i++) {
+    free_ir_fn(prog->funcs.data[i]);
+  }
+  vec_free(&prog->funcs);
 }
 
 void print_ir_val(struct IRValue *ir_val)
@@ -1315,7 +1367,7 @@ void print_ir_fn(struct IRFunction *func)
 void print_ir(struct IRProgram *prog)
 {
   for (int i = 0; i < prog->funcs.len; i++) {
-    print_ir_fn(&prog->funcs.data[i]);
+    print_ir_fn(prog->funcs.data[i]);
   }
 }
 
@@ -1375,10 +1427,10 @@ int main(void)
   print_ir(&ir_prog);
 
 free_up2_irfy:
-  free_ir_prog(&ir_prog);
+  free_ir_prog(&irfy_result.prog);
 
 free_up2_parse:
-  free_ast(ast);
+  free_ast(parse_result.ast);
 
 free_up2_tokenize:
   vec_free(&tokenize_result.tokens);
