@@ -1022,6 +1022,217 @@ void free_stmt(struct Stmt *stmt)
   }
 }
 
+enum IRInstrKind {
+  IRInstr_BINARY,
+  IRInstr_RET,
+};
+
+enum IRInstrBinaryKind {
+  IRInstrBinary_ADD,
+  IRInstrBinary_SUB,
+  IRInstrBinary_MUL,
+  IRInstrBinary_DIV,
+};
+
+enum IRValueKind {
+  IRValue_CONST,
+  IRValue_VAR,
+};
+
+struct IRValue {
+  enum IRValueKind kind;
+  union {
+    char *var;
+    int konst;
+  } as;
+};
+
+struct IRInstr_Binary {
+  enum IRInstrBinaryKind kind;
+  struct IRValue *lhs;
+  struct IRValue *rhs;
+  struct IRValue *dst;
+};
+
+struct IRInstr_Ret {
+  struct IRValue val;
+};
+
+struct IRInstr {
+  enum IRInstrKind kind;
+  union {
+    struct IRInstr_Binary binary;
+    struct IRInstr_Ret ret;
+  } as;
+};
+
+typedef Vector(struct IRInstr) VecIRInstr;
+
+struct IRFunction {
+  char *name;
+  char **params;
+  char *retval;
+  VecIRInstr body;
+};
+
+typedef Vector(struct IRFunction) VecIRFunction;
+
+struct IRProgram {
+  VecIRFunction funcs;
+};
+
+struct IRValue *make_ir_var(void)
+{
+  static int i = 0;
+  struct IRValue *var;
+
+  var = malloc(sizeof(struct IRValue));
+  memset(var, 0, sizeof(struct IRValue));
+
+  var->kind = IRValue_VAR;
+
+  int digit_len = snprintf(NULL, 0, "%d", i);
+  int total_len = strlen("tmp") + strlen(".") + digit_len + 1;
+  var->as.var = malloc(total_len);
+
+  snprintf(var->as.var, total_len, "tmp.%d", i);
+
+  i++;
+
+  return var;
+}
+
+struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
+{
+  switch (expr->kind) {
+    case EXPR_LITERAL: {
+      struct IRValue *ir_val;
+
+      ir_val = malloc(sizeof(struct IRValue));
+      memset(ir_val, 0, sizeof(struct IRValue));
+
+      ir_val->kind = IRValue_CONST;
+      ir_val->as.konst = expr->as.literal.as.num;
+
+      return ir_val;
+    }
+    case EXPR_BINARY: {
+      struct IRValue *lhs, *rhs, *dst;
+
+      lhs = irfy_expr(instrs, expr->as.binary.lhs);
+      rhs = irfy_expr(instrs, expr->as.binary.rhs);
+
+      dst = make_ir_var();
+
+      enum IRInstrBinaryKind kind;
+      switch (expr->as.binary.kind) {
+        case EXPR_BIN_ADD:
+          kind = IRInstrBinary_ADD;
+          break;
+        case EXPR_BIN_SUB:
+          kind = IRInstrBinary_SUB;
+          break;
+        case EXPR_BIN_MUL:
+          kind = IRInstrBinary_MUL;
+          break;
+        case EXPR_BIN_DIV:
+          kind = IRInstrBinary_DIV;
+          break;
+        default:
+          assert(0);
+      }
+
+      struct IRInstr_Binary bininstr = {
+          .lhs = lhs, .rhs = rhs, .dst = dst, .kind = kind};
+      struct IRInstr instr;
+
+      instr.kind = IRInstr_BINARY;
+      instr.as.binary = bininstr;
+
+      vec_insert(instrs, instr);
+
+      struct IRValue *ret;
+
+      ret = malloc(sizeof(struct IRValue));
+
+      ret->kind = IRValue_VAR;
+      ret->as.var = malloc(strlen(dst->as.var) + 1);
+      strcpy(ret->as.var, dst->as.var);
+
+      return ret;
+    }
+    default:
+      assert(0);
+  }
+}
+
+void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
+{
+  switch (stmt->kind) {
+    case STMT_FN:
+      assert(0);
+    case STMT_BLOCK: {
+      for (int i = 0; i < stmt->as.block.stmts.len; i++) {
+        irfy_stmt(instrs, &stmt->as.block.stmts.data[i]);
+      }
+      break;
+    }
+    case STMT_RET: {
+      irfy_expr(instrs, &stmt->as.ret.val);
+    }
+  }
+}
+
+struct IRFunction *irfy_fn(struct Stmt *stmt)
+{
+  if (stmt->kind != STMT_FN) {
+    return NULL;
+  }
+
+  struct IRFunction f;
+  VecIRInstr instrs = {0};
+
+  for (int i = 0; i < stmt->as.fn.body.len; i++) {
+    irfy_stmt(&instrs, &stmt->as.fn.body.data[i]);
+  }
+
+  f.body = instrs;
+  f.name = stmt->as.fn.name;
+  f.params = stmt->as.fn.params;
+  f.retval = stmt->as.fn.retval;
+
+  return ALLOC(f);
+}
+
+struct IrfyResult {
+  bool is_ok;
+  char *msg;
+  struct IRProgram prog;
+};
+
+struct IrfyResult irfy_ast(struct AST *ast)
+{
+  struct IRProgram prog;
+  struct IrfyResult result;
+  VecIRFunction funcs = {0};
+
+  result.is_ok = true;
+  result.msg = NULL;
+
+  for (int i = 0; i < ast->stmts.len; i++) {
+    struct IRFunction *f = irfy_fn(&ast->stmts.data[i]);
+    if (f) {
+      vec_insert(&funcs, *f);
+    }
+  }
+
+  prog.funcs = funcs;
+
+  result.prog = prog;
+
+  return result;
+}
+
 void free_ast(struct AST *ast)
 {
   if (!ast) {
@@ -1032,6 +1243,80 @@ void free_ast(struct AST *ast)
   }
   vec_free(&ast->stmts);
   free(ast);
+}
+
+void free_ir_prog(struct IRProgram *prog)
+{
+}
+
+void print_ir_val(struct IRValue *ir_val)
+{
+  switch (ir_val->kind) {
+    case IRValue_CONST: {
+      printf("IRValue(type = CONST, value = %d)", ir_val->as.konst);
+      break;
+    }
+    case IRValue_VAR: {
+      printf("IRValue(type = VAR, name = %s)", ir_val->as.var);
+      break;
+    }
+  }
+}
+
+void print_ir_instr(struct IRInstr *instr)
+{
+  switch (instr->kind) {
+    case IRInstr_BINARY: {
+      printf("IRInstr_BINARY(type = ");
+      switch (instr->as.binary.kind) {
+        case IRInstrBinary_ADD: {
+          printf("ADD");
+          break;
+        }
+        case IRInstrBinary_SUB: {
+          printf("SUB");
+          break;
+        }
+        case IRInstrBinary_MUL: {
+          printf("MUL");
+          break;
+        }
+        case IRInstrBinary_DIV: {
+          printf("DIV");
+          break;
+        }
+      }
+      printf(", lhs = ");
+      print_ir_val(instr->as.binary.lhs);
+      printf(", rhs = ");
+      print_ir_val(instr->as.binary.rhs);
+      printf(", dst = ");
+      print_ir_val(instr->as.binary.dst);
+
+      break;
+    }
+    case IRInstr_RET: {
+      printf("IRInstr_RET(val = ");
+      print_ir_val(&instr->as.ret.val);
+      break;
+    }
+  }
+}
+
+void print_ir_fn(struct IRFunction *func)
+{
+  printf("IRFunction(name = %s, retval = %s", func->name, func->retval);
+  for (int i = 0; i < func->body.len; i++) {
+    print_ir_instr(&func->body.data[i]);
+  }
+  printf(")\n");
+}
+
+void print_ir(struct IRProgram *prog)
+{
+  for (int i = 0; i < prog->funcs.len; i++) {
+    print_ir_fn(&prog->funcs.data[i]);
+  }
 }
 
 int main(void)
@@ -1045,6 +1330,8 @@ int main(void)
   struct Parser parser;
   struct ParseResult parse_result;
   struct AST *ast;
+  struct IrfyResult irfy_result;
+  struct IRProgram ir_prog;
 
   path = "spam.x";
 
@@ -1077,6 +1364,18 @@ int main(void)
 
   ast = parse_result.ast;
   print_ast(ast);
+
+  irfy_result = irfy_ast(ast);
+  if (!irfy_result.is_ok) {
+    fprintf(stderr, "err: %s\n", irfy_result.msg);
+    goto free_up2_irfy;
+  }
+
+  ir_prog = irfy_result.prog;
+  print_ir(&ir_prog);
+
+free_up2_irfy:
+  free_ir_prog(&ir_prog);
 
 free_up2_parse:
   free_ast(ast);
