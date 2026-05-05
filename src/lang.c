@@ -1371,6 +1371,255 @@ void print_ir(struct IRProgram *prog)
   }
 }
 
+enum AsmInstrBinaryKind {
+  AsmInstrBinary_ADD,
+  AsmInstrBinary_SUB,
+  AsmInstrBinary_MUL,
+  AsmInstrBinary_DIV,
+};
+
+enum AsmInstrKind {
+  AsmInstr_MOV,
+  AsmInstr_BINARY,
+  AsmInstr_RET,
+};
+
+enum AsmOperandKind {
+  AsmOperand_IMM,
+  AsmOperand_PSEUDO,
+};
+
+struct AsmOperand {
+  enum AsmOperandKind kind;
+  union {
+    int imm;
+    char *pseudo;
+    int stack_offset;
+    enum AsmRegister *reg;
+  } as;
+};
+
+struct AsmInstrRet {
+  short __dummy;
+};
+
+struct AsmInstrBinary {
+  enum AsmInstrBinaryKind kind;
+  struct AsmOperand lhs;
+  struct AsmOperand rhs;
+};
+
+struct AsmInstrMov {
+  struct AsmOperand src;
+  struct AsmOperand dst;
+};
+
+struct AsmInstr {
+  enum AsmInstrKind kind;
+  union {
+    struct AsmInstrMov mov;
+    struct AsmInstrBinary binary;
+    struct AsmInstrRet ret;
+  } as;
+};
+
+typedef Vector(struct AsmInstr) VecAsmInstr;
+
+struct AsmFunction {
+  char *name;
+  VecAsmInstr body;
+};
+
+typedef Vector(struct AsmFunction) VecAsmFunction;
+
+struct AsmProgram {
+  VecAsmFunction funcs;
+};
+
+struct AsmResult {
+  bool is_ok;
+  char *msg;
+  struct AsmProgram prog;
+};
+
+struct AsmOperand codegen_irvalue(struct IRValue *val)
+{
+  switch (val->kind) {
+    case IRValue_CONST: {
+      struct AsmOperand operand;
+      operand.kind = AsmOperand_IMM;
+      operand.as.imm = val->as.konst;
+
+      return operand;
+    }
+    case IRValue_VAR: {
+      struct AsmOperand operand;
+      operand.kind = AsmOperand_PSEUDO;
+      operand.as.pseudo = val->as.var;
+      return operand;
+    }
+    default:
+      assert(0);
+  }
+}
+
+void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
+{
+  switch (ir_instr->kind) {
+    case IRInstr_BINARY: {
+      enum AsmInstrBinaryKind kind;
+      struct AsmOperand lhs, rhs, dst;
+
+      switch (ir_instr->as.binary.kind) {
+        case IRInstrBinary_ADD:
+          kind = AsmInstrBinary_ADD;
+          break;
+        case IRInstrBinary_SUB:
+          kind = AsmInstrBinary_SUB;
+          break;
+        case IRInstrBinary_MUL:
+          kind = AsmInstrBinary_MUL;
+          break;
+        case IRInstrBinary_DIV:
+          kind = AsmInstrBinary_DIV;
+          break;
+        default:
+          assert(0);
+      }
+
+      lhs = codegen_irvalue(ir_instr->as.binary.lhs);
+      rhs = codegen_irvalue(ir_instr->as.binary.rhs);
+      dst = codegen_irvalue(ir_instr->as.binary.dst);
+
+      struct AsmInstr i1, i2;
+
+      i1.kind = AsmInstr_MOV;
+      i1.as.mov.src = lhs;
+      i1.as.mov.dst = dst;
+
+      i2.kind = AsmInstr_BINARY;
+      i2.as.binary.kind = kind;
+      i2.as.binary.lhs = rhs;
+      i2.as.binary.rhs = dst;
+
+      vec_insert(instrs, i1);
+      vec_insert(instrs, i2);
+    }
+    default:
+      break;
+  }
+}
+
+struct AsmFunction codegen_fn(struct IRFunction *ir_func)
+{
+  struct AsmFunction func = {0};
+
+  func.name = ir_func->name;
+
+  for (int i = 0; i < ir_func->body.len; i++) {
+    codegen_instr(&ir_func->body.data[i], &func.body);
+  }
+
+  return func;
+}
+
+struct AsmResult codegen(struct IRProgram *ir_prog)
+{
+  struct AsmProgram prog = {0};
+  struct AsmResult result;
+
+  result.is_ok = true;
+  result.msg = NULL;
+
+  for (int i = 0; i < ir_prog->funcs.len; i++) {
+    vec_insert(&prog.funcs, codegen_fn(ir_prog->funcs.data[i]));
+  }
+
+  result.prog = prog;
+
+  return result;
+}
+
+void print_asm_operand(struct AsmOperand *op)
+{
+  switch (op->kind) {
+    case AsmOperand_IMM: {
+      printf("AsmOperand_IMM(%d)", op->as.imm);
+      break;
+    }
+    case AsmOperand_PSEUDO: {
+      printf("AsmOperand_PSEUDO(%s)", op->as.pseudo);
+      break;
+    }
+    default:
+      assert(0);
+  }
+}
+
+void print_asm_instr(struct AsmInstr *instr)
+{
+  switch (instr->kind) {
+    case AsmInstr_MOV: {
+      printf("AsmInstr_MOV(src = ");
+      print_asm_operand(&instr->as.mov.src);
+      printf(", dst = ");
+      print_asm_operand(&instr->as.mov.dst);
+      printf(")\n");
+      break;
+    }
+    case AsmInstr_BINARY: {
+      printf("AsmInstr_BINARY(kind = ");
+      switch (instr->as.binary.kind) {
+        case AsmInstrBinary_ADD: {
+          printf("ADD");
+          break;
+        }
+        case AsmInstrBinary_SUB: {
+          printf("SUB");
+          break;
+        }
+        case AsmInstrBinary_MUL: {
+          printf("MUL");
+          break;
+        }
+        case AsmInstrBinary_DIV: {
+          printf("DIV");
+          break;
+        }
+      }
+      printf(", lhs = ");
+      print_asm_operand(&instr->as.binary.lhs);
+      printf(", rhs = ");
+      print_asm_operand(&instr->as.binary.rhs);
+      printf(")\n");
+      break;
+    }
+    case AsmInstr_RET: {
+      printf("AsmInstr_RET");
+      break;
+    }
+  }
+}
+
+void print_asm_fn(struct AsmFunction *fn)
+{
+  printf("AsmFunction(name = %s, body: [\n", fn->name);
+  for (int i = 0; i < fn->body.len; i++) {
+    print_asm_instr(&fn->body.data[i]);
+  }
+}
+
+void print_asm(struct AsmProgram *prog)
+{
+  for (int i = 0; i < prog->funcs.len; i++) {
+    print_asm_fn(&prog->funcs.data[i]);
+  }
+}
+
+void free_asm(struct AsmProgram *prog)
+{
+}
+
 int main(void)
 {
   const char *path;
@@ -1384,6 +1633,8 @@ int main(void)
   struct AST *ast;
   struct IrfyResult irfy_result;
   struct IRProgram ir_prog;
+  struct AsmResult asm_result;
+  struct AsmProgram asm_prog;
 
   path = "spam.x";
 
@@ -1425,6 +1676,18 @@ int main(void)
 
   ir_prog = irfy_result.prog;
   print_ir(&ir_prog);
+
+  asm_result = codegen(&ir_prog);
+  if (!asm_result.is_ok) {
+    fprintf(stderr, "err: %s\n", asm_result.msg);
+    goto free_up2_asm;
+  }
+
+  asm_prog = asm_result.prog;
+  print_asm(&asm_prog);
+
+free_up2_asm:
+  free_asm(&asm_result.prog);
 
 free_up2_irfy:
   free_ir_prog(&irfy_result.prog);
