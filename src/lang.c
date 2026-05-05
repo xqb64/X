@@ -434,7 +434,7 @@ struct Expr {
 typedef Vector(struct Stmt) VecStmt;
 
 struct StmtRet {
-  struct Expr val;
+  struct Expr *val;
 };
 
 struct StmtBlock {
@@ -795,7 +795,7 @@ struct ParseFnResult parse_expr(struct Parser *parser)
   struct ParseFnResult res;
   struct Expr expr;
 
-  res.is_ok = true;
+  res.is_ok = false;
   res.msg = NULL;
 
   res = term(parser);
@@ -812,6 +812,9 @@ struct ParseFnResult parse_ret_stmt(struct Parser *parser)
 {
   struct ParseFnResult result;
   struct Token *token_ret, *token_semicolon;
+  struct Expr *expr;
+
+  expr = NULL;
 
   result.is_ok = true;
   result.msg = NULL;
@@ -822,6 +825,10 @@ struct ParseFnResult parse_ret_stmt(struct Parser *parser)
         .is_ok = false, .as.stmt = {0}, .msg = "Expected token 'return'"};
   }
 
+  if (check(parser, TOKEN_SEMICOLON)) {
+    goto skip_parsing_expr;
+  }
+
   struct ParseFnResult expr_res = parse_expr(parser);
   if (!expr_res.is_ok) {
     return (struct ParseFnResult){.is_ok = false,
@@ -829,8 +836,9 @@ struct ParseFnResult parse_ret_stmt(struct Parser *parser)
                                   .msg = "Failed to parse expr after 'return'"};
   }
 
-  struct Expr expr = expr_res.as.expr;
+  expr = expr_res.is_ok ? ALLOC(expr_res.as.expr) : NULL;
 
+skip_parsing_expr:
   token_semicolon = consume(parser, TOKEN_SEMICOLON);
   if (!token_semicolon) {
     return (struct ParseFnResult){
@@ -961,7 +969,9 @@ void print_stmt(struct Stmt *stmt)
     }
     case STMT_RET: {
       printf("STMT_RET(val = ");
-      print_expr(&stmt->as.ret.val);
+      if (stmt->as.ret.val) {
+        print_expr(stmt->as.ret.val);
+      }
       printf("\n");
       break;
     }
@@ -1014,7 +1024,9 @@ void free_stmt(struct Stmt *stmt)
       break;
     }
     case STMT_RET: {
-      free_expr(&stmt->as.ret.val);
+      if (stmt->as.ret.val) {
+        free_expr(stmt->as.ret.val);
+      }
       break;
     }
   }
@@ -1193,7 +1205,8 @@ void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
       struct IRInstr i;
 
       i.kind = IRInstr_RET;
-      i.as.ret.val = irfy_expr(instrs, &stmt->as.ret.val);
+      i.as.ret.val =
+          stmt->as.ret.val ? irfy_expr(instrs, stmt->as.ret.val) : NULL;
 
       vec_insert(instrs, i);
       break;
@@ -1275,7 +1288,9 @@ void free_ir_instr(struct IRInstr *instr)
       break;
     }
     case IRInstr_RET: {
-      free_ir_val(instr->as.ret.val);
+      if (instr->as.ret.val) {
+        free_ir_val(instr->as.ret.val);
+      }
       break;
     }
     default:
@@ -1348,7 +1363,9 @@ void print_ir_instr(struct IRInstr *instr)
     }
     case IRInstr_RET: {
       printf("IRInstr_RET(val = ");
-      print_ir_val(instr->as.ret.val);
+      if (instr->as.ret.val) {
+        print_ir_val(instr->as.ret.val);
+      }
       break;
     }
   }
@@ -1387,10 +1404,12 @@ enum AsmOperandKind {
   AsmOperand_IMM,
   AsmOperand_PSEUDO,
   AsmOperand_REG,
+  AsmOperand_STACK,
 };
 
 enum AsmRegister {
   AX,
+  R10,
 };
 
 struct AsmOperand {
@@ -1399,6 +1418,7 @@ struct AsmOperand {
     int imm;
     char *pseudo;
     enum AsmRegister reg;
+    int stack_offset;
   } as;
 };
 
@@ -1517,7 +1537,11 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
 
       ret.__dummy = 0;
 
-      retval = codegen_irvalue(ir_instr->as.ret.val);
+      if (ir_instr->as.ret.val) {
+        retval = codegen_irvalue(ir_instr->as.ret.val);
+      } else {
+        retval = (struct AsmOperand){.kind = AsmOperand_IMM, .as.imm = 0};
+      }
 
       i1.kind = AsmInstr_MOV;
       i1.as.mov.src = retval;
@@ -1584,10 +1608,18 @@ void print_asm_operand(struct AsmOperand *op)
           printf("AX");
           break;
         }
+        case R10: {
+          printf("R10");
+          break;
+        }
         default:
           assert(0);
       }
       printf(")");
+      break;
+    }
+    case AsmOperand_STACK: {
+      printf("AsmOperand_STACK(offset = %d)", op->as.stack_offset);
       break;
     }
     default:
@@ -1677,6 +1709,269 @@ void free_asm(struct AsmProgram *prog)
   vec_free(&prog->funcs);
 }
 
+struct Map {
+  struct Map *next;
+  char *name;
+  int offset;
+};
+
+int get_offset(struct Map *map, char *name)
+{
+  static int offset = 0;
+  struct Map *curr;
+
+  curr = map;
+
+  while (curr) {
+    if (curr->name && strcmp(curr->name, name) == 0) {
+      return curr->offset;
+    }
+
+    if (!curr->next) {
+      break;
+    }
+
+    curr = curr->next;
+  }
+
+  offset -= 8;
+
+  struct Map *new_entry;
+
+  new_entry = malloc(sizeof(struct Map));
+
+  new_entry->next = NULL;
+  new_entry->name = name;
+  new_entry->offset = offset;
+
+  curr->next = new_entry;
+
+  return offset;
+}
+
+struct AsmProgram *replace_pseudo(struct AsmProgram *asmcode)
+{
+  struct Map *map;
+
+  map = malloc(sizeof(struct Map));
+  memset(map, 0, sizeof(struct Map));
+  map->next = NULL;
+
+  for (int i = 0; i < asmcode->funcs.len; i++) {
+    for (int j = 0; j < asmcode->funcs.data[i].body.len; j++) {
+      struct AsmInstr *asminstr = &asmcode->funcs.data[i].body.data[j];
+      switch (asminstr->kind) {
+        case AsmInstr_MOV: {
+          if (asminstr->as.mov.src.kind == AsmOperand_PSEUDO) {
+            asminstr->as.mov.src.kind = AsmOperand_STACK;
+            asminstr->as.mov.src.as.stack_offset =
+                get_offset(map, asminstr->as.mov.src.as.pseudo);
+          }
+          if (asminstr->as.mov.dst.kind == AsmOperand_PSEUDO) {
+            asminstr->as.mov.dst.kind = AsmOperand_STACK;
+            asminstr->as.mov.dst.as.stack_offset =
+                get_offset(map, asminstr->as.mov.dst.as.pseudo);
+          }
+
+          break;
+        }
+        case AsmInstr_BINARY: {
+          if (asminstr->as.binary.lhs.kind == AsmOperand_PSEUDO) {
+            asminstr->as.binary.lhs.kind = AsmOperand_STACK;
+            asminstr->as.binary.lhs.as.stack_offset =
+                get_offset(map, asminstr->as.binary.lhs.as.pseudo);
+          }
+          if (asminstr->as.binary.rhs.kind == AsmOperand_PSEUDO) {
+            asminstr->as.binary.rhs.kind = AsmOperand_STACK;
+            asminstr->as.binary.rhs.as.stack_offset =
+                get_offset(map, asminstr->as.binary.rhs.as.pseudo);
+          }
+
+          break;
+        }
+        case AsmInstr_RET: {
+          break;
+        }
+        default:
+          break;
+      }
+    }
+  }
+
+  struct Map *curr, *tmp;
+
+  curr = map;
+  while (curr) {
+    tmp = curr;
+    curr = tmp->next;
+    free(tmp);
+  }
+
+  return asmcode;
+}
+
+struct AsmProgram *fixup(struct AsmProgram *prog)
+{
+  for (int i = 0; i < prog->funcs.len; i++) {
+    VecAsmInstr instrs = {0};
+    for (int j = 0; j < prog->funcs.data[i].body.len; j++) {
+      struct AsmInstr *asminstr = &prog->funcs.data[i].body.data[j];
+      switch (asminstr->kind) {
+        case AsmInstr_MOV: {
+          if (asminstr->as.mov.src.kind == AsmOperand_STACK &&
+              asminstr->as.mov.dst.kind == AsmOperand_STACK) {
+            enum AsmRegister scratch_reg;
+            struct AsmOperand scratch_op;
+            struct AsmInstrMov mov1, mov2;
+            struct AsmInstr i1, i2;
+
+            scratch_reg = R10;
+
+            scratch_op.kind = AsmOperand_REG;
+            scratch_op.as.reg = scratch_reg;
+
+            i1.kind = AsmInstr_MOV;
+            mov1.src = asminstr->as.mov.src;
+            mov1.dst = scratch_op;
+            i1.as.mov = mov1;
+
+            i2.kind = AsmInstr_MOV;
+            mov2.src = scratch_op;
+            mov2.dst = asminstr->as.mov.dst;
+            i2.as.mov = mov2;
+
+            vec_insert(&instrs, i1);
+            vec_insert(&instrs, i2);
+          } else {
+            vec_insert(&instrs, *asminstr);
+          }
+
+          break;
+        }
+        case AsmInstr_BINARY: {
+          if (asminstr->as.binary.lhs.kind == AsmOperand_STACK &&
+              asminstr->as.binary.rhs.kind == AsmOperand_STACK) {
+            enum AsmRegister scratch_reg;
+            struct AsmOperand scratch_op;
+            struct AsmInstrMov mov;
+            struct AsmInstrBinary bin;
+            struct AsmInstr i1, i2;
+
+            scratch_reg = R10;
+
+            scratch_op.kind = AsmOperand_REG;
+            scratch_op.as.reg = scratch_reg;
+
+            i1.kind = AsmInstr_MOV;
+            mov.src = asminstr->as.binary.lhs;
+            mov.dst = scratch_op;
+            i1.as.mov = mov;
+
+            i2.kind = AsmInstr_BINARY;
+            bin.kind = asminstr->as.binary.kind;
+            bin.lhs = scratch_op;
+            bin.rhs = asminstr->as.binary.rhs;
+            i2.as.binary = bin;
+
+            vec_insert(&instrs, i1);
+            vec_insert(&instrs, i2);
+          } else {
+            vec_insert(&instrs, *asminstr);
+          }
+          break;
+        }
+        default:
+          vec_insert(&instrs, *asminstr);
+          break;
+      }
+    }
+
+    prog->funcs.data[i].body = instrs;
+  }
+
+  return prog;
+}
+
+void emit_operand(struct AsmOperand *op)
+{
+  switch (op->kind) {
+    case AsmOperand_IMM: {
+      printf("$%d", op->as.imm);
+      break;
+    }
+    case AsmOperand_PSEUDO: {
+      assert(0 && "not implemented");
+      break;
+    }
+    case AsmOperand_REG: {
+      switch (op->as.reg) {
+        case AX: {
+          printf("%%rax");
+          break;
+        }
+        case R10: {
+          printf("%%r10");
+          break;
+        }
+      }
+      break;
+    }
+    case AsmOperand_STACK: {
+      printf("%d(%%rbp)", op->as.stack_offset);
+      break;
+    }
+  }
+}
+
+void emit(struct AsmProgram *prog)
+{
+  for (int i = 0; i < prog->funcs.len; i++) {
+    for (int j = 0; j < prog->funcs.data[i].body.len; j++) {
+      struct AsmInstr *instr = &prog->funcs.data[i].body.data[j];
+      switch (instr->kind) {
+        case AsmInstr_MOV: {
+          printf("movq ");
+          emit_operand(&instr->as.mov.src);
+          printf(", ");
+          emit_operand(&instr->as.mov.dst);
+          printf("\n");
+          break;
+        }
+        case AsmInstr_BINARY: {
+          switch (instr->as.binary.kind) {
+            case AsmInstrBinary_ADD: {
+              printf("addq ");
+              break;
+            }
+            case AsmInstrBinary_SUB: {
+              printf("subq ");
+              break;
+            }
+            case AsmInstrBinary_MUL: {
+              printf("imulq ");
+              break;
+            }
+            default:
+              assert(0 && "not implemented");
+              break;
+          }
+          emit_operand(&instr->as.binary.lhs);
+          printf(", ");
+          emit_operand(&instr->as.binary.rhs);
+          printf("\n");
+          break;
+        }
+        case AsmInstr_RET: {
+          printf("ret\n");
+          break;
+        }
+        default:
+          break;
+      }
+    }
+  }
+}
+
 int main(void)
 {
   const char *path;
@@ -1742,6 +2037,16 @@ int main(void)
 
   asm_prog = asm_result.prog;
   print_asm(&asm_prog);
+
+  printf("replacing pseudo...");
+  asm_prog = *replace_pseudo(&asm_prog);
+  print_asm(&asm_prog);
+
+  printf("fixup...");
+  asm_prog = *fixup(&asm_prog);
+  print_asm(&asm_prog);
+
+  emit(&asm_prog);
 
 free_up2_asm:
   free_asm(&asm_result.prog);
