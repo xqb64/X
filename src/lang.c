@@ -123,7 +123,7 @@ void init_tokenizer(struct Tokenizer *tokenizer, char *src)
 
 bool is_alpha(char c)
 {
-  return ((c >= 'a') && (c <= 'z') || (c >= 'A') && (c <= 'Z'));
+  return ((c >= 'a') && (c <= 'z')) || ((c >= 'A') && (c <= 'Z'));
 }
 
 bool is_digit(char c)
@@ -543,7 +543,6 @@ struct ParseFnResult block(struct Parser *parser)
 
   while (!check(parser, TOKEN_RBRACE)) {
     struct ParseFnResult r;
-    struct Stmt s;
 
     r = parse_stmt(parser);
     if (!r.is_ok) {
@@ -887,7 +886,6 @@ struct ParseFnResult parse_stmt(struct Parser *parser)
 
 struct ParseResult parse(struct Parser *parser)
 {
-  struct Token *curr;
   struct ParseResult result;
 
   result.is_ok = true;
@@ -1055,7 +1053,7 @@ struct IRInstr_Binary {
 };
 
 struct IRInstr_Ret {
-  struct IRValue val;
+  struct IRValue *val;
 };
 
 struct IRInstr {
@@ -1192,11 +1190,13 @@ void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
       break;
     }
     case STMT_RET: {
-      struct IRValue *v;
+      struct IRInstr i;
 
-      v = irfy_expr(instrs, &stmt->as.ret.val);
+      i.kind = IRInstr_RET;
+      i.as.ret.val = irfy_expr(instrs, &stmt->as.ret.val);
 
-      free_ir_val(v);
+      vec_insert(instrs, i);
+      break;
     }
   }
 }
@@ -1275,7 +1275,7 @@ void free_ir_instr(struct IRInstr *instr)
       break;
     }
     case IRInstr_RET: {
-      free_ir_val(&instr->as.ret.val);
+      free_ir_val(instr->as.ret.val);
       break;
     }
     default:
@@ -1348,7 +1348,7 @@ void print_ir_instr(struct IRInstr *instr)
     }
     case IRInstr_RET: {
       printf("IRInstr_RET(val = ");
-      print_ir_val(&instr->as.ret.val);
+      print_ir_val(instr->as.ret.val);
       break;
     }
   }
@@ -1386,6 +1386,11 @@ enum AsmInstrKind {
 enum AsmOperandKind {
   AsmOperand_IMM,
   AsmOperand_PSEUDO,
+  AsmOperand_REG,
+};
+
+enum AsmRegister {
+  AX,
 };
 
 struct AsmOperand {
@@ -1393,6 +1398,7 @@ struct AsmOperand {
   union {
     int imm;
     char *pseudo;
+    enum AsmRegister reg;
   } as;
 };
 
@@ -1501,6 +1507,29 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
 
       vec_insert(instrs, i1);
       vec_insert(instrs, i2);
+
+      break;
+    }
+    case IRInstr_RET: {
+      struct AsmInstrRet ret;
+      struct AsmOperand retval;
+      struct AsmInstr i1, i2;
+
+      ret.__dummy = 0;
+
+      retval = codegen_irvalue(ir_instr->as.ret.val);
+
+      i1.kind = AsmInstr_MOV;
+      i1.as.mov.src = retval;
+      i1.as.mov.dst = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = AX};
+
+      i2.kind = AsmInstr_RET;
+      i2.as.ret = ret;
+
+      vec_insert(instrs, i1);
+      vec_insert(instrs, i2);
+
+      break;
     }
     default:
       break;
@@ -1546,6 +1575,19 @@ void print_asm_operand(struct AsmOperand *op)
     }
     case AsmOperand_PSEUDO: {
       printf("AsmOperand_PSEUDO(%s)", op->as.pseudo);
+      break;
+    }
+    case AsmOperand_REG: {
+      printf("AsmOperand_REG(");
+      switch (op->as.reg) {
+        case AX: {
+          printf("AX");
+          break;
+        }
+        default:
+          assert(0);
+      }
+      printf(")");
       break;
     }
     default:
@@ -1615,6 +1657,7 @@ void print_asm(struct AsmProgram *prog)
 
 void free_asm_instr(struct AsmInstr *instr)
 {
+  (void) instr;
   return;
 }
 
