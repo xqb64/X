@@ -1613,8 +1613,25 @@ void print_asm(struct AsmProgram *prog)
   }
 }
 
+void free_asm_instr(struct AsmInstr *instr)
+{
+  return;
+}
+
+void free_asm_fn(struct AsmFunction *fn)
+{
+  for (int i = 0; i < fn->body.len; i++) {
+    free_asm_instr(&fn->body.data[i]);
+  }
+  vec_free(&fn->body);
+}
+
 void free_asm(struct AsmProgram *prog)
 {
+  for (int i = 0; i < prog->funcs.len; i++) {
+    free_asm_fn(&prog->funcs.data[i]);
+  }
+  vec_free(&prog->funcs);
 }
 
 int main(void)
