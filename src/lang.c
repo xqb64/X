@@ -1393,8 +1393,6 @@ struct AsmOperand {
   union {
     int imm;
     char *pseudo;
-    int stack_offset;
-    enum AsmRegister *reg;
   } as;
 };
 
