@@ -310,8 +310,6 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
       }
       default:
 
-        printf("tokenizer->src: %s\n", tokenizer->src);
-
         if (is_alpha(*tokenizer->src)) {
           vec_insert(&tokens, identifier(tokenizer));
         } else {
@@ -1318,25 +1316,56 @@ void free_ir_prog(struct IRProgram *prog)
   vec_free(&prog->funcs);
 }
 
-void print_ir_val(struct IRValue *ir_val)
+void print_ir_val(struct IRValue *ir_val, int spaces)
 {
   switch (ir_val->kind) {
     case IRValue_CONST: {
-      printf("IRValue(type = CONST, value = %d)", ir_val->as.konst);
+      printf("IRValue(\n");
+      for (int i = 0; i < spaces + 2; i++) {
+        printf(" ");
+      }
+      printf("type = CONST,\n");
+      for (int i = 0; i < spaces + 2; i++) {
+        printf(" ");
+      }
+      printf("value = %d,\n", ir_val->as.konst);
+      for (int i = 0; i < spaces; i++) {
+        printf(" ");
+      }
+      printf(")");
       break;
     }
     case IRValue_VAR: {
-      printf("IRValue(type = VAR, name = %s)", ir_val->as.var);
+      printf("IRValue(\n");
+      for (int i = 0; i < spaces + 2; i++) {
+        printf(" ");
+      }
+      printf("type = VAR,\n");
+      for (int i = 0; i < spaces + 2; i++) {
+        printf(" ");
+      }
+      printf("name = %s,\n", ir_val->as.var);
+      for (int i = 0; i < spaces; i++) {
+        printf(" ");
+      }
+      printf(")");
       break;
     }
   }
 }
 
-void print_ir_instr(struct IRInstr *instr)
+void print_ir_instr(struct IRInstr *instr, int spaces)
 {
+  for (int i = 0; i < spaces; i++) {
+    printf(" ");
+  }
   switch (instr->kind) {
     case IRInstr_BINARY: {
-      printf("IRInstr_BINARY(type = ");
+      printf("IRInstr_BINARY(\n");
+      for (int i = 0; i < spaces + 2; i++) {
+        printf(" ");
+      }
+      printf("type = ");
       switch (instr->as.binary.kind) {
         case IRInstrBinary_ADD: {
           printf("ADD");
@@ -1355,20 +1384,49 @@ void print_ir_instr(struct IRInstr *instr)
           break;
         }
       }
-      printf(", lhs = ");
-      print_ir_val(instr->as.binary.lhs);
-      printf(", rhs = ");
-      print_ir_val(instr->as.binary.rhs);
-      printf(", dst = ");
-      print_ir_val(instr->as.binary.dst);
+      printf(",\n");
+      for (int i = 0; i < spaces + 2; i++) {
+        printf(" ");
+      }
+      printf("lhs = ");
+      print_ir_val(instr->as.binary.lhs, spaces + 2);
+      printf(",\n");
+      for (int i = 0; i < spaces + 2; i++) {
+        printf(" ");
+      }
+      printf("rhs = ");
+      print_ir_val(instr->as.binary.rhs, spaces + 2);
+      printf(",\n");
+      for (int i = 0; i < spaces + 2; i++) {
+        printf(" ");
+      }
+      printf("dst = ");
+      print_ir_val(instr->as.binary.dst, spaces + 2);
+
+      printf("\n");
+
+      for (int i = 0; i < spaces; i++) {
+        printf(" ");
+      }
+
+      printf(")");
 
       break;
     }
     case IRInstr_RET: {
-      printf("IRInstr_RET(val = ");
-      if (instr->as.ret.val) {
-        print_ir_val(instr->as.ret.val);
+      printf("IRInstr_RET(\n");
+      for (int i = 0; i < spaces + 2; i++) {
+        printf(" ");
       }
+      printf("val = ");
+      if (instr->as.ret.val) {
+        print_ir_val(instr->as.ret.val, spaces + 2);
+      }
+      printf("\n");
+      for (int i = 0; i < spaces; i++) {
+        printf(" ");
+      }
+      printf(")");
       break;
     }
   }
@@ -1376,10 +1434,13 @@ void print_ir_instr(struct IRInstr *instr)
 
 void print_ir_fn(struct IRFunction *func)
 {
-  printf("IRFunction(name = %s, retval = %s", func->name, func->retval);
+  printf("IRFunction(\n  name = %s,\n  retval = %s,\n  body = [\n", func->name,
+         func->retval);
   for (int i = 0; i < func->body.len; i++) {
-    print_ir_instr(&func->body.data[i]);
+    print_ir_instr(&func->body.data[i], 4);
+    printf(",\n");
   }
+  printf("  ]\n");
   printf(")\n");
 }
 
