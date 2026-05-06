@@ -1994,9 +1994,12 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
 
             vec_insert(&instrs, i1);
             vec_insert(&instrs, i2);
+	    
+	    break;
           } else {
             vec_insert(&instrs, *asminstr);
-          }
+            break;
+	  }
           break;
         }
         default:
