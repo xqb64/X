@@ -1026,6 +1026,7 @@ void free_stmt(struct Stmt *stmt)
     case STMT_RET: {
       if (stmt->as.ret.val) {
         free_expr(stmt->as.ret.val);
+        free(stmt->as.ret.val);
       }
       break;
     }
@@ -2004,6 +2005,7 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
       }
     }
 
+    vec_free(&prog->funcs.data[i].body);
     prog->funcs.data[i].body = instrs;
   }
 
