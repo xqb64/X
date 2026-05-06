@@ -1744,7 +1744,7 @@ void print_asm_instr(struct AsmInstr *instr)
       break;
     }
     case AsmInstr_RET: {
-      printf("AsmInstr_RET");
+      printf("AsmInstr_RET\n");
       break;
     }
   }
@@ -2228,11 +2228,11 @@ int main(void)
   asm_prog = asm_result.prog;
   print_asm(&asm_prog);
 
-  printf("replacing pseudo...");
+  printf("replacing pseudo...\n");
   asm_prog = *replace_pseudo(&asm_prog);
   print_asm(&asm_prog);
 
-  printf("fixup...");
+  printf("fixup...\n");
   asm_prog = *fixup(&asm_prog);
   print_asm(&asm_prog);
 
