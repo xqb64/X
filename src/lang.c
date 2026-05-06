@@ -1933,6 +1933,40 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
           break;
         }
         case AsmInstr_BINARY: {
+          /* imul cannot use mem as dst */
+          if (asminstr->as.binary.kind == AsmInstrBinary_MUL &&
+              asminstr->as.binary.rhs.kind == AsmOperand_STACK) {
+            enum AsmRegister scratch_reg = R10;
+            struct AsmOperand scratch_op = {.kind = AsmOperand_REG,
+                                            .as.reg = scratch_reg};
+            struct AsmInstrMov mov1, mov2;
+            struct AsmInstrBinary bin;
+            struct AsmInstr i1, i2, i3;
+
+            i1.kind = AsmInstr_MOV;
+            mov1.src = asminstr->as.binary.rhs;
+            mov1.dst = scratch_op;
+            i1.as.mov = mov1;
+
+            i2.kind = AsmInstr_BINARY;
+            bin.kind = AsmInstrBinary_MUL;
+            bin.lhs = asminstr->as.binary.lhs;
+            bin.rhs = scratch_op;
+            i2.as.binary = bin;
+
+            i3.kind = AsmInstr_MOV;
+            mov2.src = scratch_op;
+            mov2.dst = asminstr->as.binary.rhs;
+            i3.as.mov = mov2;
+
+            vec_insert(&instrs, i1);
+            vec_insert(&instrs, i2);
+            vec_insert(&instrs, i3);
+
+            break;
+          }
+
+          /* binary ops cannot use mem as both operands */
           if (asminstr->as.binary.lhs.kind == AsmOperand_STACK &&
               asminstr->as.binary.rhs.kind == AsmOperand_STACK) {
             enum AsmRegister scratch_reg;
@@ -1976,11 +2010,11 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
   return prog;
 }
 
-void emit_operand(struct AsmOperand *op)
+void emit_operand(FILE *f, struct AsmOperand *op)
 {
   switch (op->kind) {
     case AsmOperand_IMM: {
-      printf("$%d", op->as.imm);
+      fprintf(f, "$%d", op->as.imm);
       break;
     }
     case AsmOperand_PSEUDO: {
@@ -1990,26 +2024,26 @@ void emit_operand(struct AsmOperand *op)
     case AsmOperand_REG: {
       switch (op->as.reg) {
         case AX: {
-          printf("%%rax");
+          fprintf(f, "%%rax");
           break;
         }
         case R10: {
-          printf("%%r10");
+          fprintf(f, "%%r10");
           break;
         }
         case BP: {
-          printf("%%rbp");
+          fprintf(f, "%%rbp");
           break;
         }
         case SP: {
-          printf("%%rsp");
+          fprintf(f, "%%rsp");
           break;
         }
       }
       break;
     }
     case AsmOperand_STACK: {
-      printf("%d(%%rbp)", op->as.stack_offset);
+      fprintf(f, "%d(%%rbp)", op->as.stack_offset);
       break;
     }
   }
@@ -2017,56 +2051,63 @@ void emit_operand(struct AsmOperand *op)
 
 void emit(struct AsmProgram *prog)
 {
+  FILE *f;
+
+  f = fopen("spam.s", "w");
+
   for (int i = 0; i < prog->funcs.len; i++) {
+    fprintf(f, ".global %s\n", prog->funcs.data[i].name);
+    fprintf(f, "%s:\n", prog->funcs.data[i].name);
     for (int j = 0; j < prog->funcs.data[i].body.len; j++) {
       struct AsmInstr *instr = &prog->funcs.data[i].body.data[j];
+      fprintf(f, "\t");
       switch (instr->kind) {
         case AsmInstr_POP: {
-          printf("popq ");
-          emit_operand(&instr->as.pop.op);
-          printf("\n");
+          fprintf(f, "popq ");
+          emit_operand(f, &instr->as.pop.op);
+          fprintf(f, "\n");
           break;
         }
         case AsmInstr_PUSH: {
-          printf("pushq ");
-          emit_operand(&instr->as.push.op);
-          printf("\n");
+          fprintf(f, "pushq ");
+          emit_operand(f, &instr->as.push.op);
+          fprintf(f, "\n");
           break;
         }
         case AsmInstr_MOV: {
-          printf("movq ");
-          emit_operand(&instr->as.mov.src);
-          printf(", ");
-          emit_operand(&instr->as.mov.dst);
-          printf("\n");
+          fprintf(f, "movq ");
+          emit_operand(f, &instr->as.mov.src);
+          fprintf(f, ", ");
+          emit_operand(f, &instr->as.mov.dst);
+          fprintf(f, "\n");
           break;
         }
         case AsmInstr_BINARY: {
           switch (instr->as.binary.kind) {
             case AsmInstrBinary_ADD: {
-              printf("addq ");
+              fprintf(f, "addq ");
               break;
             }
             case AsmInstrBinary_SUB: {
-              printf("subq ");
+              fprintf(f, "subq ");
               break;
             }
             case AsmInstrBinary_MUL: {
-              printf("imulq ");
+              fprintf(f, "imulq ");
               break;
             }
             default:
               assert(0 && "not implemented");
               break;
           }
-          emit_operand(&instr->as.binary.lhs);
-          printf(", ");
-          emit_operand(&instr->as.binary.rhs);
-          printf("\n");
+          emit_operand(f, &instr->as.binary.lhs);
+          fprintf(f, ", ");
+          emit_operand(f, &instr->as.binary.rhs);
+          fprintf(f, "\n");
           break;
         }
         case AsmInstr_RET: {
-          printf("ret\n");
+          fprintf(f, "ret\n");
           break;
         }
         default:
@@ -2074,6 +2115,8 @@ void emit(struct AsmProgram *prog)
       }
     }
   }
+
+  fclose(f);
 }
 
 int main(void)
