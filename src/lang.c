@@ -1395,6 +1395,8 @@ enum AsmInstrBinaryKind {
 };
 
 enum AsmInstrKind {
+  AsmInstr_PUSH,
+  AsmInstr_POP,
   AsmInstr_MOV,
   AsmInstr_BINARY,
   AsmInstr_RET,
@@ -1410,6 +1412,8 @@ enum AsmOperandKind {
 enum AsmRegister {
   AX,
   R10,
+  BP,
+  SP,
 };
 
 struct AsmOperand {
@@ -1437,12 +1441,22 @@ struct AsmInstrMov {
   struct AsmOperand dst;
 };
 
+struct AsmInstrPush {
+  struct AsmOperand op;
+};
+
+struct AsmInstrPop {
+  struct AsmOperand op;
+};
+
 struct AsmInstr {
   enum AsmInstrKind kind;
   union {
     struct AsmInstrMov mov;
     struct AsmInstrBinary binary;
     struct AsmInstrRet ret;
+    struct AsmInstrPush push;
+    struct AsmInstrPop pop;
   } as;
 };
 
@@ -1531,9 +1545,11 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       break;
     }
     case IRInstr_RET: {
+      struct AsmInstrPop pop;
+      struct AsmInstrMov mov;
       struct AsmInstrRet ret;
       struct AsmOperand retval;
-      struct AsmInstr i1, i2;
+      struct AsmInstr i1, e1, e2, i2;
 
       ret.__dummy = 0;
 
@@ -1547,10 +1563,23 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       i1.as.mov.src = retval;
       i1.as.mov.dst = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = AX};
 
+      mov.src = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = BP};
+      mov.dst = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = SP};
+
+      pop.op = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = BP};
+
+      e1.kind = AsmInstr_MOV;
+      e1.as.mov = mov;
+
+      e2.kind = AsmInstr_POP;
+      e2.as.pop = pop;
+
       i2.kind = AsmInstr_RET;
       i2.as.ret = ret;
 
       vec_insert(instrs, i1);
+      vec_insert(instrs, e1);
+      vec_insert(instrs, e2);
       vec_insert(instrs, i2);
 
       break;
@@ -1563,8 +1592,34 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
 struct AsmFunction codegen_fn(struct IRFunction *ir_func)
 {
   struct AsmFunction func = {0};
+  struct AsmInstr p1, p2, p3;
+  struct AsmInstrPush push;
+  struct AsmInstrMov mov1, mov2;
+  struct AsmInstrBinary sub;
 
   func.name = ir_func->name;
+
+  push.op = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = BP};
+
+  mov1.src = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = SP};
+  mov1.dst = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = BP};
+
+  sub.kind = AsmInstrBinary_SUB;
+  sub.lhs = (struct AsmOperand){.kind = AsmOperand_IMM, .as.imm = 0};
+  sub.rhs = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = SP};
+
+  p1.kind = AsmInstr_PUSH;
+  p1.as.push = push;
+
+  p2.kind = AsmInstr_MOV;
+  p2.as.mov = mov1;
+
+  p3.kind = AsmInstr_BINARY;
+  p3.as.binary = sub;
+
+  vec_insert(&func.body, p1);
+  vec_insert(&func.body, p2);
+  vec_insert(&func.body, p3);
 
   for (int i = 0; i < ir_func->body.len; i++) {
     codegen_instr(&ir_func->body.data[i], &func.body);
@@ -1612,6 +1667,14 @@ void print_asm_operand(struct AsmOperand *op)
           printf("R10");
           break;
         }
+        case BP: {
+          printf("BP");
+          break;
+        }
+        case SP: {
+          printf("SP");
+          break;
+        }
         default:
           assert(0);
       }
@@ -1630,6 +1693,18 @@ void print_asm_operand(struct AsmOperand *op)
 void print_asm_instr(struct AsmInstr *instr)
 {
   switch (instr->kind) {
+    case AsmInstr_POP: {
+      printf("AsmInstr_POP(op = ");
+      print_asm_operand(&instr->as.pop.op);
+      printf(")\n");
+      break;
+    }
+    case AsmInstr_PUSH: {
+      printf("AsmInstr_PUSH(op = ");
+      print_asm_operand(&instr->as.push.op);
+      printf(")\n");
+      break;
+    }
     case AsmInstr_MOV: {
       printf("AsmInstr_MOV(src = ");
       print_asm_operand(&instr->as.mov.src);
@@ -1715,9 +1790,8 @@ struct Map {
   int offset;
 };
 
-int get_offset(struct Map *map, char *name)
+int get_offset(struct Map *map, char *name, int *offset)
 {
-  static int offset = 0;
   struct Map *curr;
 
   curr = map;
@@ -1734,7 +1808,7 @@ int get_offset(struct Map *map, char *name)
     curr = curr->next;
   }
 
-  offset -= 8;
+  *offset -= 8;
 
   struct Map *new_entry;
 
@@ -1742,16 +1816,20 @@ int get_offset(struct Map *map, char *name)
 
   new_entry->next = NULL;
   new_entry->name = name;
-  new_entry->offset = offset;
+  new_entry->offset = *offset;
 
   curr->next = new_entry;
 
-  return offset;
+  return *offset;
 }
 
 struct AsmProgram *replace_pseudo(struct AsmProgram *asmcode)
 {
   struct Map *map;
+  int offset, stack_size;
+
+  offset = 0;
+  stack_size = 0;
 
   map = malloc(sizeof(struct Map));
   memset(map, 0, sizeof(struct Map));
@@ -1765,12 +1843,12 @@ struct AsmProgram *replace_pseudo(struct AsmProgram *asmcode)
           if (asminstr->as.mov.src.kind == AsmOperand_PSEUDO) {
             asminstr->as.mov.src.kind = AsmOperand_STACK;
             asminstr->as.mov.src.as.stack_offset =
-                get_offset(map, asminstr->as.mov.src.as.pseudo);
+                get_offset(map, asminstr->as.mov.src.as.pseudo, &offset);
           }
           if (asminstr->as.mov.dst.kind == AsmOperand_PSEUDO) {
             asminstr->as.mov.dst.kind = AsmOperand_STACK;
             asminstr->as.mov.dst.as.stack_offset =
-                get_offset(map, asminstr->as.mov.dst.as.pseudo);
+                get_offset(map, asminstr->as.mov.dst.as.pseudo, &offset);
           }
 
           break;
@@ -1779,12 +1857,12 @@ struct AsmProgram *replace_pseudo(struct AsmProgram *asmcode)
           if (asminstr->as.binary.lhs.kind == AsmOperand_PSEUDO) {
             asminstr->as.binary.lhs.kind = AsmOperand_STACK;
             asminstr->as.binary.lhs.as.stack_offset =
-                get_offset(map, asminstr->as.binary.lhs.as.pseudo);
+                get_offset(map, asminstr->as.binary.lhs.as.pseudo, &offset);
           }
           if (asminstr->as.binary.rhs.kind == AsmOperand_PSEUDO) {
             asminstr->as.binary.rhs.kind = AsmOperand_STACK;
             asminstr->as.binary.rhs.as.stack_offset =
-                get_offset(map, asminstr->as.binary.rhs.as.pseudo);
+                get_offset(map, asminstr->as.binary.rhs.as.pseudo, &offset);
           }
 
           break;
@@ -1796,6 +1874,12 @@ struct AsmProgram *replace_pseudo(struct AsmProgram *asmcode)
           break;
       }
     }
+    stack_size = -offset;
+    if (stack_size % 16 != 0) {
+      stack_size = (stack_size / 16 + 1) * 16;
+    }
+
+    asmcode->funcs.data[i].body.data[2].as.binary.lhs.as.imm = stack_size;
   }
 
   struct Map *curr, *tmp;
@@ -1913,6 +1997,14 @@ void emit_operand(struct AsmOperand *op)
           printf("%%r10");
           break;
         }
+        case BP: {
+          printf("%%rbp");
+          break;
+        }
+        case SP: {
+          printf("%%rsp");
+          break;
+        }
       }
       break;
     }
@@ -1929,6 +2021,18 @@ void emit(struct AsmProgram *prog)
     for (int j = 0; j < prog->funcs.data[i].body.len; j++) {
       struct AsmInstr *instr = &prog->funcs.data[i].body.data[j];
       switch (instr->kind) {
+        case AsmInstr_POP: {
+          printf("popq ");
+          emit_operand(&instr->as.pop.op);
+          printf("\n");
+          break;
+        }
+        case AsmInstr_PUSH: {
+          printf("pushq ");
+          emit_operand(&instr->as.push.op);
+          printf("\n");
+          break;
+        }
         case AsmInstr_MOV: {
           printf("movq ");
           emit_operand(&instr->as.mov.src);
