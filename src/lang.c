@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 struct ReadFileResult {
   bool is_ok;
@@ -1994,12 +1996,12 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
 
             vec_insert(&instrs, i1);
             vec_insert(&instrs, i2);
-	    
-	    break;
+
+            break;
           } else {
             vec_insert(&instrs, *asminstr);
             break;
-	  }
+          }
           break;
         }
         default:
@@ -2123,6 +2125,42 @@ void emit(struct AsmProgram *prog)
 
   fclose(f);
 }
+struct AssembleLinkResult {
+  bool is_ok;
+  char *msg;
+};
+
+struct AssembleLinkResult assemble_and_link(char *path, char *out_path)
+{
+  struct AssembleLinkResult result;
+
+  result.is_ok = true;
+  result.msg = NULL;
+
+  pid_t pid = fork();
+
+  if (pid < 0) {
+    perror("Fork failed");
+    result.is_ok = false;
+    result.msg = "Fork failed";
+    return result;
+  } else if (pid == 0) {
+    execlp("gcc", "gcc", path, "-o", out_path, NULL);
+    perror("Failed to execute gcc");
+    exit(EXIT_FAILURE);
+  } else {
+    int status;
+    waitpid(pid, &status, 0);
+
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+      return result;
+    } else {
+      result.is_ok = false;
+      result.msg = "gcc failed at the assemble-and-link stage\n";
+      return result;
+    }
+  }
+}
 
 int main(void)
 {
@@ -2199,6 +2237,8 @@ int main(void)
   print_asm(&asm_prog);
 
   emit(&asm_prog);
+
+  assemble_and_link("spam.s", "spam");
 
 free_up2_asm:
   free_asm(&asm_result.prog);
