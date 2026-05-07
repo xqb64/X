@@ -915,7 +915,7 @@ struct ParseResult parse(struct Parser *parser)
   return result;
 }
 
-void print_expr(struct Expr *expr)
+void print_expr(struct Expr *expr, int spaces)
 {
   switch (expr->kind) {
     case EXPR_LITERAL: {
@@ -923,55 +923,113 @@ void print_expr(struct Expr *expr)
       break;
     }
     case EXPR_BINARY: {
-      printf("Binary(lhs = ");
-      print_expr(expr->as.binary.lhs);
-      printf(", rhs = ");
-      print_expr(expr->as.binary.rhs);
+      printf("Binary(\n");
+      for (int i = 0; i < spaces + 2; i++) {
+        printf(" ");
+      }
+      printf("lhs = ");
+      print_expr(expr->as.binary.lhs, spaces + 4);
+      printf(",\n");
+      for (int i = 0; i < spaces + 2; i++) {
+        printf(" ");
+      }
+      printf("rhs = ");
+      print_expr(expr->as.binary.rhs, spaces + 4);
+
+      printf(",\n");
+
+      for (int i = 0; i < spaces + 2; i++) {
+        printf(" ");
+      }
 
       switch (expr->as.binary.kind) {
         case EXPR_BIN_ADD: {
-          printf(", kind = ADD)");
+          printf("kind = ADD");
           break;
         }
         case EXPR_BIN_SUB: {
-          printf(", kind = SUB)");
+          printf("kind = SUB");
           break;
         }
         case EXPR_BIN_MUL: {
-          printf(", kind = MUL)");
+          printf("kind = MUL");
           break;
         }
         case EXPR_BIN_DIV: {
-          printf(", kind = DIV)");
+          printf("kind = DIV");
           break;
         }
       }
+
+      printf(",\n");
+
+      for (int i = 0; i < spaces; i++) {
+        printf(" ");
+      }
+      printf(")");
     }
   }
 }
 
-void print_stmt(struct Stmt *stmt)
+void print_stmt(struct Stmt *stmt, int spaces)
 {
   switch (stmt->kind) {
     case STMT_FN: {
-      printf("STMT_FN(name = %s, ", stmt->as.fn.name);
-      for (int i = 0; i < stmt->as.fn.body.len; i++) {
-        print_stmt(&stmt->as.fn.body.data[i]);
+      printf("STMT_FN(\n");
+      for (int i = 0; i < spaces + 2; i++) {
+        printf(" ");
       }
-      printf(", retval = %s)\n", stmt->as.fn.retval);
+      printf("name = %s,\n", stmt->as.fn.name);
+      for (int i = 0; i < spaces + 2; i++) {
+        printf(" ");
+      }
+      printf("body = [\n");
+      for (int i = 0; i < stmt->as.fn.body.len; i++) {
+        print_stmt(&stmt->as.fn.body.data[i], spaces + 4);
+      }
+      for (int i = 0; i < spaces + 2; i++) {
+        printf(" ");
+      }
+      printf("],\n");
+      for (int i = 0; i < spaces + 2; i++) {
+        printf(" ");
+      }
+      printf("retval = %s,\n", stmt->as.fn.retval);
+      for (int i = 0; i < spaces; i++) {
+        printf(" ");
+      }
+      printf(")\n");
       break;
     }
     case STMT_BLOCK: {
-      for (int i = 0; i < stmt->as.block.stmts.len; i++) {
-        print_stmt(&stmt->as.block.stmts.data[i]);
+      printf("STMT_BLOCK(\n");
+      for (int i = 0; i < spaces + 2; i++) {
+        printf(" ");
       }
+      printf("body = [\n");
+      for (int i = 0; i < stmt->as.block.stmts.len; i++) {
+        print_stmt(&stmt->as.block.stmts.data[i], spaces + 4);
+      }
+      printf(")");
       break;
     }
     case STMT_RET: {
-      printf("STMT_RET(val = ");
-      if (stmt->as.ret.val) {
-        print_expr(stmt->as.ret.val);
+      for (int i = 0; i < spaces; i++) {
+        printf(" ");
       }
+      printf("STMT_RET(\n");
+      for (int i = 0; i < spaces + 2; i++) {
+        printf(" ");
+      }
+      printf("val = ");
+      if (stmt->as.ret.val) {
+        print_expr(stmt->as.ret.val, spaces + 2);
+      }
+      printf("\n");
+      for (int i = 0; i < spaces; i++) {
+        printf(" ");
+      }
+      printf(")");
       printf("\n");
       break;
     }
@@ -983,7 +1041,7 @@ void print_stmt(struct Stmt *stmt)
 void print_ast(struct AST *ast)
 {
   for (int i = 0; i < ast->stmts.len; i++) {
-    print_stmt(&ast->stmts.data[i]);
+    print_stmt(&ast->stmts.data[i], 0);
   }
 }
 
@@ -1403,7 +1461,7 @@ void print_ir_instr(struct IRInstr *instr, int spaces)
       printf("dst = ");
       print_ir_val(instr->as.binary.dst, spaces + 2);
 
-      printf("\n");
+      printf(",\n");
 
       for (int i = 0; i < spaces; i++) {
         printf(" ");
