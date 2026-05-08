@@ -95,12 +95,15 @@ enum TokenKind {
   TOKEN_VOID,
   TOKEN_RPAREN,
   TOKEN_LBRACE,
+  TOKEN_LET,
+  TOKEN_EQUAL,
   TOKEN_RETURN,
   TOKEN_NUMBER,
   TOKEN_PLUS,
   TOKEN_MINUS,
   TOKEN_STAR,
   TOKEN_SLASH,
+  TOKEN_COLON,
   TOKEN_SEMICOLON,
   TOKEN_ARROW,
   TOKEN_I32,
@@ -245,6 +248,15 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
 
         break;
       }
+      case 'l': {
+        if (lookahead(tokenizer, 2, "et") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_LET, 3));
+        } else {
+          vec_insert(&tokens, identifier(tokenizer));
+        }
+
+        break;
+      }
       case 'i': {
         if (lookahead(tokenizer, 2, "32") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_I32, 3));
@@ -304,6 +316,14 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
         vec_insert(&tokens, mktoken(tokenizer, TOKEN_RBRACE, 1));
         break;
       }
+      case '=': {
+        vec_insert(&tokens, mktoken(tokenizer, TOKEN_EQUAL, 1));
+        break;
+      }
+      case ':': {
+        vec_insert(&tokens, mktoken(tokenizer, TOKEN_COLON, 1));
+        break;
+      }
       case ';': {
         vec_insert(&tokens, mktoken(tokenizer, TOKEN_SEMICOLON, 1));
         break;
@@ -345,6 +365,12 @@ void print_token(struct Token *token)
     case TOKEN_NUMBER:
       printf("%.*s", token->len, token->start);
       break;
+    case TOKEN_LET:
+      printf("let");
+      break;
+    case TOKEN_EQUAL:
+      printf("equal");
+      break;
     case TOKEN_PLUS:
       printf("plus");
       break;
@@ -353,6 +379,9 @@ void print_token(struct Token *token)
       break;
     case TOKEN_STAR:
       printf("star");
+      break;
+    case TOKEN_COLON:
+      printf("colon");
       break;
     case TOKEN_SEMICOLON:
       printf("semicolon");
@@ -407,6 +436,7 @@ struct Literal {
 
 enum ExprKind {
   EXPR_LITERAL,
+  EXPR_VARIABLE,
   EXPR_BINARY,
 };
 
@@ -423,11 +453,17 @@ struct ExprBin {
   struct Expr *rhs;
 };
 
+struct ExprVar {
+  char *name;
+  char *type;
+};
+
 struct Expr {
   enum ExprKind kind;
   union {
     struct Literal literal;
     struct ExprBin binary;
+    struct ExprVar var;
   } as;
 };
 
@@ -437,11 +473,18 @@ struct StmtRet {
   struct Expr *val;
 };
 
+struct StmtLet {
+  char *name;
+  char *type;
+  struct Expr *init;
+};
+
 struct StmtBlock {
   VecStmt stmts;
 };
 
 enum StmtKind {
+  STMT_LET,
   STMT_FN,
   STMT_BLOCK,
   STMT_RET,
@@ -457,6 +500,7 @@ struct StmtFn {
 struct Stmt {
   enum StmtKind kind;
   union {
+    struct StmtLet let;
     struct StmtRet ret;
     struct StmtFn fn;
     struct StmtBlock block;
@@ -678,24 +722,49 @@ static bool match(struct Parser *parser, int size, ...)
 
 #define ALLOC(obj) (memcpy(malloc(sizeof((obj))), &(obj), sizeof(obj)))
 
-struct ParseFnResult parse_literal(struct Parser *parser)
+struct ParseFnResult primary(struct Parser *parser)
 {
   struct ParseFnResult res;
-  struct Literal literal;
 
   res.is_ok = true;
   res.msg = NULL;
 
-  if (!consume(parser, TOKEN_NUMBER)) {
+  if (check(parser, TOKEN_NUMBER)) {
+    struct Literal literal;
+    struct Token *token_literal;
+
+    token_literal = consume(parser, TOKEN_NUMBER);
+    if (!token_literal) {
+      return (struct ParseFnResult){
+          .is_ok = false, .as.expr = {0}, .msg = "Expected number"};
+    }
+
+    literal.kind = LITERAL_NUM;
+    literal.as.num = strtol(parser->prev->start, NULL, 10);
+
+    res.as.expr = (struct Expr){.kind = EXPR_LITERAL, .as.literal = literal};
+  } else if (check(parser, TOKEN_IDENTIFIER)) {
+    struct Token *token_id;
+
+    token_id = consume(parser, TOKEN_IDENTIFIER);
+    if (!token_id) {
+      return (struct ParseFnResult){
+          .is_ok = false, .as.expr = {0}, .msg = "Expected identifier"};
+    }
+
+    struct ExprVar var;
+
+    char *type = "i32";
+
+    var.name = own_string_n(token_id->start, token_id->len);
+    var.type = ALLOC(*type);
+
+    res.as.expr = (struct Expr){.kind = EXPR_VARIABLE, .as.var = var};
+  } else {
     res.is_ok = false;
-    res.msg = "Expected number";
+    res.msg = "Expected number or identifier";
     return res;
   }
-
-  literal.kind = LITERAL_NUM;
-  literal.as.num = strtol(parser->prev->start, NULL, 10);
-
-  res.as.expr = (struct Expr){.kind = EXPR_LITERAL, .as.literal = literal};
 
   return res;
 }
@@ -705,7 +774,7 @@ struct ParseFnResult factor(struct Parser *parser)
   struct ParseFnResult left_res, right_res;
   struct Expr left, right;
 
-  left_res = parse_literal(parser);
+  left_res = primary(parser);
   if (!left_res.is_ok) {
     return left_res;
   }
@@ -714,7 +783,7 @@ struct ParseFnResult factor(struct Parser *parser)
   while (match(parser, 2, TOKEN_STAR, TOKEN_SLASH)) {
     char *op = parser->prev->start;
 
-    right_res = parse_literal(parser);
+    right_res = primary(parser);
     if (!right_res.is_ok) {
       return right_res;
     }
@@ -859,6 +928,91 @@ skip_parsing_expr:
   return result;
 }
 
+struct ParseFnResult parse_let_stmt(struct Parser *parser)
+{
+  struct ParseFnResult result, init_res;
+  struct Token *token_let, *token_id, *token_colon, *token_type, *token_equal,
+      *token_semicolon;
+  struct Expr init;
+
+  result.is_ok = true;
+  result.msg = NULL;
+
+  token_let = consume(parser, TOKEN_LET);
+  if (!token_let) {
+    return (struct ParseFnResult){
+        .is_ok = false, .as.stmt = {0}, .msg = "Expected token 'let'"};
+  }
+
+  token_id = consume(parser, TOKEN_IDENTIFIER);
+  if (!token_id) {
+    return (struct ParseFnResult){.is_ok = false,
+                                  .as.stmt = {0},
+                                  .msg = "Expected identifier after 'let'"};
+  }
+
+  char *name = own_string_n(token_id->start, token_id->len);
+
+  token_colon = consume(parser, TOKEN_COLON);
+  if (!token_colon) {
+    free(name);
+    return (struct ParseFnResult){
+        .is_ok = false,
+        .as.stmt = {0},
+        .msg = "Expected token ':' after identifier in let stmt"};
+  }
+
+  token_type = consume(parser, TOKEN_I32);
+  if (!token_type) {
+    free(name);
+    return (struct ParseFnResult){
+        .is_ok = false,
+        .as.stmt = {0},
+        .msg = "Expected token 'i32' after token ':' in let stmt"};
+  }
+
+  char *type = own_string_n(token_type->start, token_type->len);
+
+  token_equal = consume(parser, TOKEN_EQUAL);
+  if (!token_equal) {
+    free(name);
+    return (struct ParseFnResult){
+        .is_ok = false,
+        .as.stmt = {0},
+        .msg = "Expected token '=' after type in let stmt"};
+  }
+
+  init_res = parse_expr(parser);
+  if (!init_res.is_ok) {
+    free(name);
+    return (struct ParseFnResult){
+        .is_ok = false,
+        .as.stmt = {0},
+        .msg = "Expected expr after equal in let stmt"};
+  }
+
+  init = init_res.as.expr;
+
+  token_semicolon = consume(parser, TOKEN_SEMICOLON);
+  if (!token_semicolon) {
+    free(name);
+    return (struct ParseFnResult){
+        .is_ok = false,
+        .as.stmt = {0},
+        .msg = "Expected semicolon after init expr in let stmt"};
+  }
+
+  struct StmtLet let_stmt;
+
+  let_stmt.name = name;
+  let_stmt.type = type;
+  let_stmt.init = ALLOC(init);
+
+  result.as.stmt = (struct Stmt){.kind = STMT_LET, .as.let = let_stmt};
+
+  return result;
+}
+
 struct ParseFnResult parse_stmt(struct Parser *parser)
 {
   struct ParseFnResult result;
@@ -883,6 +1037,14 @@ struct ParseFnResult parse_stmt(struct Parser *parser)
             .is_ok = false, .msg = "Failed parsing 'ret' stmt", .as.stmt = {0}};
       }
       result.as.stmt = ret_res.as.stmt;
+      break;
+    }
+    case TOKEN_LET: {
+      struct ParseFnResult let_res = parse_let_stmt(parser);
+      if (!let_res.is_ok) {
+        return let_res;
+      }
+      result.as.stmt = let_res.as.stmt;
       break;
     }
     default:
@@ -920,6 +1082,10 @@ void print_expr(struct Expr *expr, int spaces)
   switch (expr->kind) {
     case EXPR_LITERAL: {
       printf("Literal(%d)", expr->as.literal.as.num);
+      break;
+    }
+    case EXPR_VARIABLE: {
+      printf("Variable(%s)", expr->as.var.name);
       break;
     }
     case EXPR_BINARY: {
@@ -1033,6 +1199,36 @@ void print_stmt(struct Stmt *stmt, int spaces)
       printf("\n");
       break;
     }
+    case STMT_LET: {
+      for (int i = 0; i < spaces; i++) {
+        printf(" ");
+      }
+
+      printf("STMT_LET(\n");
+      for (int i = 0; i < spaces + 2; i++) {
+        printf(" ");
+      }
+      printf("name = %s", stmt->as.let.name);
+
+      for (int i = 0; i < spaces + 2; i++) {
+        printf(" ");
+      }
+      printf("type = %s", stmt->as.let.type);
+
+      for (int i = 0; i < spaces + 2; i++) {
+        printf(" ");
+      }
+      print_expr(stmt->as.let.init, spaces + 2);
+
+      printf("\n");
+      for (int i = 0; i < spaces; i++) {
+        printf(" ");
+      }
+      printf(")");
+      printf("\n");
+      break;
+      break;
+    }
     default:
       assert(0);
   }
@@ -1051,6 +1247,11 @@ void free_expr(struct Expr *expr)
     case EXPR_LITERAL: {
       break;
     }
+    case EXPR_VARIABLE: {
+      free(expr->as.var.type);
+      free(expr->as.var.name);
+      break;
+    }
     case EXPR_BINARY: {
       free_expr(expr->as.binary.lhs);
       free_expr(expr->as.binary.rhs);
@@ -1064,6 +1265,13 @@ void free_expr(struct Expr *expr)
 void free_stmt(struct Stmt *stmt)
 {
   switch (stmt->kind) {
+    case STMT_LET: {
+      free(stmt->as.let.name);
+      free(stmt->as.let.type);
+      free_expr(stmt->as.let.init);
+      free(stmt->as.let.init);
+      break;
+    }
     case STMT_FN: {
       free(stmt->as.fn.name);
       free(stmt->as.fn.params);
@@ -1094,6 +1302,7 @@ void free_stmt(struct Stmt *stmt)
 enum IRInstrKind {
   IRInstr_BINARY,
   IRInstr_RET,
+  IRInstr_COPY,
 };
 
 enum IRInstrBinaryKind {
@@ -1127,11 +1336,17 @@ struct IRInstr_Ret {
   struct IRValue *val;
 };
 
+struct IRInstr_Copy {
+  struct IRValue *src;
+  struct IRValue *dst;
+};
+
 struct IRInstr {
   enum IRInstrKind kind;
   union {
     struct IRInstr_Binary binary;
     struct IRInstr_Ret ret;
+    struct IRInstr_Copy copy;
   } as;
 };
 
@@ -1184,6 +1399,16 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       ir_val->as.konst = expr->as.literal.as.num;
 
       return ir_val;
+    }
+    case EXPR_VARIABLE: {
+      struct IRValue *r;
+
+      r = malloc(sizeof(struct IRValue));
+
+      r->kind = IRValue_VAR;
+      r->as.var = ALLOC(expr->as.var.name);
+
+      return r;
     }
     case EXPR_BINARY: {
       struct IRValue *lhs, *rhs, *dst;
@@ -1254,6 +1479,22 @@ void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
   switch (stmt->kind) {
     case STMT_FN:
       assert(0);
+    case STMT_LET: {
+      struct IRValue *res, *dst;
+      struct IRInstr cpy;
+
+      res = irfy_expr(instrs, stmt->as.let.init);
+
+      dst = malloc(sizeof(struct IRValue));
+      dst->kind = IRValue_VAR;
+      dst->as.var = ALLOC(stmt->as.let.name);
+
+      cpy.kind = IRInstr_COPY;
+      cpy.as.copy = (struct IRInstr_Copy){.src = res, .dst = dst};
+
+      vec_insert(instrs, cpy);
+      break;
+    }
     case STMT_BLOCK: {
       for (int i = 0; i < stmt->as.block.stmts.len; i++) {
         irfy_stmt(instrs, &stmt->as.block.stmts.data[i]);
@@ -1352,6 +1593,11 @@ void free_ir_instr(struct IRInstr *instr)
       }
       break;
     }
+    case IRInstr_COPY: {
+      free_ir_val(instr->as.copy.src);
+      free_ir_val(instr->as.copy.dst);
+      break;
+    }
     default:
       assert(0);
   }
@@ -1418,6 +1664,34 @@ void print_ir_instr(struct IRInstr *instr, int spaces)
     printf(" ");
   }
   switch (instr->kind) {
+    case IRInstr_COPY: {
+      printf("IRInstr_COPY(\n");
+      for (int i = 0; i < spaces + 2; i++) {
+        printf(" ");
+      }
+      printf("src = ");
+      print_ir_val(instr->as.copy.src, spaces + 2);
+      printf(",\n");
+      for (int i = 0; i < spaces + 2; i++) {
+        printf(" ");
+      }
+      printf("dst = ");
+      print_ir_val(instr->as.copy.dst, spaces + 2);
+      printf(",\n");
+      for (int i = 0; i < spaces + 2; i++) {
+        printf(" ");
+      }
+
+      printf(",\n");
+
+      for (int i = 0; i < spaces; i++) {
+        printf(" ");
+      }
+
+      printf(")");
+
+      break;
+    }
     case IRInstr_BINARY: {
       printf("IRInstr_BINARY(\n");
       for (int i = 0; i < spaces + 2; i++) {
@@ -1625,6 +1899,24 @@ struct AsmOperand codegen_irvalue(struct IRValue *val)
 void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
 {
   switch (ir_instr->kind) {
+    case IRInstr_COPY: {
+      struct AsmOperand src, dst;
+
+      src = codegen_irvalue(ir_instr->as.copy.src);
+      dst = codegen_irvalue(ir_instr->as.copy.dst);
+
+      struct AsmInstr i;
+      struct AsmInstrMov mov;
+
+      mov.src = src;
+      mov.dst = dst;
+
+      i.kind = AsmInstr_MOV;
+      i.as.mov = mov;
+
+      vec_insert(instrs, i);
+      break;
+    }
     case IRInstr_BINARY: {
       enum AsmInstrBinaryKind kind;
       struct AsmOperand lhs, rhs, dst;

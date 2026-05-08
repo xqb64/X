@@ -1,3 +1,4 @@
 fn main(void) -> i32 {
-  return 1 + 2*3;
+  let x: i32 = 1 + 2 * 3;
+  return x;
 }
