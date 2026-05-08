@@ -1716,7 +1716,7 @@ struct AsmFunction codegen_fn(struct IRFunction *ir_func)
   struct AsmFunction func = {0};
   struct AsmInstr p1, p2, p3;
   struct AsmInstrPush push;
-  struct AsmInstrMov mov1, mov2;
+  struct AsmInstrMov mov1;
   struct AsmInstrBinary sub;
 
   func.name = ir_func->name;
