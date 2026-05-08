@@ -1716,15 +1716,15 @@ struct AsmFunction codegen_fn(struct IRFunction *ir_func)
   struct AsmFunction func = {0};
   struct AsmInstr p1, p2, p3;
   struct AsmInstrPush push;
-  struct AsmInstrMov mov1;
+  struct AsmInstrMov mov;
   struct AsmInstrBinary sub;
 
   func.name = ir_func->name;
 
   push.op = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = BP};
 
-  mov1.src = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = SP};
-  mov1.dst = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = BP};
+  mov.src = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = SP};
+  mov.dst = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = BP};
 
   sub.kind = AsmInstrBinary_SUB;
   sub.lhs = (struct AsmOperand){.kind = AsmOperand_IMM, .as.imm = 0};
@@ -1734,7 +1734,7 @@ struct AsmFunction codegen_fn(struct IRFunction *ir_func)
   p1.as.push = push;
 
   p2.kind = AsmInstr_MOV;
-  p2.as.mov = mov1;
+  p2.as.mov = mov;
 
   p3.kind = AsmInstr_BINARY;
   p3.as.binary = sub;
