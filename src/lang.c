@@ -107,7 +107,9 @@ enum TokenKind {
   TOKEN_SEMICOLON,
   TOKEN_ARROW,
   TOKEN_I32,
+  TOKEN_STR,
   TOKEN_RBRACE,
+  TOKEN_STRING,
   TOKEN_ERROR,
 };
 
@@ -219,6 +221,31 @@ struct Token identifier(struct Tokenizer *tokenizer)
   return (struct Token){.kind = TOKEN_IDENTIFIER, .len = len, .start = start};
 }
 
+struct Token string(struct Tokenizer *tokenizer)
+{
+  int len;
+  char *start;
+
+  advance(tokenizer);
+
+  len = 0;
+  start = tokenizer->src;
+
+  printf("start is: %s\n", start);
+  while (*tokenizer->src != '"') {
+    if (is_at_end(tokenizer)) {
+      return (struct Token){.kind = TOKEN_ERROR, .len = 1, .start = start};
+    }
+
+    len++;
+    advance(tokenizer);
+  }
+
+  advance(tokenizer);
+
+  return (struct Token){.kind = TOKEN_STRING, .len = len, .start = start};
+}
+
 struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
 {
   struct TokenizeResult result = {.tokens = {0}, .is_ok = true, .msg = NULL};
@@ -269,6 +296,15 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
       case 'r': {
         if (lookahead(tokenizer, 5, "eturn") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_RETURN, 6));
+        } else {
+          vec_insert(&tokens, identifier(tokenizer));
+        }
+
+        break;
+      }
+      case 's': {
+        if (lookahead(tokenizer, 2, "tr") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_STR, 3));
         } else {
           vec_insert(&tokens, identifier(tokenizer));
         }
@@ -326,6 +362,10 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
       }
       case ';': {
         vec_insert(&tokens, mktoken(tokenizer, TOKEN_SEMICOLON, 1));
+        break;
+      }
+      case '"': {
+        vec_insert(&tokens, string(tokenizer));
         break;
       }
       default:
@@ -404,6 +444,12 @@ void print_token(struct Token *token)
     case TOKEN_I32:
       printf("i32");
       break;
+    case TOKEN_STR:
+      printf("str");
+      break;
+    case TOKEN_STRING:
+      printf("string(\"%.*s\")", token->len, token->start);
+      break;
     case TOKEN_ERROR:
       printf("ERROR");
       break;
@@ -453,9 +499,15 @@ struct ExprBin {
   struct Expr *rhs;
 };
 
+enum Type {
+  I32_T,
+  STR_T,
+  UNKNOWN_T,
+};
+
 struct ExprVar {
   char *name;
-  char *type;
+  enum Type type;
 };
 
 struct Expr {
@@ -475,7 +527,7 @@ struct StmtRet {
 
 struct StmtLet {
   char *name;
-  char *type;
+  enum Type type;
   struct Expr *init;
 };
 
@@ -743,6 +795,20 @@ struct ParseFnResult primary(struct Parser *parser)
     literal.as.num = strtol(parser->prev->start, NULL, 10);
 
     res.as.expr = (struct Expr){.kind = EXPR_LITERAL, .as.literal = literal};
+  } else if (check(parser, TOKEN_STRING)) {
+    struct Literal literal;
+    struct Token *token_literal;
+
+    token_literal = consume(parser, TOKEN_STRING);
+    if (!token_literal) {
+      return (struct ParseFnResult){
+          .is_ok = false, .as.expr = {0}, .msg = "Expected string"};
+    }
+
+    literal.kind = LITERAL_STR;
+    literal.as.str = own_string_n(token_literal->start, token_literal->len);
+
+    res.as.expr = (struct Expr){.kind = EXPR_LITERAL, .as.literal = literal};
   } else if (check(parser, TOKEN_IDENTIFIER)) {
     struct Token *token_id;
 
@@ -754,15 +820,13 @@ struct ParseFnResult primary(struct Parser *parser)
 
     struct ExprVar var;
 
-    char *type = "i32";
-
     var.name = own_string_n(token_id->start, token_id->len);
-    var.type = ALLOC(*type);
+    var.type = UNKNOWN_T;
 
     res.as.expr = (struct Expr){.kind = EXPR_VARIABLE, .as.var = var};
   } else {
     res.is_ok = false;
-    res.msg = "Expected number or identifier";
+    res.msg = "Expected number, string, or identifier";
     return res;
   }
 
@@ -928,11 +992,22 @@ skip_parsing_expr:
   return result;
 }
 
+enum Type parse_type_decl(struct Parser *parser)
+{
+  if (match(parser, 1, TOKEN_I32)) {
+    return I32_T;
+  } else if (match(parser, 1, TOKEN_STR)) {
+    return STR_T;
+  }
+  return UNKNOWN_T;
+}
+
 struct ParseFnResult parse_let_stmt(struct Parser *parser)
 {
   struct ParseFnResult result, init_res;
-  struct Token *token_let, *token_id, *token_colon, *token_type, *token_equal,
+  struct Token *token_let, *token_id, *token_colon, *token_equal,
       *token_semicolon;
+  enum Type type;
   struct Expr init;
 
   result.is_ok = true;
@@ -962,16 +1037,7 @@ struct ParseFnResult parse_let_stmt(struct Parser *parser)
         .msg = "Expected token ':' after identifier in let stmt"};
   }
 
-  token_type = consume(parser, TOKEN_I32);
-  if (!token_type) {
-    free(name);
-    return (struct ParseFnResult){
-        .is_ok = false,
-        .as.stmt = {0},
-        .msg = "Expected token 'i32' after token ':' in let stmt"};
-  }
-
-  char *type = own_string_n(token_type->start, token_type->len);
+  type = parse_type_decl(parser);
 
   token_equal = consume(parser, TOKEN_EQUAL);
   if (!token_equal) {
@@ -1081,7 +1147,11 @@ void print_expr(struct Expr *expr, int spaces)
 {
   switch (expr->kind) {
     case EXPR_LITERAL: {
-      printf("Literal(%d)", expr->as.literal.as.num);
+      if (expr->as.literal.kind == LITERAL_NUM) {
+        printf("Literal(%d)", expr->as.literal.as.num);
+      } else {
+        printf("Literal(\"%s\")", expr->as.literal.as.str);
+      }
       break;
     }
     case EXPR_VARIABLE: {
@@ -1208,19 +1278,34 @@ void print_stmt(struct Stmt *stmt, int spaces)
       for (int i = 0; i < spaces + 2; i++) {
         printf(" ");
       }
-      printf("name = %s", stmt->as.let.name);
+      printf("name = %s,\n", stmt->as.let.name);
 
       for (int i = 0; i < spaces + 2; i++) {
         printf(" ");
       }
-      printf("type = %s", stmt->as.let.type);
+
+      printf("type = ");
+      switch (stmt->as.let.type) {
+        case I32_T:
+          printf("i32");
+          break;
+        case STR_T:
+          printf("str");
+          break;
+        case UNKNOWN_T:
+          printf("unknown");
+          break;
+      }
+
+      printf(",\n");
 
       for (int i = 0; i < spaces + 2; i++) {
         printf(" ");
       }
+      printf("init: ");
       print_expr(stmt->as.let.init, spaces + 2);
 
-      printf("\n");
+      printf(",\n");
       for (int i = 0; i < spaces; i++) {
         printf(" ");
       }
@@ -1248,7 +1333,6 @@ void free_expr(struct Expr *expr)
       break;
     }
     case EXPR_VARIABLE: {
-      free(expr->as.var.type);
       free(expr->as.var.name);
       break;
     }
@@ -1267,7 +1351,6 @@ void free_stmt(struct Stmt *stmt)
   switch (stmt->kind) {
     case STMT_LET: {
       free(stmt->as.let.name);
-      free(stmt->as.let.type);
       free_expr(stmt->as.let.init);
       free(stmt->as.let.init);
       break;
