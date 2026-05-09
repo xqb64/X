@@ -526,7 +526,7 @@ typedef Vector(struct Stmt) VecStmt;
 
 struct StmtRet {
   struct Expr *val;
-  struct StmtFn *belongs_to;
+  enum Type expected_retval;
 };
 
 struct StmtLet {
@@ -732,28 +732,26 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
                                   .msg = "Expected token 'void' after '('"};
   }
 
-  struct StmtFn *stmt_fn = malloc(sizeof(struct StmtFn));
-  stmt_fn->name = own_string_n(token_id->start, token_id->len);
-  stmt_fn->params = NULL;
+  struct StmtFn stmt_fn;
+  stmt_fn.name = own_string_n(token_id->start, token_id->len);
+  stmt_fn.params = NULL;
 
   if (strncmp(token_retval->start, "i32", token_retval->len) == 0) {
-    stmt_fn->retval = I32_T;
+    stmt_fn.retval = I32_T;
   } else if (strncmp(token_retval->start, "str", token_retval->len) == 0) {
-    stmt_fn->retval = STR_T;
+    stmt_fn.retval = STR_T;
   } else {
-    stmt_fn->retval = UNKNOWN_T;
+    stmt_fn.retval = UNKNOWN_T;
   }
 
   struct StmtFn *prev_fn = parser->current_fn;
-  parser->current_fn = stmt_fn;
+  parser->current_fn = &stmt_fn;
 
   struct ParseFnResult block_result = block(parser);
 
   parser->current_fn = prev_fn;
 
   if (!block_result.is_ok) {
-    free(stmt_fn->name);
-    free(stmt_fn);
     return (struct ParseFnResult){
         .is_ok = false, .as.stmt = {0}, .msg = "Expected block after '{'"};
   }
@@ -767,11 +765,11 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
                                   .msg = "Expected token '}' after fn body"};
   }
 
-  stmt_fn->body = body.as.block.stmts;
+  stmt_fn.body = body.as.block.stmts;
 
   struct Stmt stmt;
   stmt.kind = STMT_FN;
-  stmt.as.fn = *stmt_fn;
+  stmt.as.fn = stmt_fn;
 
   result.as.stmt = stmt;
 
@@ -1002,7 +1000,7 @@ skip_parsing_expr:
 
   struct StmtRet ret_stmt;
   ret_stmt.val = expr;
-  ret_stmt.belongs_to = parser->current_fn;
+  ret_stmt.expected_retval = parser->current_fn->retval;
 
   struct Stmt s;
   s.kind = STMT_RET;
@@ -1351,6 +1349,13 @@ void free_expr(struct Expr *expr)
 {
   switch (expr->kind) {
     case EXPR_LITERAL: {
+      switch (expr->as.literal.kind) {
+        case LITERAL_NUM:
+          break;
+        case LITERAL_STR:
+          free(expr->as.literal.as.str);
+          break;
+      }
       break;
     }
     case EXPR_VARIABLE: {
@@ -2705,6 +2710,18 @@ void insert_symbol(struct Symbol **sym, char *name, enum Type type)
   *sym = node;
 }
 
+void free_symbol_table(struct Symbol *sym)
+{
+  struct Symbol *curr, *tmp;
+
+  curr = sym;
+  while (curr) {
+    tmp = curr;
+    curr = curr->next;
+    free(tmp);
+  }
+}
+
 enum Type lookup_symbol(struct Symbol *sym, char *name)
 {
   while (sym) {
@@ -2805,10 +2822,12 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
       for (int i = 0; i < stmt->as.fn.body.len; i++) {
         res = typecheck_stmt(&stmt->as.fn.body.data[i], &fn_sym_table);
         if (!res.is_ok) {
+          free_symbol_table(fn_sym_table);
           return res;
         }
       }
 
+      free_symbol_table(fn_sym_table);
       break;
     }
     case STMT_BLOCK: {
@@ -2838,28 +2857,20 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
       break;
     }
     case STMT_RET: {
-      enum Type expected_ret = stmt->as.ret.belongs_to->retval;
-      printf("Expected ret is: ");
-      print_type(&expected_ret);
-
       if (stmt->as.ret.val) {
         res = typecheck_expr(stmt->as.ret.val, *sym_table);
         if (!res.is_ok) {
           return res;
         }
 
-        printf("stmt->as.ret.val->type is ");
-        print_type(&stmt->as.ret.val->type);
-        printf("\n");
-
-        if (stmt->as.ret.val->type != expected_ret) {
+        if (stmt->as.ret.val->type != stmt->as.ret.expected_retval) {
           return (struct TypecheckResult){
               .is_ok = false,
               .msg = "Return value type does not match function signature",
               .ast = NULL};
         }
       } else {
-        if (expected_ret != UNKNOWN_T) {
+        if (stmt->as.ret.expected_retval != UNKNOWN_T) {
           return (struct TypecheckResult){
               .is_ok = false,
               .msg = "Missing return value in non-void function",
@@ -2883,9 +2894,13 @@ struct TypecheckResult typecheck(struct AST *ast)
     struct TypecheckResult r;
     r = typecheck_stmt(&ast->stmts.data[i], &global_sym);
     if (!r.is_ok) {
+      free_symbol_table(global_sym);
       return r;
     }
   }
+
+  free_symbol_table(global_sym);
+
   return (struct TypecheckResult){.is_ok = true, .msg = NULL, .ast = ast};
 }
 
