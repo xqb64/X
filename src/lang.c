@@ -165,6 +165,8 @@ void advance(struct Tokenizer *tokenizer)
 
 #define vec_free(vec) free((vec)->data);
 
+#define ALLOC(obj) (memcpy(malloc(sizeof((obj))), &(obj), sizeof(obj)))
+
 typedef Vector(struct Token) VecToken;
 
 struct TokenizeResult {
@@ -517,12 +519,14 @@ struct Expr {
     struct ExprBin binary;
     struct ExprVar var;
   } as;
+  enum Type type;
 };
 
 typedef Vector(struct Stmt) VecStmt;
 
 struct StmtRet {
   struct Expr *val;
+  struct StmtFn *belongs_to;
 };
 
 struct StmtLet {
@@ -545,7 +549,7 @@ enum StmtKind {
 struct StmtFn {
   char *name;
   char **params;
-  char *retval;
+  enum Type retval;
   VecStmt body;
 };
 
@@ -559,6 +563,14 @@ struct Stmt {
   } as;
 };
 
+struct Parser {
+  struct StmtFn *current_fn;
+  struct Token *curr;
+  struct Token *prev;
+  VecToken *tokens;
+  int idx;
+};
+
 struct AST {
   VecStmt stmts;
 };
@@ -567,13 +579,6 @@ struct ParseResult {
   bool is_ok;
   char *msg;
   struct AST *ast;
-};
-
-struct Parser {
-  struct Token *curr;
-  struct Token *prev;
-  VecToken *tokens;
-  int idx;
 };
 
 struct Token *next_token(struct Parser *parser)
@@ -598,6 +603,7 @@ void init_parser(struct Parser *parser, VecToken *tokens)
   parser->tokens = tokens;
   parser->prev = NULL;
   parser->curr = NULL;
+  parser->current_fn = NULL;
 
   advance_parser(parser);
 }
@@ -726,8 +732,28 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
                                   .msg = "Expected token 'void' after '('"};
   }
 
+  struct StmtFn *stmt_fn = malloc(sizeof(struct StmtFn));
+  stmt_fn->name = own_string_n(token_id->start, token_id->len);
+  stmt_fn->params = NULL;
+
+  if (strncmp(token_retval->start, "i32", token_retval->len) == 0) {
+    stmt_fn->retval = I32_T;
+  } else if (strncmp(token_retval->start, "str", token_retval->len) == 0) {
+    stmt_fn->retval = STR_T;
+  } else {
+    stmt_fn->retval = UNKNOWN_T;
+  }
+
+  struct StmtFn *prev_fn = parser->current_fn;
+  parser->current_fn = stmt_fn;
+
   struct ParseFnResult block_result = block(parser);
+
+  parser->current_fn = prev_fn;
+
   if (!block_result.is_ok) {
+    free(stmt_fn->name);
+    free(stmt_fn);
     return (struct ParseFnResult){
         .is_ok = false, .as.stmt = {0}, .msg = "Expected block after '{'"};
   }
@@ -741,15 +767,11 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
                                   .msg = "Expected token '}' after fn body"};
   }
 
-  struct StmtFn stmt_fn;
-  stmt_fn.body = body.as.block.stmts;
-  stmt_fn.name = own_string_n(token_id->start, token_id->len);
-  stmt_fn.params = NULL;
-  stmt_fn.retval = own_string_n(token_retval->start, token_retval->len);
+  stmt_fn->body = body.as.block.stmts;
 
   struct Stmt stmt;
   stmt.kind = STMT_FN;
-  stmt.as.fn = stmt_fn;
+  stmt.as.fn = *stmt_fn;
 
   result.as.stmt = stmt;
 
@@ -771,8 +793,6 @@ static bool match(struct Parser *parser, int size, ...)
   va_end(ap);
   return false;
 }
-
-#define ALLOC(obj) (memcpy(malloc(sizeof((obj))), &(obj), sizeof(obj)))
 
 struct ParseFnResult primary(struct Parser *parser)
 {
@@ -982,6 +1002,7 @@ skip_parsing_expr:
 
   struct StmtRet ret_stmt;
   ret_stmt.val = expr;
+  ret_stmt.belongs_to = parser->current_fn;
 
   struct Stmt s;
   s.kind = STMT_RET;
@@ -1230,7 +1251,7 @@ void print_stmt(struct Stmt *stmt, int spaces)
       for (int i = 0; i < spaces + 2; i++) {
         printf(" ");
       }
-      printf("retval = %s,\n", stmt->as.fn.retval);
+      printf("retval = %d,\n", stmt->as.fn.retval);
       for (int i = 0; i < spaces; i++) {
         printf(" ");
       }
@@ -1358,7 +1379,6 @@ void free_stmt(struct Stmt *stmt)
     case STMT_FN: {
       free(stmt->as.fn.name);
       free(stmt->as.fn.params);
-      free(stmt->as.fn.retval);
       for (int i = 0; i < stmt->as.fn.body.len; i++) {
         free_stmt(&stmt->as.fn.body.data[i]);
       }
@@ -1438,7 +1458,7 @@ typedef Vector(struct IRInstr) VecIRInstr;
 struct IRFunction {
   char *name;
   char **params;
-  char *retval;
+  enum Type retval;
   VecIRInstr body;
 };
 
@@ -1489,7 +1509,9 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       r = malloc(sizeof(struct IRValue));
 
       r->kind = IRValue_VAR;
-      r->as.var = ALLOC(expr->as.var.name);
+
+      r->as.var = malloc(strlen(expr->as.var.name) + 1);
+      strcpy(r->as.var, expr->as.var.name);
 
       return r;
     }
@@ -1570,7 +1592,9 @@ void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
 
       dst = malloc(sizeof(struct IRValue));
       dst->kind = IRValue_VAR;
-      dst->as.var = ALLOC(stmt->as.let.name);
+
+      dst->as.var = malloc(strlen(stmt->as.let.name) + 1);
+      strcpy(dst->as.var, stmt->as.let.name);
 
       cpy.kind = IRInstr_COPY;
       cpy.as.copy = (struct IRInstr_Copy){.src = res, .dst = dst};
@@ -1849,7 +1873,7 @@ void print_ir_instr(struct IRInstr *instr, int spaces)
 
 void print_ir_fn(struct IRFunction *func)
 {
-  printf("IRFunction(\n  name = %s,\n  retval = %s,\n  body = [\n", func->name,
+  printf("IRFunction(\n  name = %s,\n  retval = %d,\n  body = [\n", func->name,
          func->retval);
   for (int i = 0; i < func->body.len; i++) {
     print_ir_instr(&func->body.data[i], 4);
@@ -2656,6 +2680,215 @@ struct AssembleLinkResult assemble_and_link(char *path, char *out_path)
   }
 }
 
+struct TypecheckResult {
+  bool is_ok;
+  char *msg;
+  struct AST *ast;
+};
+
+struct Symbol {
+  struct Symbol *next;
+  char *name;
+  enum Type type;
+};
+
+void insert_symbol(struct Symbol **sym, char *name, enum Type type)
+{
+  struct Symbol *node;
+
+  node = malloc(sizeof(struct Symbol));
+
+  node->name = name;
+  node->type = type;
+  node->next = *sym;
+
+  *sym = node;
+}
+
+enum Type lookup_symbol(struct Symbol *sym, char *name)
+{
+  while (sym) {
+    if (strcmp(sym->name, name) == 0) {
+      return sym->type;
+    }
+    sym = sym->next;
+  }
+  return UNKNOWN_T;
+}
+
+void print_type(enum Type *type)
+{
+  switch (*type) {
+    case I32_T:
+      printf("i32");
+      break;
+    case STR_T:
+      printf("str");
+      break;
+    case UNKNOWN_T:
+      printf("uknown");
+      break;
+    default:
+      assert(0);
+  }
+}
+
+struct TypecheckResult typecheck_expr(struct Expr *expr,
+                                      struct Symbol *sym_table)
+{
+  struct TypecheckResult res = {.is_ok = true, .msg = NULL, .ast = NULL};
+
+  switch (expr->kind) {
+    case EXPR_LITERAL: {
+      if (expr->as.literal.kind == LITERAL_NUM) {
+        expr->type = I32_T;
+      } else {
+        expr->type = STR_T;
+      }
+      break;
+    }
+    case EXPR_VARIABLE: {
+      enum Type t = lookup_symbol(sym_table, expr->as.var.name);
+
+      printf("looked up symbol %s with type ", expr->as.var.name);
+      print_type(&t);
+      printf("\n");
+
+      if (t == UNKNOWN_T) {
+        return (struct TypecheckResult){
+            .is_ok = false,
+            .msg = "Referenced an undefined variable",
+            .ast = NULL};
+      }
+      expr->type = t;
+
+      break;
+    }
+    case EXPR_BINARY: {
+      struct TypecheckResult lhs_res =
+          typecheck_expr(expr->as.binary.lhs, sym_table);
+      if (!lhs_res.is_ok) {
+        return lhs_res;
+      }
+
+      struct TypecheckResult rhs_res =
+          typecheck_expr(expr->as.binary.rhs, sym_table);
+      if (!rhs_res.is_ok) {
+        return rhs_res;
+      }
+
+      if (expr->as.binary.lhs->type != I32_T ||
+          expr->as.binary.rhs->type != I32_T) {
+        return (struct TypecheckResult){
+            .is_ok = false,
+            .msg = "Binary operations require i32 operands",
+            .ast = NULL};
+      }
+
+      expr->type = I32_T;
+      break;
+    }
+  }
+
+  return res;
+}
+
+struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
+                                      struct Symbol **sym_table)
+{
+  struct TypecheckResult res = {.is_ok = true, .msg = NULL, .ast = NULL};
+
+  switch (stmt->kind) {
+    case STMT_FN: {
+      struct Symbol *fn_sym_table = NULL;
+
+      for (int i = 0; i < stmt->as.fn.body.len; i++) {
+        res = typecheck_stmt(&stmt->as.fn.body.data[i], &fn_sym_table);
+        if (!res.is_ok) {
+          return res;
+        }
+      }
+
+      break;
+    }
+    case STMT_BLOCK: {
+      for (int i = 0; i < stmt->as.block.stmts.len; i++) {
+        res = typecheck_stmt(&stmt->as.block.stmts.data[i], sym_table);
+        if (!res.is_ok) {
+          return res;
+        }
+      }
+      break;
+    }
+    case STMT_LET: {
+      res = typecheck_expr(stmt->as.let.init, *sym_table);
+      if (!res.is_ok) {
+        return res;
+      }
+
+      if (stmt->as.let.type != stmt->as.let.init->type) {
+        printf("type mismatch");
+        return (struct TypecheckResult){
+            .is_ok = false,
+            .msg = "Type mismatch in let statement assignment",
+            .ast = NULL};
+      }
+
+      insert_symbol(sym_table, stmt->as.let.name, stmt->as.let.type);
+      break;
+    }
+    case STMT_RET: {
+      enum Type expected_ret = stmt->as.ret.belongs_to->retval;
+      printf("Expected ret is: ");
+      print_type(&expected_ret);
+
+      if (stmt->as.ret.val) {
+        res = typecheck_expr(stmt->as.ret.val, *sym_table);
+        if (!res.is_ok) {
+          return res;
+        }
+
+        printf("stmt->as.ret.val->type is ");
+        print_type(&stmt->as.ret.val->type);
+        printf("\n");
+
+        if (stmt->as.ret.val->type != expected_ret) {
+          return (struct TypecheckResult){
+              .is_ok = false,
+              .msg = "Return value type does not match function signature",
+              .ast = NULL};
+        }
+      } else {
+        if (expected_ret != UNKNOWN_T) {
+          return (struct TypecheckResult){
+              .is_ok = false,
+              .msg = "Missing return value in non-void function",
+              .ast = NULL};
+        }
+      }
+      break;
+    }
+    default:
+      assert(0);
+  }
+
+  return res;
+}
+
+struct TypecheckResult typecheck(struct AST *ast)
+{
+  struct Symbol *global_sym = NULL;
+
+  for (int i = 0; i < ast->stmts.len; i++) {
+    struct TypecheckResult r;
+    r = typecheck_stmt(&ast->stmts.data[i], &global_sym);
+    if (!r.is_ok) {
+      return r;
+    }
+  }
+  return (struct TypecheckResult){.is_ok = true, .msg = NULL, .ast = ast};
+}
+
 int main(void)
 {
   const char *path;
@@ -2666,7 +2899,8 @@ int main(void)
   VecToken tokens;
   struct Parser parser;
   struct ParseResult parse_result;
-  struct AST *ast;
+  struct AST *ast, *typechecked_ast;
+  struct TypecheckResult typecheck_result;
   struct IrfyResult irfy_result;
   struct IRProgram ir_prog;
   struct AsmResult asm_result;
@@ -2703,6 +2937,12 @@ int main(void)
 
   ast = parse_result.ast;
   print_ast(ast);
+
+  typecheck_result = typecheck(ast);
+  if (!typecheck_result.is_ok) {
+    fprintf(stderr, "err: %s\n", typecheck_result.msg);
+    goto free_up2_parse;
+  }
 
   irfy_result = irfy_ast(ast);
   if (!irfy_result.is_ok) {
