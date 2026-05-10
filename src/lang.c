@@ -233,7 +233,6 @@ struct Token string(struct Tokenizer *tokenizer)
   len = 0;
   start = tokenizer->src;
 
-  printf("start is: %s\n", start);
   while (*tokenizer->src != '"') {
     if (is_at_end(tokenizer)) {
       return (struct Token){.kind = TOKEN_ERROR, .len = 1, .start = start};
@@ -2767,16 +2766,13 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
     case EXPR_VARIABLE: {
       enum Type t = lookup_symbol(sym_table, expr->as.var.name);
 
-      printf("looked up symbol %s with type ", expr->as.var.name);
-      print_type(&t);
-      printf("\n");
-
       if (t == UNKNOWN_T) {
         return (struct TypecheckResult){
             .is_ok = false,
             .msg = "Referenced an undefined variable",
             .ast = NULL};
       }
+
       expr->type = t;
 
       break;
@@ -2846,7 +2842,6 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
       }
 
       if (stmt->as.let.type != stmt->as.let.init->type) {
-        printf("type mismatch");
         return (struct TypecheckResult){
             .is_ok = false,
             .msg = "Type mismatch in let statement assignment",
