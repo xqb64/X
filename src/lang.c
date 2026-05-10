@@ -103,6 +103,7 @@ enum TokenKind {
   TOKEN_MINUS,
   TOKEN_STAR,
   TOKEN_SLASH,
+  TOKEN_COMMA,
   TOKEN_COLON,
   TOKEN_SEMICOLON,
   TOKEN_ARROW,
@@ -357,6 +358,10 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
         vec_insert(&tokens, mktoken(tokenizer, TOKEN_EQUAL, 1));
         break;
       }
+      case ',': {
+        vec_insert(&tokens, mktoken(tokenizer, TOKEN_COMMA, 1));
+        break;
+      }
       case ':': {
         vec_insert(&tokens, mktoken(tokenizer, TOKEN_COLON, 1));
         break;
@@ -454,6 +459,9 @@ void print_token(struct Token *token)
     case TOKEN_ERROR:
       printf("ERROR");
       break;
+    case TOKEN_COMMA:
+      printf("comma");
+      break;
     default:
       assert(0);
   }
@@ -485,6 +493,7 @@ enum ExprKind {
   EXPR_LITERAL,
   EXPR_VARIABLE,
   EXPR_BINARY,
+  EXPR_CALL,
 };
 
 enum ExprBinKind {
@@ -498,6 +507,13 @@ struct ExprBin {
   enum ExprBinKind kind;
   struct Expr *lhs;
   struct Expr *rhs;
+};
+
+typedef Vector(struct Expr) VecExpr;
+
+struct ExprCall {
+  struct Expr *target;
+  VecExpr arguments;
 };
 
 enum Type {
@@ -517,6 +533,7 @@ struct Expr {
     struct Literal literal;
     struct ExprBin binary;
     struct ExprVar var;
+    struct ExprCall call;
   } as;
   enum Type type;
 };
@@ -669,11 +686,20 @@ char *own_string_n(const char *string, int n)
   return s;
 }
 
+struct Parameter {
+  char *name;
+  enum Type type;
+};
+
+typedef Vector(struct Parameter) VecParam;
+
 struct ParseFnResult parse_fn_stmt(struct Parser *parser)
 {
   struct ParseFnResult result;
   struct Token *token_fn, *token_id, *token_lparen, *token_void, *token_rparen,
       *token_arrow, *token_retval, *token_lbrace, *token_rbrace;
+
+  VecParam parameters = {0};
 
   result.is_ok = true;
   result.msg = NULL;
@@ -697,11 +723,58 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
         .is_ok = false, .as.stmt = {0}, .msg = "Expected token '(' after 'id'"};
   }
 
-  token_void = consume(parser, TOKEN_VOID);
-  if (!token_void) {
-    return (struct ParseFnResult){.is_ok = false,
-                                  .as.stmt = {0},
-                                  .msg = "Expected token 'void' after '('"};
+  if (check(parser, TOKEN_VOID)) {
+    token_void = consume(parser, TOKEN_VOID);
+    if (!token_void) {
+      return (struct ParseFnResult){.is_ok = false,
+                                    .as.stmt = {0},
+                                    .msg = "Expected token 'void' after '('"};
+    }
+  } else {
+    while (!check(parser, TOKEN_RPAREN)) {
+      struct Token *name_token, *semicolon_token, *type_token;
+      char *name;
+      enum Type type;
+
+      name_token = consume(parser, TOKEN_IDENTIFIER);
+      if (!name_token) {
+        return (struct ParseFnResult){
+            .is_ok = false,
+            .as.stmt = {0},
+            .msg = "Expected `name: type` format for parameters"};
+      }
+
+      semicolon_token = consume(parser, TOKEN_COLON);
+      if (!semicolon_token) {
+        return (struct ParseFnResult){
+            .is_ok = false,
+            .as.stmt = {0},
+            .msg = "Expected `name: type` format for parameters"};
+      }
+
+      // FIXME:  don't harcode the type
+      type_token = consume(parser, TOKEN_I32);
+      if (!type_token) {
+        return (struct ParseFnResult){
+            .is_ok = false,
+            .as.stmt = {0},
+            .msg = "Expected `name: type` format for paramters"};
+      }
+
+      name = own_string_n(name_token->start, name_token->len);
+      type = I32_T;  // FIXME:  don't harcode the type
+
+      struct Parameter p;
+
+      p.name = name;
+      p.type = type;
+
+      vec_insert(&parameters, p);
+
+      if (check(parser, TOKEN_COMMA)) {
+        consume(parser, TOKEN_COMMA);
+      }
+    }
   }
 
   token_rparen = consume(parser, TOKEN_RPAREN);
@@ -850,12 +923,91 @@ struct ParseFnResult primary(struct Parser *parser)
   return res;
 }
 
+struct ParseFnResult parse_expr(struct Parser *parser);
+void print_expr(struct Expr *expr, int spaces);
+void free_expr(struct Expr *expr);
+
+struct ParseFnResult finish_call(struct Parser *parser, struct Expr callee)
+{
+  VecExpr arguments = {0};
+  if (!check(parser, TOKEN_RPAREN)) {
+    do {
+      struct ParseFnResult r;
+
+      r = parse_expr(parser);
+      if (!r.is_ok) {
+        for (size_t i = 0; i < arguments.len; i++) {
+          free_expr(&arguments.data[i]);
+        }
+        vec_free(&arguments);
+        return r;
+      }
+      vec_insert(&arguments, r.as.expr);
+    } while (match(parser, 1, TOKEN_COMMA));
+  }
+
+  struct Token *token_rparen;
+
+  token_rparen = consume(parser, TOKEN_RPAREN);
+  if (!token_rparen) {
+    for (size_t i = 0; i < arguments.len; i++) {
+      free_expr(&arguments.data[i]);
+    }
+    vec_free(&arguments);
+    return (struct ParseFnResult){.is_ok = false,
+                                  .as.expr = {0},
+                                  .msg = "Expected ')' after expression."};
+  }
+
+  struct ExprCall call_expr = {
+      .target = ALLOC(callee),
+      .arguments = arguments,
+  };
+
+  struct Expr e;
+
+  e.kind = EXPR_CALL;
+  e.as.call = call_expr;
+
+  return (struct ParseFnResult){.as.expr = e, .is_ok = true, .msg = NULL};
+}
+
+struct ParseFnResult call(struct Parser *parser)
+{
+  struct ParseFnResult expr_result;
+
+  expr_result = primary(parser);
+  if (!expr_result.is_ok) {
+    return expr_result;
+  }
+
+  struct Expr expr = expr_result.as.expr;
+
+  print_expr(&expr, 0);
+
+  for (;;) {
+    if (match(parser, 1, TOKEN_LPAREN)) {
+      struct ParseFnResult finish_call_result;
+
+      finish_call_result = finish_call(parser, expr);
+      if (!finish_call_result.is_ok) {
+        return finish_call_result;
+      }
+      expr = finish_call_result.as.expr;
+    } else {
+      break;
+    }
+  }
+
+  return (struct ParseFnResult){.as.expr = expr, .is_ok = true, .msg = NULL};
+}
+
 struct ParseFnResult factor(struct Parser *parser)
 {
   struct ParseFnResult left_res, right_res;
   struct Expr left, right;
 
-  left_res = primary(parser);
+  left_res = call(parser);
   if (!left_res.is_ok) {
     return left_res;
   }
@@ -864,7 +1016,7 @@ struct ParseFnResult factor(struct Parser *parser)
   while (match(parser, 2, TOKEN_STAR, TOKEN_SLASH)) {
     char *op = parser->prev->start;
 
-    right_res = primary(parser);
+    right_res = call(parser);
     if (!right_res.is_ok) {
       return right_res;
     }
@@ -1221,6 +1373,30 @@ void print_expr(struct Expr *expr, int spaces)
         printf(" ");
       }
       printf(")");
+
+      break;
+    }
+    case EXPR_CALL: {
+      printf("Call(\n");
+      for (int i = 0; i < spaces + 2; i++) {
+        printf(" ");
+      }
+      printf("target = ");
+      print_expr(expr->as.call.target, 0);
+
+      for (int i = 0; i < spaces + 2; i++) {
+        printf(" ");
+      }
+      printf("arguments: [\n");
+
+      for (int i = 0; i < expr->as.call.arguments.len; i++) {
+        print_expr(&expr->as.call.arguments.data[i], spaces + 4);
+      }
+
+      for (int i = 0; i < spaces; i++) {
+        printf(" ");
+      }
+      printf(")");
     }
   }
 }
@@ -1347,6 +1523,11 @@ void print_ast(struct AST *ast)
 void free_expr(struct Expr *expr)
 {
   switch (expr->kind) {
+    case EXPR_CALL: {
+      free(expr->as.call.target);
+      vec_free(&expr->as.call.arguments);
+      break;
+    }
     case EXPR_LITERAL: {
       switch (expr->as.literal.kind) {
         case LITERAL_NUM:
