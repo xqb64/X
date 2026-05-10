@@ -806,7 +806,7 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
 
   struct StmtFn stmt_fn;
   stmt_fn.name = own_string_n(token_id->start, token_id->len);
-  stmt_fn.params = (VecParam){0};
+  stmt_fn.params = parameters;
 
   if (strncmp(token_retval->start, "i32", token_retval->len) == 0) {
     stmt_fn.retval = I32_T;
@@ -1750,6 +1750,10 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       strcpy(ret->as.var, dst->as.var);
 
       return ret;
+    }
+    case EXPR_CALL: {
+      /* TODO: ... */
+      break;
     }
     default:
       assert(0);
@@ -2989,6 +2993,25 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
       expr->type = I32_T;
       break;
     }
+    case EXPR_CALL: {
+      struct TypecheckResult tgt_res =
+          typecheck_expr(expr->as.call.target, sym_table);
+      if (!tgt_res.is_ok) {
+        return tgt_res;
+      }
+
+      for (int i = 0; i < expr->as.call.arguments.len; i++) {
+        struct TypecheckResult arg_res =
+            typecheck_expr(&expr->as.call.arguments.data[i], sym_table);
+        if (!arg_res.is_ok) {
+          return arg_res;
+        }
+      }
+
+      expr->type = expr->as.call.target->type;
+
+      break;
+    }
   }
 
   return res;
@@ -3001,35 +3024,24 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
 
   switch (stmt->kind) {
     case STMT_FN: {
-      struct Symbol *fn_sym_table = NULL;
+      if (sym_table) {
+        insert_symbol(sym_table, stmt->as.fn.name, stmt->as.fn.retval);
+      }
+
+      struct Symbol *fn_sym_table = sym_table ? *sym_table : NULL;
 
       for (int i = 0; i < stmt->as.fn.params.len; i++) {
-        char *unique_name;
-        int param_len, digit_len, total_len, i;
-
-        i = mktmp();
-
-        param_len = strlen(stmt->as.fn.params.data[i].name);
-        digit_len = snprintf(NULL, 0, "%d", i);
-        total_len = strlen("tmp") + strlen(".") + digit_len + 1;
-
-        unique_name = malloc(total_len);
-        snprintf(unique_name, total_len, "var.%s.%d",
-                 stmt->as.fn.params.data[i].name, i);
-
-        insert_symbol(&fn_sym_table, unique_name,
+        insert_symbol(&fn_sym_table, stmt->as.fn.params.data[i].name,
                       stmt->as.fn.params.data[i].type);
       }
 
       for (int i = 0; i < stmt->as.fn.body.len; i++) {
         res = typecheck_stmt(&stmt->as.fn.body.data[i], &fn_sym_table);
         if (!res.is_ok) {
-          free_symbol_table(fn_sym_table);
           return res;
         }
       }
 
-      free_symbol_table(fn_sym_table);
       break;
     }
     case STMT_BLOCK: {
@@ -3095,14 +3107,244 @@ struct TypecheckResult typecheck(struct AST *ast)
     struct TypecheckResult r;
     r = typecheck_stmt(&ast->stmts.data[i], &global_sym);
     if (!r.is_ok) {
-      free_symbol_table(global_sym);
       return r;
     }
   }
 
-  free_symbol_table(global_sym);
-
   return (struct TypecheckResult){.is_ok = true, .msg = NULL, .ast = ast};
+}
+
+struct ResolveResult {
+  bool is_ok;
+  char *msg;
+  union {
+    struct AST *ast;
+    struct Stmt *stmt;
+    struct Expr *expr;
+    struct Parameter *param;
+  } as;
+};
+
+struct Variable {
+  char *unique_name;
+  bool current_scope;
+};
+
+struct VariableMap {
+  struct VariableMap *next;
+  char *name;
+  struct Variable value;
+};
+
+void insert_var_into_varmap(struct VariableMap **varmap, char *name,
+                            char *uniq_name, bool current_scope)
+{
+  struct Variable v;
+  struct VariableMap *node;
+
+  v.unique_name = uniq_name;
+  v.current_scope = current_scope;
+
+  node = malloc(sizeof(struct VariableMap));
+
+  node->name = malloc(strlen(name) + 1);
+  strcpy(node->name, name);
+
+  node->value = v;
+  node->next = *varmap;
+
+  *varmap = node;
+}
+
+char *lookup_varmap(struct VariableMap *varmap, char *name)
+{
+  while (varmap) {
+    if (strcmp(varmap->name, name) == 0) {
+      return varmap->value.unique_name;
+    }
+    varmap = varmap->next;
+  }
+  return NULL;
+}
+
+struct ResolveResult resolve_expr(struct VariableMap **varmap,
+                                  struct Expr *expr)
+{
+  switch (expr->kind) {
+    case EXPR_LITERAL:
+      break;
+    case EXPR_VARIABLE: {
+      printf("looking up: %s\n", expr->as.var.name);
+      char *resolved_name = lookup_varmap(*varmap, expr->as.var.name);
+      if (!resolved_name) {
+        return (struct ResolveResult){.is_ok = false,
+                                      .msg = "Undefined variable"};
+      }
+
+      free(expr->as.var.name);
+      expr->as.var.name = strdup(resolved_name);
+      break;
+    }
+    case EXPR_BINARY: {
+      struct ResolveResult r1, r2;
+
+      r1 = resolve_expr(varmap, expr->as.binary.lhs);
+      if (!r1.is_ok) {
+        return r1;
+      }
+
+      r2 = resolve_expr(varmap, expr->as.binary.rhs);
+      if (!r2.is_ok) {
+        return r2;
+      }
+
+      break;
+    }
+    case EXPR_CALL: {
+      struct ResolveResult r;
+
+      r = resolve_expr(varmap, expr->as.call.target);
+      if (!r.is_ok) {
+        return r;
+      }
+
+      for (int i = 0; i < expr->as.call.arguments.len; i++) {
+        r = resolve_expr(varmap, &expr->as.call.arguments.data[i]);
+        if (!r.is_ok) {
+          return r;
+        }
+      }
+      break;
+    }
+    default:
+      assert(0);
+  }
+  return (struct ResolveResult){.is_ok = true, .msg = NULL, .as.expr = expr};
+}
+
+struct ResolveResult resolve_param(struct VariableMap **varmap,
+                                   struct Parameter *param)
+{
+  int digit_len, total_len, i;
+  char *uniq_name;
+
+  i = mktmp();
+  digit_len = snprintf(NULL, 0, "%d", i);
+
+  total_len =
+      strlen("var.") + strlen(param->name) + strlen(".") + digit_len + 1;
+
+  uniq_name = malloc(total_len);
+  snprintf(uniq_name, total_len, "var.%s.%d", param->name, i);
+
+  insert_var_into_varmap(varmap, param->name, uniq_name, true);
+
+  free(param->name);
+  char *new_name = malloc(strlen(uniq_name) + 1);
+  strcpy(new_name, uniq_name);
+  param->name = new_name;
+
+  return (struct ResolveResult){.is_ok = true, .msg = NULL, .as.param = param};
+}
+
+struct ResolveResult resolve_stmt(struct VariableMap **varmap,
+                                  struct Stmt *stmt)
+{
+  switch (stmt->kind) {
+    case STMT_FN: {
+      struct VariableMap *variable_map = varmap ? *varmap : NULL;
+
+      if (varmap) {
+        insert_var_into_varmap(varmap, stmt->as.fn.name, stmt->as.fn.name,
+                               true);
+      }
+
+      for (int i = 0; i < stmt->as.fn.params.len; i++) {
+        struct ResolveResult r;
+
+        r = resolve_param(&variable_map, &stmt->as.fn.params.data[i]);
+        if (!r.is_ok) {
+          return r;
+        }
+      }
+
+      for (int i = 0; i < stmt->as.fn.body.len; i++) {
+        struct ResolveResult r;
+
+        r = resolve_stmt(&variable_map, &stmt->as.fn.body.data[i]);
+        if (!r.is_ok) {
+          return r;
+        }
+      }
+      break;
+    }
+    case STMT_BLOCK: {
+      for (int i = 0; i < stmt->as.block.stmts.len; i++) {
+        struct ResolveResult r;
+
+        r = resolve_stmt(varmap, &stmt->as.block.stmts.data[i]);
+        if (!r.is_ok) {
+          return r;
+        }
+      }
+      break;
+    }
+    case STMT_LET: {
+      struct ResolveResult r;
+
+      r = resolve_expr(varmap, stmt->as.let.init);
+      if (!r.is_ok) {
+        return r;
+      }
+
+      int digit_len, total_len, i;
+      char *uniq_name;
+
+      i = mktmp();
+
+      digit_len = snprintf(NULL, 0, "%d", i);
+      total_len = strlen("var.") + strlen(stmt->as.let.name) + strlen(".") +
+                  digit_len + 1;
+
+      uniq_name = malloc(total_len);
+      snprintf(uniq_name, total_len, "var.%s.%d", stmt->as.let.name, i);
+
+      insert_var_into_varmap(varmap, stmt->as.let.name, uniq_name, true);
+
+      free(stmt->as.let.name);
+      char *new_name = malloc(strlen(uniq_name) + 1);
+      strcpy(new_name, uniq_name);
+      stmt->as.let.name = new_name;
+
+      break;
+    }
+    case STMT_RET: {
+      struct ResolveResult r;
+
+      r = resolve_expr(varmap, stmt->as.ret.val);
+      if (!r.is_ok) {
+        return r;
+      }
+
+      break;
+    }
+  }
+
+  return (struct ResolveResult){.is_ok = true, .msg = NULL, .as.stmt = stmt};
+}
+
+struct ResolveResult resolve(struct AST *ast)
+{
+  struct VariableMap *global_map = NULL;
+  for (int i = 0; i < ast->stmts.len; i++) {
+    struct ResolveResult r;
+
+    r = resolve_stmt(&global_map, &ast->stmts.data[i]);
+    if (!r.is_ok) {
+      return r;
+    }
+  }
+  return (struct ResolveResult){.is_ok = true, .msg = NULL, .as.ast = ast};
 }
 
 int main(void)
@@ -3115,7 +3357,8 @@ int main(void)
   VecToken tokens;
   struct Parser parser;
   struct ParseResult parse_result;
-  struct AST *ast, *typechecked_ast;
+  struct AST *ast, *resolved_ast, *typechecked_ast;
+  struct ResolveResult resolve_result;
   struct TypecheckResult typecheck_result;
   struct IrfyResult irfy_result;
   struct IRProgram ir_prog;
@@ -3154,7 +3397,17 @@ int main(void)
   ast = parse_result.ast;
   print_ast(ast);
 
-  typecheck_result = typecheck(ast);
+  resolve_result = resolve(ast);
+  if (!resolve_result.is_ok) {
+    fprintf(stderr, "err: %s\n", resolve_result.msg);
+    goto free_up2_parse;
+  }
+
+  printf("resolved ast:\n");
+  resolved_ast = resolve_result.as.ast;
+  print_ast(resolved_ast);
+
+  typecheck_result = typecheck(resolved_ast);
   if (!typecheck_result.is_ok) {
     fprintf(stderr, "err: %s\n", typecheck_result.msg);
     goto free_up2_parse;
