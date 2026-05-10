@@ -562,9 +562,11 @@ enum StmtKind {
   STMT_RET,
 };
 
+typedef Vector(struct Parameter) VecParam;
+
 struct StmtFn {
   char *name;
-  char **params;
+  VecParam params;
   enum Type retval;
   VecStmt body;
 };
@@ -691,8 +693,6 @@ struct Parameter {
   enum Type type;
 };
 
-typedef Vector(struct Parameter) VecParam;
-
 struct ParseFnResult parse_fn_stmt(struct Parser *parser)
 {
   struct ParseFnResult result;
@@ -806,7 +806,7 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
 
   struct StmtFn stmt_fn;
   stmt_fn.name = own_string_n(token_id->start, token_id->len);
-  stmt_fn.params = NULL;
+  stmt_fn.params = (VecParam){0};
 
   if (strncmp(token_retval->start, "i32", token_retval->len) == 0) {
     stmt_fn.retval = I32_T;
@@ -1563,7 +1563,7 @@ void free_stmt(struct Stmt *stmt)
     }
     case STMT_FN: {
       free(stmt->as.fn.name);
-      free(stmt->as.fn.params);
+      vec_free(&stmt->as.fn.params);
       for (int i = 0; i < stmt->as.fn.body.len; i++) {
         free_stmt(&stmt->as.fn.body.data[i]);
       }
@@ -1642,7 +1642,7 @@ typedef Vector(struct IRInstr) VecIRInstr;
 
 struct IRFunction {
   char *name;
-  char **params;
+  VecParam params;
   enum Type retval;
   VecIRInstr body;
 };
@@ -1653,10 +1653,18 @@ struct IRProgram {
   VecIRFunctionPtr funcs;
 };
 
-struct IRValue *make_ir_var(void)
+int mktmp(void)
 {
   static int i = 0;
+  return i++;
+}
+
+struct IRValue *make_ir_var(void)
+{
   struct IRValue *var;
+  int i;
+
+  i = mktmp();
 
   var = malloc(sizeof(struct IRValue));
   memset(var, 0, sizeof(struct IRValue));
@@ -1668,8 +1676,6 @@ struct IRValue *make_ir_var(void)
   var->as.var = malloc(total_len);
 
   snprintf(var->as.var, total_len, "tmp.%d", i);
-
-  i++;
 
   return var;
 }
@@ -2945,8 +2951,9 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
       break;
     }
     case EXPR_VARIABLE: {
-      enum Type t = lookup_symbol(sym_table, expr->as.var.name);
+      printf("looking up symbol: %s\n", expr->as.var.name);
 
+      enum Type t = lookup_symbol(sym_table, expr->as.var.name);
       if (t == UNKNOWN_T) {
         return (struct TypecheckResult){
             .is_ok = false,
@@ -2995,6 +3002,24 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
   switch (stmt->kind) {
     case STMT_FN: {
       struct Symbol *fn_sym_table = NULL;
+
+      for (int i = 0; i < stmt->as.fn.params.len; i++) {
+        char *unique_name;
+        int param_len, digit_len, total_len, i;
+
+        i = mktmp();
+
+        param_len = strlen(stmt->as.fn.params.data[i].name);
+        digit_len = snprintf(NULL, 0, "%d", i);
+        total_len = strlen("tmp") + strlen(".") + digit_len + 1;
+
+        unique_name = malloc(total_len);
+        snprintf(unique_name, total_len, "var.%s.%d",
+                 stmt->as.fn.params.data[i].name, i);
+
+        insert_symbol(&fn_sym_table, unique_name,
+                      stmt->as.fn.params.data[i].type);
+      }
 
       for (int i = 0; i < stmt->as.fn.body.len; i++) {
         res = typecheck_stmt(&stmt->as.fn.body.data[i], &fn_sym_table);
