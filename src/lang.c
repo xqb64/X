@@ -516,15 +516,76 @@ struct ExprCall {
   VecExpr arguments;
 };
 
-enum Type {
+enum TypeKind {
   I32_T,
   STR_T,
+  FN_T,
   UNKNOWN_T,
 };
 
+typedef struct Type Type;
+
+typedef Vector(Type) VecType;
+
+struct Type {
+  enum TypeKind kind;
+  union {
+    struct {
+      VecType params;
+      Type *retval;
+    } func;
+  } as;
+};
+
+bool types_equal(Type a, Type b);
+
+bool vectype_equal(VecType a, VecType b)
+{
+  if (a.len != b.len) {
+    return false;
+  }
+
+  for (int i = 0; i < a.len; i++) {
+    if (!types_equal(a.data[i], b.data[i])) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool types_equal(Type a, Type b)
+{
+  if (a.kind != b.kind) {
+    return false;
+  }
+
+  switch (a.kind) {
+    case I32_T:
+    case STR_T:
+    case UNKNOWN_T:
+      return true;
+
+    case FN_T: {
+      if (a.as.func.retval == NULL || b.as.func.retval == NULL) {
+        return a.as.func.retval == b.as.func.retval;
+      }
+
+      if (!types_equal(*a.as.func.retval, *b.as.func.retval)) {
+        return false;
+      }
+
+      return vectype_equal(a.as.func.params, b.as.func.params);
+    }
+
+    default:
+      return false;
+  }
+}
+
 struct ExprVar {
   char *name;
-  enum Type type;
+  Type type;
 };
 
 struct Expr {
@@ -535,19 +596,19 @@ struct Expr {
     struct ExprVar var;
     struct ExprCall call;
   } as;
-  enum Type type;
+  Type type;
 };
 
 typedef Vector(struct Stmt) VecStmt;
 
 struct StmtRet {
   struct Expr *val;
-  enum Type expected_retval;
+  Type expected_retval;
 };
 
 struct StmtLet {
   char *name;
-  enum Type type;
+  Type type;
   struct Expr *init;
 };
 
@@ -567,7 +628,7 @@ typedef Vector(struct Parameter) VecParam;
 struct StmtFn {
   char *name;
   VecParam params;
-  enum Type retval;
+  Type retval;
   VecStmt body;
 };
 
@@ -690,7 +751,7 @@ char *own_string_n(const char *string, int n)
 
 struct Parameter {
   char *name;
-  enum Type type;
+  Type type;
 };
 
 struct ParseFnResult parse_fn_stmt(struct Parser *parser)
@@ -734,7 +795,7 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
     while (!check(parser, TOKEN_RPAREN)) {
       struct Token *name_token, *semicolon_token, *type_token;
       char *name;
-      enum Type type;
+      Type type;
 
       name_token = consume(parser, TOKEN_IDENTIFIER);
       if (!name_token) {
@@ -762,7 +823,7 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
       }
 
       name = own_string_n(name_token->start, name_token->len);
-      type = I32_T;  // FIXME:  don't harcode the type
+      type = (Type){.kind = I32_T};  // FIXME:  don't harcode the type
 
       struct Parameter p;
 
@@ -809,11 +870,11 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
   stmt_fn.params = parameters;
 
   if (strncmp(token_retval->start, "i32", token_retval->len) == 0) {
-    stmt_fn.retval = I32_T;
+    stmt_fn.retval = (Type){.kind = I32_T};
   } else if (strncmp(token_retval->start, "str", token_retval->len) == 0) {
-    stmt_fn.retval = STR_T;
+    stmt_fn.retval = (Type){.kind = STR_T};
   } else {
-    stmt_fn.retval = UNKNOWN_T;
+    stmt_fn.retval = (Type){.kind = UNKNOWN_T};
   }
 
   struct StmtFn *prev_fn = parser->current_fn;
@@ -911,7 +972,7 @@ struct ParseFnResult primary(struct Parser *parser)
     struct ExprVar var;
 
     var.name = own_string_n(token_id->start, token_id->len);
-    var.type = UNKNOWN_T;
+    var.type = (Type){.kind = UNKNOWN_T};
 
     res.as.expr = (struct Expr){.kind = EXPR_VARIABLE, .as.var = var};
   } else {
@@ -1162,14 +1223,14 @@ skip_parsing_expr:
   return result;
 }
 
-enum Type parse_type_decl(struct Parser *parser)
+Type parse_type_decl(struct Parser *parser)
 {
   if (match(parser, 1, TOKEN_I32)) {
-    return I32_T;
+    return (Type){.kind = I32_T};
   } else if (match(parser, 1, TOKEN_STR)) {
-    return STR_T;
+    return (Type){.kind = STR_T};
   }
-  return UNKNOWN_T;
+  return (Type){.kind = UNKNOWN_T};
 }
 
 struct ParseFnResult parse_let_stmt(struct Parser *parser)
@@ -1177,7 +1238,7 @@ struct ParseFnResult parse_let_stmt(struct Parser *parser)
   struct ParseFnResult result, init_res;
   struct Token *token_let, *token_id, *token_colon, *token_equal,
       *token_semicolon;
-  enum Type type;
+  Type type;
   struct Expr init;
 
   result.is_ok = true;
@@ -1424,7 +1485,7 @@ void print_stmt(struct Stmt *stmt, int spaces)
       for (int i = 0; i < spaces + 2; i++) {
         printf(" ");
       }
-      printf("retval = %d,\n", stmt->as.fn.retval);
+      printf("retval = %d,\n", stmt->as.fn.retval.kind);
       for (int i = 0; i < spaces; i++) {
         printf(" ");
       }
@@ -1479,12 +1540,15 @@ void print_stmt(struct Stmt *stmt, int spaces)
       }
 
       printf("type = ");
-      switch (stmt->as.let.type) {
+      switch (stmt->as.let.type.kind) {
         case I32_T:
           printf("i32");
           break;
         case STR_T:
           printf("str");
+          break;
+        case FN_T:
+          printf("fn");
           break;
         case UNKNOWN_T:
           printf("unknown");
@@ -1657,7 +1721,7 @@ typedef Vector(struct IRInstr) VecIRInstr;
 struct IRFunction {
   char *name;
   VecParam params;
-  enum Type retval;
+  Type retval;
   VecIRInstr body;
 };
 
@@ -1768,7 +1832,8 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       return ret;
     }
     case EXPR_CALL: {
-      struct IRValue *result = expr->type == UNKNOWN_T ? NULL : make_ir_var();
+      struct IRValue *result =
+          expr->type.kind == UNKNOWN_T ? NULL : make_ir_var();
 
       VecIRValuePtr args = {0};
       for (int i = 0; i < expr->as.call.arguments.len; i++) {
@@ -2155,7 +2220,7 @@ void print_ir_instr(struct IRInstr *instr, int spaces)
 void print_ir_fn(struct IRFunction *func)
 {
   printf("IRFunction(\n  name = %s,\n  retval = %d,\n  body = [\n", func->name,
-         func->retval);
+         func->retval.kind);
   for (int i = 0; i < func->body.len; i++) {
     print_ir_instr(&func->body.data[i], 4);
     printf(",\n");
@@ -3167,10 +3232,10 @@ struct TypecheckResult {
 struct Symbol {
   struct Symbol *next;
   char *name;
-  enum Type type;
+  Type type;
 };
 
-void insert_symbol(struct Symbol **sym, char *name, enum Type type)
+void insert_symbol(struct Symbol **sym, char *name, Type type)
 {
   struct Symbol *node;
 
@@ -3195,25 +3260,35 @@ void free_symbol_table(struct Symbol *sym)
   }
 }
 
-enum Type lookup_symbol(struct Symbol *sym, char *name)
+struct Symbol *lookup_symbol(struct Symbol *sym, char *name)
 {
   while (sym) {
     if (strcmp(sym->name, name) == 0) {
-      return sym->type;
+      return sym;
     }
     sym = sym->next;
   }
-  return UNKNOWN_T;
+  return NULL;
 }
 
-void print_type(enum Type *type)
+void print_type(Type *type)
 {
-  switch (*type) {
+  switch (type->kind) {
     case I32_T:
       printf("i32");
       break;
     case STR_T:
       printf("str");
+      break;
+    case FN_T:
+      printf("fn\n");
+      printf("args: [\n");
+      for (int i = 0; i < type->as.func.params.len; i++) {
+        print_type(&type->as.func.params.data[i]);
+      }
+      printf("retval: ");
+      print_type(type->as.func.retval);
+      printf(")");
       break;
     case UNKNOWN_T:
       printf("uknown");
@@ -3221,6 +3296,15 @@ void print_type(enum Type *type)
     default:
       assert(0);
   }
+}
+
+void print_symbol(struct Symbol *sym)
+{
+  printf("Symbol(");
+  printf("name: %s,", sym->name);
+  printf("type: ");
+  print_type(&sym->type);
+  printf(")");
 }
 
 struct TypecheckResult typecheck_expr(struct Expr *expr,
@@ -3231,24 +3315,28 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
   switch (expr->kind) {
     case EXPR_LITERAL: {
       if (expr->as.literal.kind == LITERAL_NUM) {
-        expr->type = I32_T;
+        expr->type = (Type){.kind = I32_T};
       } else {
-        expr->type = STR_T;
+        expr->type = (Type){.kind = STR_T};
       }
       break;
     }
     case EXPR_VARIABLE: {
-      printf("looking up symbol: %s\n", expr->as.var.name);
+      struct Symbol *sym = lookup_symbol(sym_table, expr->as.var.name);
 
-      enum Type t = lookup_symbol(sym_table, expr->as.var.name);
-      if (t == UNKNOWN_T) {
+      if (!sym) {
         return (struct TypecheckResult){
             .is_ok = false,
-            .msg = "Referenced an undefined variable",
+            .msg = "Referenced an undefined variable or function",
             .ast = NULL};
       }
 
-      expr->type = t;
+      if (sym->type.kind == UNKNOWN_T) {
+        return (struct TypecheckResult){
+            .is_ok = false, .msg = "Referenced an unknown type", .ast = NULL};
+      }
+
+      expr->type = sym->type;
 
       break;
     }
@@ -3265,22 +3353,31 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
         return rhs_res;
       }
 
-      if (expr->as.binary.lhs->type != I32_T ||
-          expr->as.binary.rhs->type != I32_T) {
+      if (expr->as.binary.lhs->type.kind != I32_T ||
+          expr->as.binary.rhs->type.kind != I32_T) {
         return (struct TypecheckResult){
             .is_ok = false,
             .msg = "Binary operations require i32 operands",
             .ast = NULL};
       }
 
-      expr->type = I32_T;
+      expr->type = (Type){.kind = I32_T};
       break;
     }
     case EXPR_CALL: {
-      struct TypecheckResult tgt_res =
-          typecheck_expr(expr->as.call.target, sym_table);
-      if (!tgt_res.is_ok) {
-        return tgt_res;
+      struct Symbol *callee_sym =
+          lookup_symbol(sym_table, expr->as.call.target->as.var.name);
+
+      if (!callee_sym) {
+        return (struct TypecheckResult){
+            .is_ok = false, .msg = "Called an undefined function", .ast = NULL};
+      }
+
+      if (callee_sym->type.as.func.params.len != expr->as.call.arguments.len) {
+        return (struct TypecheckResult){
+            .is_ok = false,
+            .msg = "Called with a wrong number of args",
+            .ast = NULL};
       }
 
       for (int i = 0; i < expr->as.call.arguments.len; i++) {
@@ -3289,9 +3386,17 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
         if (!arg_res.is_ok) {
           return arg_res;
         }
+
+        if (!types_equal(expr->as.call.arguments.data[i].type,
+                         callee_sym->type.as.func.params.data[i])) {
+          return (struct TypecheckResult){
+              .is_ok = false,
+              .msg = "Called with an arg of wrong type",
+              .ast = NULL};
+        }
       }
 
-      expr->type = expr->as.call.target->type;
+      expr->type = *callee_sym->type.as.func.retval;
 
       break;
     }
@@ -3308,7 +3413,18 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
   switch (stmt->kind) {
     case STMT_FN: {
       if (sym_table) {
-        insert_symbol(sym_table, stmt->as.fn.name, stmt->as.fn.retval);
+        Type t;
+
+        VecType types = {0};
+        for (int i = 0; i < stmt->as.fn.params.len; i++) {
+          vec_insert(&types, stmt->as.fn.params.data[i].type);
+        }
+
+        t.kind = FN_T;
+        t.as.func.retval = &stmt->as.fn.retval;
+        t.as.func.params = types;
+
+        insert_symbol(sym_table, stmt->as.fn.name, t);
       }
 
       struct Symbol *fn_sym_table = sym_table ? *sym_table : NULL;
@@ -3349,7 +3465,7 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
         return res;
       }
 
-      if (stmt->as.let.type != stmt->as.let.init->type) {
+      if (stmt->as.let.type.kind != stmt->as.let.init->type.kind) {
         return (struct TypecheckResult){
             .is_ok = false,
             .msg = "Type mismatch in let statement assignment",
@@ -3366,14 +3482,14 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
           return res;
         }
 
-        if (stmt->as.ret.val->type != stmt->as.ret.expected_retval) {
+        if (stmt->as.ret.val->type.kind != stmt->as.ret.expected_retval.kind) {
           return (struct TypecheckResult){
               .is_ok = false,
               .msg = "Return value type does not match function signature",
               .ast = NULL};
         }
       } else {
-        if (stmt->as.ret.expected_retval != UNKNOWN_T) {
+        if (stmt->as.ret.expected_retval.kind != UNKNOWN_T) {
           return (struct TypecheckResult){
               .is_ok = false,
               .msg = "Missing return value in non-void function",
