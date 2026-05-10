@@ -2300,25 +2300,38 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
 {
   switch (ir_instr->kind) {
     case IRInstr_CALL: {
+      /* Since i32 is the only data type for now, we worry only about these
+       * registers. The first six arguments to the callee are passed via these
+       * six registers. The rest are passed on the stack, in reverse order.  */
       enum AsmRegister arg_regs[] = {DI, SI, DX, CX, R8, R9};
 
       int num_args = ir_instr->as.call.args.len;
       int num_reg_args = num_args > 6 ? 6 : num_args;
       int num_stack_args = num_args > 6 ? num_args - 6 : 0;
 
+      /* System V AMD64 ABI requires that the stack be aligned to 16 bytes
+       * before the call instruction.
+       *
+       * In case we pushed an odd number of stack arguments, the stack will be
+       * misaligned by 8 bytes, since each argument on the stack (`pushq arg7`)
+       * occupies 8 bytes.  The stack will NOT be misaligned if the number of
+       * pushed arguments is even.  */
       int stack_padding = (num_stack_args % 2 != 0) ? 8 : 0;
 
       if (stack_padding != 0) {
         struct AsmInstr padding_instr;
+
         padding_instr.kind = AsmInstr_BINARY;
         padding_instr.as.binary.kind = AsmInstrBinary_SUB;
         padding_instr.as.binary.lhs = (struct AsmOperand){
             .kind = AsmOperand_IMM, .as.imm = stack_padding};
         padding_instr.as.binary.rhs =
             (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = SP};
+
         vec_insert(instrs, padding_instr);
       }
 
+      /* Move the argument IRValues into corresponding regs.  */
       for (int i = 0; i < num_reg_args; i++) {
         struct AsmOperand arg_op =
             codegen_irvalue(ir_instr->as.call.args.data[i]);
@@ -2327,9 +2340,11 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         mov_instr.as.mov.src = arg_op;
         mov_instr.as.mov.dst =
             (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = arg_regs[i]};
+
         vec_insert(instrs, mov_instr);
       }
 
+      /* ...the rest of the arguments goes on the stack, in reverse order. */
       for (int i = num_args - 1; i >= 6; i--) {
         struct AsmOperand arg_op =
             codegen_irvalue(ir_instr->as.call.args.data[i]);
@@ -2345,6 +2360,9 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       call_instr.as.call.target = ir_instr->as.call.target.as.var.name;
       vec_insert(instrs, call_instr);
 
+      /* The caller is responsible for cleaning up the stack after the call
+       * instruction. Since the stack on x86 grows downward, we need to ADD (not
+       * SUB).  */
       int bytes_to_remove = (num_stack_args * 8) + stack_padding;
       if (bytes_to_remove != 0) {
         struct AsmInstr cleanup_instr;
@@ -2357,6 +2375,8 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         vec_insert(instrs, cleanup_instr);
       }
 
+      /* The caller is responsible for moving the return value from AX to a safe
+       * destination if it wants to keep it, because AX is easily clobbered.  */
       if (ir_instr->as.call.dst) {
         struct AsmOperand dst_op = codegen_irvalue(ir_instr->as.call.dst);
         struct AsmInstr mov_instr;
@@ -2483,15 +2503,19 @@ struct AsmFunction codegen_fn(struct IRFunction *ir_func)
 
   func.name = ir_func->name;
 
+  /*  In the prologue, we save the caller's BP.  */
   push.op = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = BP};
   p1.kind = AsmInstr_PUSH;
   p1.as.push = push;
 
+  /*  ...and place ours SP into BP.  */
   mov.src = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = SP};
   mov.dst = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = BP};
   p2.kind = AsmInstr_MOV;
   p2.as.mov = mov;
 
+  /* We will need to reserve the stack space for our local variables.
+   * NOTE: 0 for now is a placeholder that is patched up later on.  */
   sub.kind = AsmInstrBinary_SUB;
   sub.lhs = (struct AsmOperand){.kind = AsmOperand_IMM, .as.imm = 0};
   sub.rhs = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = SP};
@@ -2505,6 +2529,8 @@ struct AsmFunction codegen_fn(struct IRFunction *ir_func)
   enum AsmRegister arg_regs[] = {DI, SI, DX, CX, R8, R9};
   int num_params = ir_func->params.len;
 
+  /* Move the values from the registers and from the stack that we had received
+   * previously by the caller, into pseudo registers.  */
   for (int i = 0; i < num_params; i++) {
     struct AsmOperand dst;
     dst.kind = AsmOperand_PSEUDO;
@@ -2516,6 +2542,15 @@ struct AsmFunction codegen_fn(struct IRFunction *ir_func)
       src.as.reg = arg_regs[i];
     } else {
       src.kind = AsmOperand_STACK;
+      /* Upon executing the call instruction by the caller.
+       * the CPU will push the return address on the stack,
+       * and therefore subtract 8 from %rsp.  Then the next
+       * thing the callee does is `push %rbp`, which subtracts yet 8`.
+       * This is 16 totaled up.
+       * Now, the callee executes `movq %rsp, %rbp`.
+       * This means that the return address is at 8(%rbp), and first
+       * stack argument is at 16(%rbp) (more backward in time).
+       * The local variables are at -8(%rbp).  */
       src.as.stack_offset = 16 + ((i - 6) * 8);
     }
 
