@@ -1591,6 +1591,7 @@ enum IRInstrKind {
   IRInstr_BINARY,
   IRInstr_RET,
   IRInstr_COPY,
+  IRInstr_CALL,
 };
 
 enum IRInstrBinaryKind {
@@ -1613,6 +1614,14 @@ struct IRValue {
   } as;
 };
 
+typedef Vector(struct IRValue *) VecIRValuePtr;
+
+struct IRInstr_Call {
+  struct Expr target;
+  VecIRValuePtr args;
+  struct IRValue *dst;
+};
+
 struct IRInstr_Binary {
   enum IRInstrBinaryKind kind;
   struct IRValue *lhs;
@@ -1632,6 +1641,7 @@ struct IRInstr_Copy {
 struct IRInstr {
   enum IRInstrKind kind;
   union {
+    struct IRInstr_Call call;
     struct IRInstr_Binary binary;
     struct IRInstr_Ret ret;
     struct IRInstr_Copy copy;
@@ -1752,8 +1762,32 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       return ret;
     }
     case EXPR_CALL: {
-      /* TODO: ... */
-      break;
+      struct IRValue *result = expr->type == UNKNOWN_T ? NULL : make_ir_var();
+
+      VecIRValuePtr args = {0};
+      for (int i = 0; i < expr->as.call.arguments.len; i++) {
+        vec_insert(&args, irfy_expr(instrs, &expr->as.call.arguments.data[i]));
+      }
+
+      struct IRInstr_Call call_instr;
+
+      call_instr.target = *expr->as.call.target;
+      call_instr.args = args;
+      call_instr.dst = result;
+
+      struct IRInstr i;
+
+      i.kind = IRInstr_CALL;
+      i.as.call = call_instr;
+
+      vec_insert(instrs, i);
+
+      struct IRValue dummy;
+
+      dummy.kind = IRValue_VAR;
+      dummy.as.var = "dummy";
+
+      return result ? result : ALLOC(dummy);
     }
     default:
       assert(0);
@@ -1898,6 +1932,13 @@ void free_ir_instr(struct IRInstr *instr)
     case IRInstr_COPY: {
       free_ir_val(instr->as.copy.src);
       free_ir_val(instr->as.copy.dst);
+      break;
+    }
+    case IRInstr_CALL: {
+      for (int i = 0; i < instr->as.call.args.len; i++) {
+        free_ir_val(instr->as.call.args.data[i]);
+      }
+      vec_free(&instr->as.call.args);
       break;
     }
     default:
@@ -2063,6 +2104,40 @@ void print_ir_instr(struct IRInstr *instr, int spaces)
       printf(")");
       break;
     }
+    case IRInstr_CALL: {
+      printf("IRInstr_CALL(\n");
+      for (int i = 0; i < spaces + 2; i++) {
+        printf(" ");
+      }
+
+      printf("target = ");
+      print_expr(&instr->as.call.target, spaces + 2);
+      printf("\n");
+
+      printf("args: [\n");
+      for (int k = 0; k < instr->as.call.args.len; k++) {
+        for (int i = 0; i < spaces + 2; i++) {
+          printf(" ");
+        }
+        print_ir_val(instr->as.call.args.data[k], spaces + 2);
+      }
+
+      printf("\n");
+
+      if (instr->as.call.dst) {
+        printf("dst: ");
+        print_ir_val(instr->as.call.dst, spaces + 2);
+      } else {
+        printf("NULL");
+      }
+
+      printf("\n");
+      for (int i = 0; i < spaces; i++) {
+        printf(" ");
+      }
+      printf(")");
+      break;
+    }
   }
 }
 
@@ -2098,6 +2173,7 @@ enum AsmInstrKind {
   AsmInstr_MOV,
   AsmInstr_BINARY,
   AsmInstr_RET,
+  AsmInstr_CALL,
 };
 
 enum AsmOperandKind {
@@ -2109,6 +2185,12 @@ enum AsmOperandKind {
 
 enum AsmRegister {
   AX,
+  DI,
+  SI,
+  CX,
+  DX,
+  R8,
+  R9,
   R10,
   BP,
   SP,
@@ -2126,6 +2208,10 @@ struct AsmOperand {
 
 struct AsmInstrRet {
   short __dummy;
+};
+
+struct AsmInstrCall {
+  char *target;
 };
 
 struct AsmInstrBinary {
@@ -2155,6 +2241,7 @@ struct AsmInstr {
     struct AsmInstrRet ret;
     struct AsmInstrPush push;
     struct AsmInstrPop pop;
+    struct AsmInstrCall call;
   } as;
 };
 
@@ -2201,6 +2288,76 @@ struct AsmOperand codegen_irvalue(struct IRValue *val)
 void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
 {
   switch (ir_instr->kind) {
+    case IRInstr_CALL: {
+      enum AsmRegister arg_regs[] = {DI, SI, DX, CX, R8, R9};
+
+      int num_args = ir_instr->as.call.args.len;
+      int num_reg_args = num_args > 6 ? 6 : num_args;
+      int num_stack_args = num_args > 6 ? num_args - 6 : 0;
+
+      int stack_padding = (num_stack_args % 2 != 0) ? 8 : 0;
+
+      if (stack_padding != 0) {
+        struct AsmInstr padding_instr;
+        padding_instr.kind = AsmInstr_BINARY;
+        padding_instr.as.binary.kind = AsmInstrBinary_SUB;
+        padding_instr.as.binary.lhs = (struct AsmOperand){
+            .kind = AsmOperand_IMM, .as.imm = stack_padding};
+        padding_instr.as.binary.rhs =
+            (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = SP};
+        vec_insert(instrs, padding_instr);
+      }
+
+      for (int i = 0; i < num_reg_args; i++) {
+        struct AsmOperand arg_op =
+            codegen_irvalue(ir_instr->as.call.args.data[i]);
+        struct AsmInstr mov_instr;
+        mov_instr.kind = AsmInstr_MOV;
+        mov_instr.as.mov.src = arg_op;
+        mov_instr.as.mov.dst =
+            (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = arg_regs[i]};
+        vec_insert(instrs, mov_instr);
+      }
+
+      for (int i = num_args - 1; i >= 6; i--) {
+        struct AsmOperand arg_op =
+            codegen_irvalue(ir_instr->as.call.args.data[i]);
+        struct AsmInstr push_instr;
+        push_instr.kind = AsmInstr_PUSH;
+        push_instr.as.push.op = arg_op;
+        vec_insert(instrs, push_instr);
+      }
+
+      struct AsmInstr call_instr;
+      call_instr.kind = AsmInstr_CALL;
+
+      call_instr.as.call.target = ir_instr->as.call.target.as.var.name;
+      vec_insert(instrs, call_instr);
+
+      int bytes_to_remove = (num_stack_args * 8) + stack_padding;
+      if (bytes_to_remove != 0) {
+        struct AsmInstr cleanup_instr;
+        cleanup_instr.kind = AsmInstr_BINARY;
+        cleanup_instr.as.binary.kind = AsmInstrBinary_ADD;
+        cleanup_instr.as.binary.lhs = (struct AsmOperand){
+            .kind = AsmOperand_IMM, .as.imm = bytes_to_remove};
+        cleanup_instr.as.binary.rhs =
+            (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = SP};
+        vec_insert(instrs, cleanup_instr);
+      }
+
+      if (ir_instr->as.call.dst) {
+        struct AsmOperand dst_op = codegen_irvalue(ir_instr->as.call.dst);
+        struct AsmInstr mov_instr;
+        mov_instr.kind = AsmInstr_MOV;
+        mov_instr.as.mov.src =
+            (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = AX};
+        mov_instr.as.mov.dst = dst_op;
+        vec_insert(instrs, mov_instr);
+      }
+
+      break;
+    }
     case IRInstr_COPY: {
       struct AsmOperand src, dst;
 
@@ -2316,26 +2473,48 @@ struct AsmFunction codegen_fn(struct IRFunction *ir_func)
   func.name = ir_func->name;
 
   push.op = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = BP};
+  p1.kind = AsmInstr_PUSH;
+  p1.as.push = push;
 
   mov.src = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = SP};
   mov.dst = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = BP};
+  p2.kind = AsmInstr_MOV;
+  p2.as.mov = mov;
 
   sub.kind = AsmInstrBinary_SUB;
   sub.lhs = (struct AsmOperand){.kind = AsmOperand_IMM, .as.imm = 0};
   sub.rhs = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = SP};
-
-  p1.kind = AsmInstr_PUSH;
-  p1.as.push = push;
-
-  p2.kind = AsmInstr_MOV;
-  p2.as.mov = mov;
-
   p3.kind = AsmInstr_BINARY;
   p3.as.binary = sub;
 
   vec_insert(&func.body, p1);
   vec_insert(&func.body, p2);
   vec_insert(&func.body, p3);
+
+  enum AsmRegister arg_regs[] = {DI, SI, DX, CX, R8, R9};
+  int num_params = ir_func->params.len;
+
+  for (int i = 0; i < num_params; i++) {
+    struct AsmOperand dst;
+    dst.kind = AsmOperand_PSEUDO;
+    dst.as.pseudo = ir_func->params.data[i].name;
+
+    struct AsmOperand src;
+    if (i < 6) {
+      src.kind = AsmOperand_REG;
+      src.as.reg = arg_regs[i];
+    } else {
+      src.kind = AsmOperand_STACK;
+      src.as.stack_offset = 16 + ((i - 6) * 8);
+    }
+
+    struct AsmInstr param_mov;
+    param_mov.kind = AsmInstr_MOV;
+    param_mov.as.mov.src = src;
+    param_mov.as.mov.dst = dst;
+
+    vec_insert(&func.body, param_mov);
+  }
 
   for (int i = 0; i < ir_func->body.len; i++) {
     codegen_instr(&ir_func->body.data[i], &func.body);
@@ -2379,6 +2558,32 @@ void print_asm_operand(struct AsmOperand *op)
           printf("AX");
           break;
         }
+        case DI: {
+          printf("DI");
+          break;
+        }
+        case SI: {
+          printf("SI");
+          break;
+        }
+        case DX: {
+          printf("DX");
+          break;
+        }
+        case CX: {
+          printf("CX");
+          break;
+        }
+
+        case R8: {
+          printf("R8");
+          break;
+        }
+        case R9: {
+          printf("R9");
+          break;
+        }
+
         case R10: {
           printf("R10");
           break;
@@ -2409,6 +2614,10 @@ void print_asm_operand(struct AsmOperand *op)
 void print_asm_instr(struct AsmInstr *instr)
 {
   switch (instr->kind) {
+    case AsmInstr_CALL: {
+      printf("AsmInstr_CALL(...)");
+      break;
+    }
     case AsmInstr_POP: {
       printf("AsmInstr_POP(op = ");
       print_asm_operand(&instr->as.pop.op);
@@ -2747,6 +2956,30 @@ void emit_operand(FILE *f, struct AsmOperand *op)
           fprintf(f, "%%rax");
           break;
         }
+        case DI: {
+          fprintf(f, "%%rdi");
+          break;
+        }
+        case SI: {
+          fprintf(f, "%%rsi");
+          break;
+        }
+        case DX: {
+          fprintf(f, "%%rdx");
+          break;
+        }
+        case CX: {
+          fprintf(f, "%%rcx");
+          break;
+        }
+        case R8: {
+          fprintf(f, "%%r8");
+          break;
+        }
+        case R9: {
+          fprintf(f, "%%r9");
+          break;
+        }
         case R10: {
           fprintf(f, "%%r10");
           break;
@@ -2782,6 +3015,10 @@ void emit(struct AsmProgram *prog)
       struct AsmInstr *instr = &prog->funcs.data[i].body.data[j];
       fprintf(f, "\t");
       switch (instr->kind) {
+        case AsmInstr_CALL: {
+          fprintf(f, "call %s\n", instr->as.call.target);
+          break;
+        }
         case AsmInstr_POP: {
           fprintf(f, "popq ");
           emit_operand(f, &instr->as.pop.op);
