@@ -1524,6 +1524,7 @@ void free_expr(struct Expr *expr)
 {
   switch (expr->kind) {
     case EXPR_CALL: {
+      free_expr(expr->as.call.target);
       free(expr->as.call.target);
       vec_free(&expr->as.call.arguments);
       break;
@@ -1563,6 +1564,9 @@ void free_stmt(struct Stmt *stmt)
     }
     case STMT_FN: {
       free(stmt->as.fn.name);
+      for (int i = 0; i < stmt->as.fn.params.len; i++) {
+        free(stmt->as.fn.params.data[i].name);
+      }
       vec_free(&stmt->as.fn.params);
       for (int i = 0; i < stmt->as.fn.body.len; i++) {
         free_stmt(&stmt->as.fn.body.data[i]);
@@ -1690,6 +1694,8 @@ struct IRValue *make_ir_var(void)
   return var;
 }
 
+void free_ir_val(struct IRValue *v);
+
 struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
 {
   switch (expr->kind) {
@@ -1782,12 +1788,16 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
 
       vec_insert(instrs, i);
 
-      struct IRValue dummy;
+      if (!result) {
+        return NULL;
+      }
 
-      dummy.kind = IRValue_VAR;
-      dummy.as.var = "dummy";
+      struct IRValue *ret = malloc(sizeof(struct IRValue));
+      ret->kind = IRValue_VAR;
+      ret->as.var = malloc(strlen(result->as.var) + 1);
+      strcpy(ret->as.var, result->as.var);
 
-      return result ? result : ALLOC(dummy);
+      return ret;
     }
     default:
       assert(0);
@@ -1939,6 +1949,7 @@ void free_ir_instr(struct IRInstr *instr)
         free_ir_val(instr->as.call.args.data[i]);
       }
       vec_free(&instr->as.call.args);
+      free_ir_val(instr->as.call.dst);
       break;
     }
     default:
@@ -3266,6 +3277,7 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
       }
 
       struct Symbol *fn_sym_table = sym_table ? *sym_table : NULL;
+      struct Symbol *outer_sym = fn_sym_table;
 
       for (int i = 0; i < stmt->as.fn.params.len; i++) {
         insert_symbol(&fn_sym_table, stmt->as.fn.params.data[i].name,
@@ -3277,6 +3289,12 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
         if (!res.is_ok) {
           return res;
         }
+      }
+
+      while (fn_sym_table && fn_sym_table != outer_sym) {
+        struct Symbol *tmp = fn_sym_table;
+        fn_sym_table = fn_sym_table->next;
+        free(tmp);
       }
 
       break;
@@ -3344,8 +3362,19 @@ struct TypecheckResult typecheck(struct AST *ast)
     struct TypecheckResult r;
     r = typecheck_stmt(&ast->stmts.data[i], &global_sym);
     if (!r.is_ok) {
+      while (global_sym) {
+        struct Symbol *tmp = global_sym;
+        global_sym = global_sym->next;
+        free(tmp);
+      }
       return r;
     }
+  }
+
+  while (global_sym) {
+    struct Symbol *tmp = global_sym;
+    global_sym = global_sym->next;
+    free(tmp);
   }
 
   return (struct TypecheckResult){.is_ok = true, .msg = NULL, .ast = ast};
@@ -3489,11 +3518,17 @@ struct ResolveResult resolve_stmt(struct VariableMap **varmap,
 {
   switch (stmt->kind) {
     case STMT_FN: {
-      struct VariableMap *variable_map = varmap ? *varmap : NULL;
+      struct VariableMap *variable_map, *outer_map;
+      char *cpy;
+
+      variable_map = varmap ? *varmap : NULL;
+      outer_map = variable_map;
+
+      cpy = malloc(strlen(stmt->as.fn.name) + 1);
+      strcpy(cpy, stmt->as.fn.name);
 
       if (varmap) {
-        insert_var_into_varmap(varmap, stmt->as.fn.name, stmt->as.fn.name,
-                               true);
+        insert_var_into_varmap(varmap, stmt->as.fn.name, cpy, true);
       }
 
       for (int i = 0; i < stmt->as.fn.params.len; i++) {
@@ -3513,6 +3548,18 @@ struct ResolveResult resolve_stmt(struct VariableMap **varmap,
           return r;
         }
       }
+
+      while (variable_map && variable_map != outer_map) {
+        struct VariableMap *tmp;
+
+        tmp = variable_map;
+        variable_map = variable_map->next;
+
+        free(tmp->name);
+        free(tmp->value.unique_name);
+        free(tmp);
+      }
+
       break;
     }
     case STMT_BLOCK: {
@@ -3578,9 +3625,28 @@ struct ResolveResult resolve(struct AST *ast)
 
     r = resolve_stmt(&global_map, &ast->stmts.data[i]);
     if (!r.is_ok) {
+      while (global_map) {
+        struct VariableMap *tmp;
+
+        tmp = global_map;
+        global_map = global_map->next;
+
+        free(tmp->name);
+        free(tmp->value.unique_name);
+        free(tmp);
+      }
       return r;
     }
   }
+
+  while (global_map) {
+    struct VariableMap *tmp = global_map;
+    global_map = global_map->next;
+    free(tmp->name);
+    free(tmp->value.unique_name);
+    free(tmp);
+  }
+
   return (struct ResolveResult){.is_ok = true, .msg = NULL, .as.ast = ast};
 }
 
