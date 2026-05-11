@@ -108,6 +108,9 @@ enum TokenKind {
   TOKEN_COLON,
   TOKEN_SEMICOLON,
   TOKEN_ARROW,
+  TOKEN_I8,
+  TOKEN_I16,
+  TOKEN_I32,
   TOKEN_I64,
   TOKEN_STR,
   TOKEN_RBRACE,
@@ -295,7 +298,13 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
         break;
       }
       case 'i': {
-        if (lookahead(tokenizer, 2, "64") == 0) {
+        if (lookahead(tokenizer, 1, "8")) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_I8, 2));
+        } else if (lookahead(tokenizer, 2, "16")) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_I16, 3));
+        } else if (lookahead(tokenizer, 2, "32")) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_I32, 3));
+        } else if (lookahead(tokenizer, 2, "64") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_I64, 3));
         } else {
           vec_insert(&tokens, identifier(tokenizer));
@@ -525,6 +534,9 @@ struct ExprCall {
 };
 
 enum TypeKind {
+  I8_T,
+  I16_T,
+  I32_T,
   I64_T,
   STR_T,
   FN_T,
@@ -1267,7 +1279,13 @@ skip_parsing_expr:
 
 Type parse_type_decl(struct Parser *parser)
 {
-  if (match(parser, 1, TOKEN_I64)) {
+  if (match(parser, 1, TOKEN_I8)) {
+    return (Type){.kind = I8_T};
+  } else if (match(parser, 1, TOKEN_I16)) {
+    return (Type){.kind = I16_T};
+  } else if (match(parser, 1, TOKEN_I32)) {
+    return (Type){.kind = I32_T};
+  } else if (match(parser, 1, TOKEN_I64)) {
     return (Type){.kind = I64_T};
   } else if (match(parser, 1, TOKEN_STR)) {
     return (Type){.kind = STR_T};
