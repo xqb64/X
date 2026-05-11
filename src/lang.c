@@ -108,7 +108,7 @@ enum TokenKind {
   TOKEN_COLON,
   TOKEN_SEMICOLON,
   TOKEN_ARROW,
-  TOKEN_I32,
+  TOKEN_I64,
   TOKEN_STR,
   TOKEN_RBRACE,
   TOKEN_STRING,
@@ -295,8 +295,8 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
         break;
       }
       case 'i': {
-        if (lookahead(tokenizer, 2, "32") == 0) {
-          vec_insert(&tokens, mktoken(tokenizer, TOKEN_I32, 3));
+        if (lookahead(tokenizer, 2, "64") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_I64, 3));
         } else {
           vec_insert(&tokens, identifier(tokenizer));
         }
@@ -455,8 +455,8 @@ void print_token(struct Token *token)
     case TOKEN_ARROW:
       printf("arrow");
       break;
-    case TOKEN_I32:
-      printf("i32");
+    case TOKEN_I64:
+      printf("i64");
       break;
     case TOKEN_STR:
       printf("str");
@@ -493,7 +493,7 @@ struct Literal {
   enum LiteralKind kind;
   union {
     char *str;
-    int num;
+    long long num;
   } as;
 };
 
@@ -525,7 +525,7 @@ struct ExprCall {
 };
 
 enum TypeKind {
-  I32_T,
+  I64_T,
   STR_T,
   FN_T,
   UNKNOWN_T,
@@ -570,7 +570,7 @@ bool types_equal(Type a, Type b)
   }
 
   switch (a.kind) {
-    case I32_T:
+    case I64_T:
     case STR_T:
     case UNKNOWN_T:
       return true;
@@ -789,8 +789,8 @@ struct Parameter {
 
 Type parse_type(struct Token *token)
 {
-  if (strncmp(token->start, "i32", token->len) == 0) {
-    return (Type){.kind = I32_T};
+  if (strncmp(token->start, "i64", token->len) == 0) {
+    return (Type){.kind = I64_T};
   } else if (strncmp(token->start, "str", token->len) == 0) {
     return (Type){.kind = STR_T};
   } else {
@@ -857,7 +857,7 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
             .msg = "Expected `name: type` format for parameters"};
       }
 
-      type_token = consume_any(parser, 2, TOKEN_I32, TOKEN_STR);
+      type_token = consume_any(parser, 2, TOKEN_I64, TOKEN_STR);
       if (!type_token) {
         return (struct ParseFnResult){
             .is_ok = false,
@@ -894,11 +894,11 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
         .is_ok = false, .as.stmt = {0}, .msg = "Expected token '->' after ')'"};
   }
 
-  token_retval = consume_any(parser, 2, TOKEN_I32, TOKEN_STR);
+  token_retval = consume_any(parser, 2, TOKEN_I64, TOKEN_STR);
   if (!token_retval) {
     return (struct ParseFnResult){.is_ok = false,
                                   .as.stmt = {0},
-                                  .msg = "Expected token 'i32' after '->'"};
+                                  .msg = "Expected token 'i64' after '->'"};
   }
 
   token_lbrace = consume(parser, TOKEN_LBRACE);
@@ -912,8 +912,8 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
   stmt_fn.name = own_string_n(token_id->start, token_id->len);
   stmt_fn.params = parameters;
 
-  if (strncmp(token_retval->start, "i32", token_retval->len) == 0) {
-    stmt_fn.retval = (Type){.kind = I32_T};
+  if (strncmp(token_retval->start, "i64", token_retval->len) == 0) {
+    stmt_fn.retval = (Type){.kind = I64_T};
   } else if (strncmp(token_retval->start, "str", token_retval->len) == 0) {
     stmt_fn.retval = (Type){.kind = STR_T};
   } else {
@@ -1267,8 +1267,8 @@ skip_parsing_expr:
 
 Type parse_type_decl(struct Parser *parser)
 {
-  if (match(parser, 1, TOKEN_I32)) {
-    return (Type){.kind = I32_T};
+  if (match(parser, 1, TOKEN_I64)) {
+    return (Type){.kind = I64_T};
   } else if (match(parser, 1, TOKEN_STR)) {
     return (Type){.kind = STR_T};
   }
@@ -1441,7 +1441,7 @@ void print_expr(struct Expr *expr, int spaces)
   switch (expr->kind) {
     case EXPR_LITERAL: {
       if (expr->as.literal.kind == LITERAL_NUM) {
-        printf("Literal(%d)", expr->as.literal.as.num);
+        printf("Literal(%lld)", expr->as.literal.as.num);
       } else {
         printf("Literal(\"%s\")", expr->as.literal.as.str);
       }
@@ -2344,7 +2344,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
 {
   switch (ir_instr->kind) {
     case IRInstr_CALL: {
-      /* Since i32 is the only data type for now, we worry only about these
+      /* Since i64 is the only data type for now, we worry only about these
        * registers. The first six arguments to the callee are passed via these
        * six registers. The rest are passed on the stack, in reverse order.  */
       enum AsmRegister arg_regs[] = {DI, SI, DX, CX, R8, R9};
@@ -3240,7 +3240,7 @@ void insert_symbol(struct Symbol **sym, char *name, Type type)
 void free_type(Type *t)
 {
   switch (t->kind) {
-    case I32_T:
+    case I64_T:
     case STR_T:
     case UNKNOWN_T:
       break;
@@ -3265,8 +3265,8 @@ struct Symbol *lookup_symbol(struct Symbol *sym, char *name)
 void print_type(Type *type)
 {
   switch (type->kind) {
-    case I32_T:
-      printf("i32");
+    case I64_T:
+      printf("i64");
       break;
     case STR_T:
       printf("str");
@@ -3306,7 +3306,7 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
   switch (expr->kind) {
     case EXPR_LITERAL: {
       if (expr->as.literal.kind == LITERAL_NUM) {
-        expr->type = (Type){.kind = I32_T};
+        expr->type = (Type){.kind = I64_T};
       } else {
         expr->type = (Type){.kind = STR_T};
       }
@@ -3344,15 +3344,15 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
         return rhs_res;
       }
 
-      if (expr->as.binary.lhs->type.kind != I32_T ||
-          expr->as.binary.rhs->type.kind != I32_T) {
+      if (expr->as.binary.lhs->type.kind != I64_T ||
+          expr->as.binary.rhs->type.kind != I64_T) {
         return (struct TypecheckResult){
             .is_ok = false,
-            .msg = "Binary operations require i32 operands",
+            .msg = "Binary operations require i64 operands",
             .ast = NULL};
       }
 
-      expr->type = (Type){.kind = I32_T};
+      expr->type = (Type){.kind = I64_T};
       break;
     }
     case EXPR_CALL: {
