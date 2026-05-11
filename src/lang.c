@@ -3170,10 +3170,11 @@ struct AssembleLinkResult {
   char *msg;
 };
 
-struct AssembleLinkResult assemble_and_link(char *path, char *out_path)
+struct AssembleLinkResult assemble_and_link(const char *path,
+                                            const char *out_path,
+                                            bool assemble_only)
 {
   struct AssembleLinkResult result;
-
   result.is_ok = true;
   result.msg = NULL;
 
@@ -3185,7 +3186,14 @@ struct AssembleLinkResult assemble_and_link(char *path, char *out_path)
     result.msg = "Fork failed";
     return result;
   } else if (pid == 0) {
-    execlp("gcc", "gcc", path, "-o", out_path, NULL);
+    if (assemble_only) {
+      // gcc -c path -o out_path
+      execlp("gcc", "gcc", "-c", path, "-o", out_path, NULL);
+    } else {
+      // gcc path -o out_path
+      execlp("gcc", "gcc", path, "-o", out_path, NULL);
+    }
+
     perror("Failed to execute gcc");
     exit(EXIT_FAILURE);
   } else {
@@ -3196,7 +3204,9 @@ struct AssembleLinkResult assemble_and_link(char *path, char *out_path)
       return result;
     } else {
       result.is_ok = false;
-      result.msg = "gcc failed at the assemble-and-link stage\n";
+      result.msg = assemble_only
+                       ? "gcc failed at the assemble stage\n"
+                       : "gcc failed at the assemble-and-link stage\n";
       return result;
     }
   }
@@ -3798,7 +3808,10 @@ typedef enum {
   STAGE_IR,
   STAGE_CODEGEN_RAW,
   STAGE_CODEGEN_REPLACE_PSEUDO,
-  STAGE_CODEGEN_FIXUP
+  STAGE_CODEGEN_FIXUP,
+  STAGE_EMIT,
+  STAGE_ASM,
+  STAGE_LINK,
 } TargetStage;
 
 typedef struct {
@@ -3822,6 +3835,9 @@ CompilerOptions parse_args(int argc, char **argv)
       {"raw", no_argument, 0, 'R'},
       {"replace-pseudo", no_argument, 0, 'P'},
       {"fixup", no_argument, 0, 'F'},
+      {"emit", no_argument, 0, 'e'},
+      {"asm", no_argument, 0, 'a'},
+      {"ln", no_argument, 0, 'l'},
       {0, 0, 0, 0}};
 
   int opt;
@@ -3867,6 +3883,15 @@ CompilerOptions parse_args(int argc, char **argv)
         break;
       case 'F':
         opts.target_stage = STAGE_CODEGEN_FIXUP;
+        break;
+      case 'e':
+        opts.target_stage = STAGE_EMIT;
+        break;
+      case 'a':
+        opts.target_stage = STAGE_ASM;
+        break;
+      case 'l':
+        opts.target_stage = STAGE_LINK;
         break;
       case '?':
         exit(1);
@@ -4008,7 +4033,15 @@ int main(int argc, char **argv)
   }
 
   emit(&asm_prog);
-  assemble_and_link("spam.s", "spam");
+  if (target_stage == STAGE_EMIT) {
+    goto free_up2_asm;
+  }
+
+  if (target_stage == STAGE_ASM) {
+    assemble_and_link("spam.s", "spam.o", true);
+  } else if (target_stage == STAGE_LINK || target_stage == STAGE_FULL) {
+    assemble_and_link("spam.s", "spam", false);
+  }
 
 free_up2_asm:
   free_asm(&asm_result.prog);
