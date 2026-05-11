@@ -2113,7 +2113,7 @@ void print_ir_val(struct IRValue *ir_val, int spaces)
       printf("type = CONST,\n");
 
       print_indent(spaces + 2);
-      printf("value = %d,\n", ir_val->as.konst);
+      printf("value = %lld,\n", ir_val->as.konst);
 
       print_indent(spaces);
       printf(")");
@@ -2287,8 +2287,16 @@ enum AsmRegister {
   SP,
 };
 
+enum AsmType {
+  AsmType_BYTE     = 1,
+  AsmType_WORD     = 2,
+  AsmType_LONGWORD = 4,
+  AsmType_QUADWORD = 8,
+};
+
 struct AsmOperand {
   enum AsmOperandKind kind;
+  enum AsmType asm_type;
   union {
     int imm;
     char *pseudo;
