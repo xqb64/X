@@ -935,8 +935,9 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
             .msg = "Expected `name: type` format for parameters"};
       }
 
-      type_token = consume_any(parser, 9, TOKEN_U8, TOKEN_U16, TOKEN_U32, TOKEN_U64, TOKEN_I8, TOKEN_I16, TOKEN_I32,
-                               TOKEN_I64, TOKEN_STR);
+      type_token =
+          consume_any(parser, 9, TOKEN_U8, TOKEN_U16, TOKEN_U32, TOKEN_U64,
+                      TOKEN_I8, TOKEN_I16, TOKEN_I32, TOKEN_I64, TOKEN_STR);
       if (!type_token) {
         return (struct ParseFnResult){
             .is_ok = false,
@@ -973,8 +974,9 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
         .is_ok = false, .as.stmt = {0}, .msg = "Expected token '->' after ')'"};
   }
 
-  token_retval = consume_any(parser, 9, TOKEN_U8, TOKEN_U16, TOKEN_U32, TOKEN_U64, TOKEN_I8, TOKEN_I16, TOKEN_I32,
-                             TOKEN_I64, TOKEN_STR);
+  token_retval =
+      consume_any(parser, 9, TOKEN_U8, TOKEN_U16, TOKEN_U32, TOKEN_U64,
+                  TOKEN_I8, TOKEN_I16, TOKEN_I32, TOKEN_I64, TOKEN_STR);
   if (!token_retval) {
     return (struct ParseFnResult){.is_ok = false,
                                   .as.stmt = {0},
@@ -1064,7 +1066,7 @@ struct ParseFnResult primary(struct Parser *parser)
 
     literal.kind = LITERAL_NUM;
     literal.as.num = val;
-    
+
     if (val >= -128 && val <= 127) {
       literal.type = (Type){.kind = I8_T};
     } else if (val >= 0 && val <= 255) {
@@ -1393,8 +1395,9 @@ struct ParseFnResult parse_let_stmt(struct Parser *parser)
         .msg = "Expected token ':' after identifier in let stmt"};
   }
 
-  token_type = consume_any(parser, 9, TOKEN_U8, TOKEN_U16, TOKEN_U32, TOKEN_U64, TOKEN_I8, TOKEN_I16, TOKEN_I32, TOKEN_I64,
-                           TOKEN_STR);
+  token_type =
+      consume_any(parser, 9, TOKEN_U8, TOKEN_U16, TOKEN_U32, TOKEN_U64,
+                  TOKEN_I8, TOKEN_I16, TOKEN_I32, TOKEN_I64, TOKEN_STR);
   if (!token_type) {
     free(name);
     return (struct ParseFnResult){.is_ok = false,
@@ -3879,7 +3882,7 @@ void print_type(Type *type)
     case U64_T:
       printf("u64");
       break;
-     case I8_T:
+    case I8_T:
       printf("i8");
       break;
     case I16_T:
