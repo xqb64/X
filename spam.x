@@ -1,4 +1,4 @@
-fn main(void) -> i8 {
-  let spam: i8 = 8;
+fn main(void) -> u8 {
+  let spam: u8 = 255;
   return spam;
 }

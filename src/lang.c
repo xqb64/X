@@ -113,6 +113,10 @@ enum TokenKind {
   TOKEN_I16,
   TOKEN_I32,
   TOKEN_I64,
+  TOKEN_U8,
+  TOKEN_U16,
+  TOKEN_U32,
+  TOKEN_U64,
   TOKEN_STR,
   TOKEN_RBRACE,
   TOKEN_STRING,
@@ -313,6 +317,21 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
 
         break;
       }
+      case 'u': {
+        if (lookahead(tokenizer, 1, "8") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_U8, 2));
+        } else if (lookahead(tokenizer, 2, "16") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_U16, 3));
+        } else if (lookahead(tokenizer, 2, "32") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_U32, 3));
+        } else if (lookahead(tokenizer, 2, "64") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_U64, 3));
+        } else {
+          vec_insert(&tokens, identifier(tokenizer));
+        }
+
+        break;
+      }
       case 'r': {
         if (lookahead(tokenizer, 5, "eturn") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_RETURN, 6));
@@ -465,11 +484,23 @@ void print_token(struct Token *token)
     case TOKEN_ARROW:
       printf("arrow");
       break;
+    case TOKEN_U8:
+      printf("u8");
+      break;
+    case TOKEN_U16:
+      printf("u16");
+      break;
+    case TOKEN_U32:
+      printf("u32");
+      break;
+    case TOKEN_U64:
+      printf("u64");
+      break;
     case TOKEN_I8:
       printf("i8");
       break;
     case TOKEN_I16:
-      printf("16");
+      printf("i16");
       break;
     case TOKEN_I32:
       printf("i32");
@@ -513,6 +544,10 @@ enum TypeKind {
   I16_T,
   I32_T,
   I64_T,
+  U8_T,
+  U16_T,
+  U32_T,
+  U64_T,
   STR_T,
   FN_T,
   UNKNOWN_T,
@@ -597,6 +632,10 @@ bool types_equal(Type a, Type b)
     case I16_T:
     case I32_T:
     case I64_T:
+    case U8_T:
+    case U16_T:
+    case U32_T:
+    case U64_T:
     case STR_T:
     case UNKNOWN_T:
       return true;
@@ -822,6 +861,14 @@ Type parse_type(struct Token *token)
     return (Type){.kind = I32_T};
   } else if (strncmp(token->start, "i64", token->len) == 0) {
     return (Type){.kind = I64_T};
+  } else if (strncmp(token->start, "u8", token->len) == 0) {
+    return (Type){.kind = U8_T};
+  } else if (strncmp(token->start, "u16", token->len) == 0) {
+    return (Type){.kind = U16_T};
+  } else if (strncmp(token->start, "u32", token->len) == 0) {
+    return (Type){.kind = U32_T};
+  } else if (strncmp(token->start, "u64", token->len) == 0) {
+    return (Type){.kind = U64_T};
   } else if (strncmp(token->start, "str", token->len) == 0) {
     return (Type){.kind = STR_T};
   } else {
@@ -888,7 +935,7 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
             .msg = "Expected `name: type` format for parameters"};
       }
 
-      type_token = consume_any(parser, 5, TOKEN_I8, TOKEN_I16, TOKEN_I32,
+      type_token = consume_any(parser, 9, TOKEN_U8, TOKEN_U16, TOKEN_U32, TOKEN_U64, TOKEN_I8, TOKEN_I16, TOKEN_I32,
                                TOKEN_I64, TOKEN_STR);
       if (!type_token) {
         return (struct ParseFnResult){
@@ -926,7 +973,7 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
         .is_ok = false, .as.stmt = {0}, .msg = "Expected token '->' after ')'"};
   }
 
-  token_retval = consume_any(parser, 5, TOKEN_I8, TOKEN_I16, TOKEN_I32,
+  token_retval = consume_any(parser, 9, TOKEN_U8, TOKEN_U16, TOKEN_U32, TOKEN_U64, TOKEN_I8, TOKEN_I16, TOKEN_I32,
                              TOKEN_I64, TOKEN_STR);
   if (!token_retval) {
     return (struct ParseFnResult){.is_ok = false,
@@ -1017,13 +1064,19 @@ struct ParseFnResult primary(struct Parser *parser)
 
     literal.kind = LITERAL_NUM;
     literal.as.num = val;
-
+    
     if (val >= -128 && val <= 127) {
       literal.type = (Type){.kind = I8_T};
+    } else if (val >= 0 && val <= 255) {
+      literal.type = (Type){.kind = U8_T};
     } else if (val >= -32768 && val <= 32767) {
       literal.type = (Type){.kind = I16_T};
+    } else if (val >= 0 && val <= 65535) {
+      literal.type = (Type){.kind = U16_T};
     } else if (val >= -2147483648LL && val <= 2147483647LL) {
       literal.type = (Type){.kind = I32_T};
+    } else if (val >= 0 && val <= 4294967295LL) {
+      literal.type = (Type){.kind = U32_T};
     } else {
       literal.type = (Type){.kind = I64_T};
     }
@@ -1340,7 +1393,7 @@ struct ParseFnResult parse_let_stmt(struct Parser *parser)
         .msg = "Expected token ':' after identifier in let stmt"};
   }
 
-  token_type = consume_any(parser, 5, TOKEN_I8, TOKEN_I16, TOKEN_I32, TOKEN_I64,
+  token_type = consume_any(parser, 9, TOKEN_U8, TOKEN_U16, TOKEN_U32, TOKEN_U64, TOKEN_I8, TOKEN_I16, TOKEN_I32, TOKEN_I64,
                            TOKEN_STR);
   if (!token_type) {
     free(name);
@@ -2312,12 +2365,16 @@ enum AsmType {
 enum AsmType type_to_asm_type(Type type)
 {
   switch (type.kind) {
+    case U8_T:
     case I8_T:
       return AsmType_BYTE;
+    case U16_T:
     case I16_T:
       return AsmType_WORD;
+    case U32_T:
     case I32_T:
       return AsmType_LONGWORD;
+    case U64_T:
     case I64_T:
       return AsmType_QUADWORD;
     default:
@@ -3727,10 +3784,8 @@ struct AssembleLinkResult assemble_and_link(const char *path,
     return result;
   } else if (pid == 0) {
     if (assemble_only) {
-      // gcc -c path -o out_path
       execlp("gcc", "gcc", "-c", path, "-o", out_path, NULL);
     } else {
-      // gcc path -o out_path
       execlp("gcc", "gcc", path, "-o", out_path, NULL);
     }
 
@@ -3780,6 +3835,10 @@ void insert_symbol(struct Symbol **sym, char *name, Type type)
 void free_type(Type *t)
 {
   switch (t->kind) {
+    case U8_T:
+    case U16_T:
+    case U32_T:
+    case U64_T:
     case I8_T:
     case I16_T:
     case I32_T:
@@ -3808,7 +3867,19 @@ struct Symbol *lookup_symbol(struct Symbol *sym, char *name)
 void print_type(Type *type)
 {
   switch (type->kind) {
-    case I8_T:
+    case U8_T:
+      printf("u8");
+      break;
+    case U16_T:
+      printf("u16");
+      break;
+    case U32_T:
+      printf("u32");
+      break;
+    case U64_T:
+      printf("u64");
+      break;
+     case I8_T:
       printf("i8");
       break;
     case I16_T:
@@ -3855,6 +3926,14 @@ void print_symbol(struct Symbol *sym)
 bool value_fits_in_type(long long val, Type type)
 {
   switch (type.kind) {
+    case U8_T:
+      return IN_RANGE(val, 0, UCHAR_MAX);
+    case U16_T:
+      return IN_RANGE(val, 0, USHRT_MAX);
+    case U32_T:
+      return IN_RANGE(val, 0, UINT_MAX);
+    case U64_T:
+      return IN_RANGE(val, 0, ULONG_MAX);
     case I8_T:
       return IN_RANGE(val, SCHAR_MIN, SCHAR_MAX);
     case I16_T:
