@@ -752,8 +752,11 @@ struct ParseFnResult block(struct Parser *parser)
 
 char *own_string_n(const char *string, int n)
 {
-  char *s = malloc(strlen(string) + 1);
+  char *s;
+
+  s = malloc(strlen(string) + 1);
   snprintf(s, n + 1, "%s", string);
+  
   return s;
 }
 
@@ -3598,20 +3601,29 @@ struct ResolveResult resolve_expr(struct VariableMap **varmap,
   return (struct ResolveResult){.is_ok = true, .msg = NULL, .as.expr = expr};
 }
 
+char *mkuniq(char *s)
+{
+  int digit_len, total_len, i;
+  char *uniq;
+
+  i = mktmp();
+
+  digit_len = snprintf(NULL, 0, "%d", i);
+  total_len = strlen("var.") + strlen(s) + strlen(".") + digit_len + 1;
+
+  uniq = malloc(total_len);
+  snprintf(uniq, total_len, "var.%s.%d", s, i);
+
+  return uniq;
+}
+
 struct ResolveResult resolve_param(struct VariableMap **varmap,
                                    struct Parameter *param)
 {
   int digit_len, total_len, i;
   char *uniq_name;
 
-  i = mktmp();
-  digit_len = snprintf(NULL, 0, "%d", i);
-
-  total_len =
-      strlen("var.") + strlen(param->name) + strlen(".") + digit_len + 1;
-
-  uniq_name = malloc(total_len);
-  snprintf(uniq_name, total_len, "var.%s.%d", param->name, i);
+  uniq_name = mkuniq(param->name); 
 
   insert_var_into_varmap(varmap, param->name, uniq_name, true);
 
@@ -3691,18 +3703,10 @@ struct ResolveResult resolve_stmt(struct VariableMap **varmap,
         return r;
       }
 
-      int digit_len, total_len, i;
       char *uniq_name;
 
-      i = mktmp();
-
-      digit_len = snprintf(NULL, 0, "%d", i);
-      total_len = strlen("var.") + strlen(stmt->as.let.name) + strlen(".") +
-                  digit_len + 1;
-
-      uniq_name = malloc(total_len);
-      snprintf(uniq_name, total_len, "var.%s.%d", stmt->as.let.name, i);
-
+      uniq_name = mkuniq(stmt->as.let.name);
+     
       insert_var_into_varmap(varmap, stmt->as.let.name, uniq_name, true);
 
       free(stmt->as.let.name);
