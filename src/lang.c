@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <getopt.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -3788,9 +3789,105 @@ struct ResolveResult resolve(struct AST *ast)
   return (struct ResolveResult){.is_ok = true, .msg = NULL, .as.ast = ast};
 }
 
-int main(void)
-{
+typedef enum {
+  STAGE_FULL,
+  STAGE_TOKENIZE,
+  STAGE_PARSE,
+  STAGE_RESOLVE,
+  STAGE_TYPECHECK,
+  STAGE_IR,
+  STAGE_CODEGEN_RAW,
+  STAGE_CODEGEN_REPLACE_PSEUDO,
+  STAGE_CODEGEN_FIXUP
+} TargetStage;
+
+typedef struct {
+  TargetStage target_stage;
   const char *path;
+} CompilerOptions;
+
+CompilerOptions parse_args(int argc, char **argv)
+{
+  CompilerOptions opts;
+  opts.target_stage = STAGE_FULL;
+  opts.path = "spam.x";
+
+  static struct option long_options[] = {
+      {"tokenize", no_argument, 0, 't'},
+      {"parse", no_argument, 0, 'p'},
+      {"resolve", no_argument, 0, 'r'},
+      {"typecheck", no_argument, 0, 'c'},
+      {"ir", no_argument, 0, 'i'},
+      {"codegen", required_argument, 0, 'g'},
+      {"raw", no_argument, 0, 'R'},
+      {"replace-pseudo", no_argument, 0, 'P'},
+      {"fixup", no_argument, 0, 'F'},
+      {0, 0, 0, 0}};
+
+  int opt;
+  int option_index = 0;
+
+  while ((opt = getopt_long(argc, argv, "tprcig:", long_options,
+                            &option_index)) != -1) {
+    switch (opt) {
+      case 't':
+        opts.target_stage = STAGE_TOKENIZE;
+        break;
+      case 'p':
+        opts.target_stage = STAGE_PARSE;
+        break;
+      case 'r':
+        opts.target_stage = STAGE_RESOLVE;
+        break;
+      case 'c':
+        opts.target_stage = STAGE_TYPECHECK;
+        break;
+      case 'i':
+        opts.target_stage = STAGE_IR;
+        break;
+      case 'g':
+        if (strcmp(optarg, "raw") == 0 || strcmp(optarg, "--raw") == 0) {
+          opts.target_stage = STAGE_CODEGEN_RAW;
+        } else if (strcmp(optarg, "replace-pseudo") == 0 ||
+                   strcmp(optarg, "--replace-pseudo") == 0) {
+          opts.target_stage = STAGE_CODEGEN_REPLACE_PSEUDO;
+        } else if (strcmp(optarg, "fixup") == 0 ||
+                   strcmp(optarg, "--fixup") == 0) {
+          opts.target_stage = STAGE_CODEGEN_FIXUP;
+        } else {
+          fprintf(stderr, "Unknown codegen stage: %s\n", optarg);
+          exit(1);
+        }
+        break;
+      case 'R':
+        opts.target_stage = STAGE_CODEGEN_RAW;
+        break;
+      case 'P':
+        opts.target_stage = STAGE_CODEGEN_REPLACE_PSEUDO;
+        break;
+      case 'F':
+        opts.target_stage = STAGE_CODEGEN_FIXUP;
+        break;
+      case '?':
+        exit(1);
+      default:
+        abort();
+    }
+  }
+
+  if (optind < argc) {
+    opts.path = argv[optind];
+  }
+
+  return opts;
+}
+
+int main(int argc, char **argv)
+{
+  CompilerOptions opts = parse_args(argc, argv);
+  TargetStage target_stage = opts.target_stage;
+  const char *path = opts.path;
+
   struct ReadFileResult read_file_result;
   char *src;
   struct Tokenizer tokenizer;
@@ -3806,12 +3903,10 @@ int main(void)
   struct AsmResult asm_result;
   struct AsmProgram asm_prog;
 
-  path = "spam.x";
-
   read_file_result = read_file(path);
   if (!read_file_result.is_ok) {
-    fprintf(stderr, "Couldn't read file.\n");
-    goto free_up2_fread;
+    fprintf(stderr, "Couldn't read file: %s\n", path);
+    return 1;
   }
 
   src = read_file_result.contents;
@@ -3827,9 +3922,13 @@ int main(void)
   tokens = tokenize_result.tokens;
   print_tokens(tokens);
 
-  init_parser(&parser, &tokens);
+  if (target_stage == STAGE_TOKENIZE) {
+    goto free_up2_tokenize;
+  }
 
+  init_parser(&parser, &tokens);
   parse_result = parse(&parser);
+
   if (!parse_result.is_ok) {
     fprintf(stderr, "err: %s\n", parse_result.msg);
     goto free_up2_parse;
@@ -3837,6 +3936,10 @@ int main(void)
 
   ast = parse_result.ast;
   print_ast(ast);
+
+  if (target_stage == STAGE_PARSE) {
+    goto free_up2_parse;
+  }
 
   resolve_result = resolve(ast);
   if (!resolve_result.is_ok) {
@@ -3848,9 +3951,17 @@ int main(void)
   resolved_ast = resolve_result.as.ast;
   print_ast(resolved_ast);
 
+  if (target_stage == STAGE_RESOLVE) {
+    goto free_up2_parse;
+  }
+
   typecheck_result = typecheck(resolved_ast);
   if (!typecheck_result.is_ok) {
     fprintf(stderr, "err: %s\n", typecheck_result.msg);
+    goto free_up2_parse;
+  }
+
+  if (target_stage == STAGE_TYPECHECK) {
     goto free_up2_parse;
   }
 
@@ -3863,6 +3974,10 @@ int main(void)
   ir_prog = irfy_result.prog;
   print_ir(&ir_prog);
 
+  if (target_stage == STAGE_IR) {
+    goto free_up2_irfy;
+  }
+
   asm_result = codegen(&ir_prog);
   if (!asm_result.is_ok) {
     fprintf(stderr, "err: %s\n", asm_result.msg);
@@ -3872,16 +3987,27 @@ int main(void)
   asm_prog = asm_result.prog;
   print_asm(&asm_prog);
 
+  if (target_stage == STAGE_CODEGEN_RAW) {
+    goto free_up2_asm;
+  }
+
   printf("replacing pseudo...\n");
   asm_prog = *replace_pseudo(&asm_prog);
   print_asm(&asm_prog);
+
+  if (target_stage == STAGE_CODEGEN_REPLACE_PSEUDO) {
+    goto free_up2_asm;
+  }
 
   printf("fixup...\n");
   asm_prog = *fixup(&asm_prog);
   print_asm(&asm_prog);
 
-  emit(&asm_prog);
+  if (target_stage == STAGE_CODEGEN_FIXUP) {
+    goto free_up2_asm;
+  }
 
+  emit(&asm_prog);
   assemble_and_link("spam.s", "spam");
 
 free_up2_asm:

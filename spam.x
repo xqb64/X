@@ -1,5 +1,5 @@
-fn add(a: i32, b: i32) -> str {
-  return "Hello, world!";
+fn add(a: i32, b: str) -> str {
+  return b;
 }
 
 fn main(void) -> i32 {
