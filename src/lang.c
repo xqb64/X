@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <getopt.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -108,7 +109,14 @@ enum TokenKind {
   TOKEN_COLON,
   TOKEN_SEMICOLON,
   TOKEN_ARROW,
+  TOKEN_I8,
+  TOKEN_I16,
+  TOKEN_I32,
   TOKEN_I64,
+  TOKEN_U8,
+  TOKEN_U16,
+  TOKEN_U32,
+  TOKEN_U64,
   TOKEN_STR,
   TOKEN_RBRACE,
   TOKEN_STRING,
@@ -295,8 +303,29 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
         break;
       }
       case 'i': {
-        if (lookahead(tokenizer, 2, "64") == 0) {
+        if (lookahead(tokenizer, 1, "8") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_I8, 2));
+        } else if (lookahead(tokenizer, 2, "16") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_I16, 3));
+        } else if (lookahead(tokenizer, 2, "32") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_I32, 3));
+        } else if (lookahead(tokenizer, 2, "64") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_I64, 3));
+        } else {
+          vec_insert(&tokens, identifier(tokenizer));
+        }
+
+        break;
+      }
+      case 'u': {
+        if (lookahead(tokenizer, 1, "8") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_U8, 2));
+        } else if (lookahead(tokenizer, 2, "16") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_U16, 3));
+        } else if (lookahead(tokenizer, 2, "32") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_U32, 3));
+        } else if (lookahead(tokenizer, 2, "64") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_U64, 3));
         } else {
           vec_insert(&tokens, identifier(tokenizer));
         }
@@ -455,6 +484,27 @@ void print_token(struct Token *token)
     case TOKEN_ARROW:
       printf("arrow");
       break;
+    case TOKEN_U8:
+      printf("u8");
+      break;
+    case TOKEN_U16:
+      printf("u16");
+      break;
+    case TOKEN_U32:
+      printf("u32");
+      break;
+    case TOKEN_U64:
+      printf("u64");
+      break;
+    case TOKEN_I8:
+      printf("i8");
+      break;
+    case TOKEN_I16:
+      printf("i16");
+      break;
+    case TOKEN_I32:
+      printf("i32");
+      break;
     case TOKEN_I64:
       printf("i64");
       break;
@@ -489,12 +539,41 @@ enum LiteralKind {
   LITERAL_STR,
 };
 
+enum TypeKind {
+  I8_T,
+  I16_T,
+  I32_T,
+  I64_T,
+  U8_T,
+  U16_T,
+  U32_T,
+  U64_T,
+  STR_T,
+  FN_T,
+  UNKNOWN_T,
+};
+
+typedef struct Type Type;
+
+typedef Vector(Type) VecType;
+
+struct Type {
+  enum TypeKind kind;
+  union {
+    struct {
+      VecType params;
+      Type *retval;
+    } func;
+  } as;
+};
+
 struct Literal {
   enum LiteralKind kind;
   union {
     char *str;
     long long num;
   } as;
+  Type type;
 };
 
 enum ExprKind {
@@ -524,27 +603,6 @@ struct ExprCall {
   VecExpr arguments;
 };
 
-enum TypeKind {
-  I64_T,
-  STR_T,
-  FN_T,
-  UNKNOWN_T,
-};
-
-typedef struct Type Type;
-
-typedef Vector(Type) VecType;
-
-struct Type {
-  enum TypeKind kind;
-  union {
-    struct {
-      VecType params;
-      Type *retval;
-    } func;
-  } as;
-};
-
 void print_type(Type *t);
 bool types_equal(Type a, Type b);
 
@@ -570,7 +628,14 @@ bool types_equal(Type a, Type b)
   }
 
   switch (a.kind) {
+    case I8_T:
+    case I16_T:
+    case I32_T:
     case I64_T:
+    case U8_T:
+    case U16_T:
+    case U32_T:
+    case U64_T:
     case STR_T:
     case UNKNOWN_T:
       return true;
@@ -726,10 +791,9 @@ struct Token *consume_any(struct Parser *parser, int n, ...)
     struct Token *t;
 
     kind = va_arg(ap, enum TokenKind);
-    t = consume(parser, kind);
-    if (t) {
+    if (parser->curr && parser->curr->kind == kind) {
       va_end(ap);
-      return t;
+      return advance_parser(parser);
     }
   }
 
@@ -789,8 +853,22 @@ struct Parameter {
 
 Type parse_type(struct Token *token)
 {
-  if (strncmp(token->start, "i64", token->len) == 0) {
+  if (strncmp(token->start, "i8", token->len) == 0) {
+    return (Type){.kind = I8_T};
+  } else if (strncmp(token->start, "i16", token->len) == 0) {
+    return (Type){.kind = I16_T};
+  } else if (strncmp(token->start, "i32", token->len) == 0) {
+    return (Type){.kind = I32_T};
+  } else if (strncmp(token->start, "i64", token->len) == 0) {
     return (Type){.kind = I64_T};
+  } else if (strncmp(token->start, "u8", token->len) == 0) {
+    return (Type){.kind = U8_T};
+  } else if (strncmp(token->start, "u16", token->len) == 0) {
+    return (Type){.kind = U16_T};
+  } else if (strncmp(token->start, "u32", token->len) == 0) {
+    return (Type){.kind = U32_T};
+  } else if (strncmp(token->start, "u64", token->len) == 0) {
+    return (Type){.kind = U64_T};
   } else if (strncmp(token->start, "str", token->len) == 0) {
     return (Type){.kind = STR_T};
   } else {
@@ -857,7 +935,8 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
             .msg = "Expected `name: type` format for parameters"};
       }
 
-      type_token = consume_any(parser, 2, TOKEN_I64, TOKEN_STR);
+      type_token = consume_any(parser, 9, TOKEN_U8, TOKEN_U16, TOKEN_U32, TOKEN_U64, TOKEN_I8, TOKEN_I16, TOKEN_I32,
+                               TOKEN_I64, TOKEN_STR);
       if (!type_token) {
         return (struct ParseFnResult){
             .is_ok = false,
@@ -894,7 +973,8 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
         .is_ok = false, .as.stmt = {0}, .msg = "Expected token '->' after ')'"};
   }
 
-  token_retval = consume_any(parser, 2, TOKEN_I64, TOKEN_STR);
+  token_retval = consume_any(parser, 9, TOKEN_U8, TOKEN_U16, TOKEN_U32, TOKEN_U64, TOKEN_I8, TOKEN_I16, TOKEN_I32,
+                             TOKEN_I64, TOKEN_STR);
   if (!token_retval) {
     return (struct ParseFnResult){.is_ok = false,
                                   .as.stmt = {0},
@@ -911,14 +991,7 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
   struct StmtFn stmt_fn;
   stmt_fn.name = own_string_n(token_id->start, token_id->len);
   stmt_fn.params = parameters;
-
-  if (strncmp(token_retval->start, "i64", token_retval->len) == 0) {
-    stmt_fn.retval = (Type){.kind = I64_T};
-  } else if (strncmp(token_retval->start, "str", token_retval->len) == 0) {
-    stmt_fn.retval = (Type){.kind = STR_T};
-  } else {
-    stmt_fn.retval = (Type){.kind = UNKNOWN_T};
-  }
+  stmt_fn.retval = parse_type(token_retval);
 
   struct StmtFn *prev_fn = parser->current_fn;
   parser->current_fn = &stmt_fn;
@@ -979,6 +1052,7 @@ struct ParseFnResult primary(struct Parser *parser)
   if (check(parser, TOKEN_NUMBER)) {
     struct Literal literal;
     struct Token *token_literal;
+    long long val;
 
     token_literal = consume(parser, TOKEN_NUMBER);
     if (!token_literal) {
@@ -986,10 +1060,29 @@ struct ParseFnResult primary(struct Parser *parser)
           .is_ok = false, .as.expr = {0}, .msg = "Expected number"};
     }
 
-    literal.kind = LITERAL_NUM;
-    literal.as.num = strtol(parser->prev->start, NULL, 10);
+    val = strtoll(parser->prev->start, NULL, 10);
 
-    res.as.expr = (struct Expr){.kind = EXPR_LITERAL, .as.literal = literal};
+    literal.kind = LITERAL_NUM;
+    literal.as.num = val;
+    
+    if (val >= -128 && val <= 127) {
+      literal.type = (Type){.kind = I8_T};
+    } else if (val >= 0 && val <= 255) {
+      literal.type = (Type){.kind = U8_T};
+    } else if (val >= -32768 && val <= 32767) {
+      literal.type = (Type){.kind = I16_T};
+    } else if (val >= 0 && val <= 65535) {
+      literal.type = (Type){.kind = U16_T};
+    } else if (val >= -2147483648LL && val <= 2147483647LL) {
+      literal.type = (Type){.kind = I32_T};
+    } else if (val >= 0 && val <= 4294967295LL) {
+      literal.type = (Type){.kind = U32_T};
+    } else {
+      literal.type = (Type){.kind = I64_T};
+    }
+
+    res.as.expr = (struct Expr){
+        .kind = EXPR_LITERAL, .as.literal = literal, .type = literal.type};
   } else if (check(parser, TOKEN_STRING)) {
     struct Literal literal;
     struct Token *token_literal;
@@ -1265,20 +1358,10 @@ skip_parsing_expr:
   return result;
 }
 
-Type parse_type_decl(struct Parser *parser)
-{
-  if (match(parser, 1, TOKEN_I64)) {
-    return (Type){.kind = I64_T};
-  } else if (match(parser, 1, TOKEN_STR)) {
-    return (Type){.kind = STR_T};
-  }
-  return (Type){.kind = UNKNOWN_T};
-}
-
 struct ParseFnResult parse_let_stmt(struct Parser *parser)
 {
   struct ParseFnResult result, init_res;
-  struct Token *token_let, *token_id, *token_colon, *token_equal,
+  struct Token *token_let, *token_id, *token_colon, *token_type, *token_equal,
       *token_semicolon;
   Type type;
   struct Expr init;
@@ -1310,7 +1393,16 @@ struct ParseFnResult parse_let_stmt(struct Parser *parser)
         .msg = "Expected token ':' after identifier in let stmt"};
   }
 
-  type = parse_type_decl(parser);
+  token_type = consume_any(parser, 9, TOKEN_U8, TOKEN_U16, TOKEN_U32, TOKEN_U64, TOKEN_I8, TOKEN_I16, TOKEN_I32, TOKEN_I64,
+                           TOKEN_STR);
+  if (!token_type) {
+    free(name);
+    return (struct ParseFnResult){.is_ok = false,
+                                  .as.stmt = {0},
+                                  .msg = "Expected type after ':' in let stmt"};
+  }
+
+  type = parse_type(token_type);
 
   token_equal = consume(parser, TOKEN_EQUAL);
   if (!token_equal) {
@@ -1441,7 +1533,13 @@ void print_expr(struct Expr *expr, int spaces)
   switch (expr->kind) {
     case EXPR_LITERAL: {
       if (expr->as.literal.kind == LITERAL_NUM) {
-        printf("Literal(%lld)", expr->as.literal.as.num);
+        printf("Literal(\n");
+        print_indent(spaces + 2);
+        printf("v: %lld,\n", expr->as.literal.as.num);
+        print_indent(spaces + 2);
+        printf("type: ");
+        print_type(&expr->as.literal.type);
+        printf(")\n");
       } else {
         printf("Literal(\"%s\")", expr->as.literal.as.str);
       }
@@ -1683,9 +1781,10 @@ enum IRValueKind {
 
 struct IRValue {
   enum IRValueKind kind;
+  Type type;
   union {
     char *var;
-    int konst;
+    long long konst;
   } as;
 };
 
@@ -1778,6 +1877,7 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
 
       ir_val->kind = IRValue_CONST;
       ir_val->as.konst = expr->as.literal.as.num;
+      ir_val->type = expr->type;
 
       return ir_val;
     }
@@ -1787,9 +1887,9 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       r = malloc(sizeof(struct IRValue));
 
       r->kind = IRValue_VAR;
-
       r->as.var = malloc(strlen(expr->as.var.name) + 1);
       strcpy(r->as.var, expr->as.var.name);
+      r->type = expr->type;
 
       return r;
     }
@@ -1835,6 +1935,7 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       ret->kind = IRValue_VAR;
       ret->as.var = malloc(strlen(dst->as.var) + 1);
       strcpy(ret->as.var, dst->as.var);
+      ret->type = expr->type;
 
       return ret;
     }
@@ -1868,6 +1969,7 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       ret->kind = IRValue_VAR;
       ret->as.var = malloc(strlen(result->as.var) + 1);
       strcpy(ret->as.var, result->as.var);
+      ret->type = expr->type;
 
       return ret;
     }
@@ -1906,6 +2008,8 @@ void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
 
       dst->as.var = malloc(strlen(stmt->as.let.name) + 1);
       strcpy(dst->as.var, stmt->as.let.name);
+
+      dst->type = stmt->as.let.type;
 
       cpy.kind = IRInstr_COPY;
       cpy.as.copy = (struct IRInstr_Copy){.src = res, .dst = dst};
@@ -2077,7 +2181,7 @@ void print_ir_val(struct IRValue *ir_val, int spaces)
       printf("type = CONST,\n");
 
       print_indent(spaces + 2);
-      printf("value = %d,\n", ir_val->as.konst);
+      printf("value = %lld,\n", ir_val->as.konst);
 
       print_indent(spaces);
       printf(")");
@@ -2251,8 +2355,36 @@ enum AsmRegister {
   SP,
 };
 
+enum AsmType {
+  AsmType_BYTE = 1,
+  AsmType_WORD = 2,
+  AsmType_LONGWORD = 4,
+  AsmType_QUADWORD = 8,
+};
+
+enum AsmType type_to_asm_type(Type type)
+{
+  switch (type.kind) {
+    case U8_T:
+    case I8_T:
+      return AsmType_BYTE;
+    case U16_T:
+    case I16_T:
+      return AsmType_WORD;
+    case U32_T:
+    case I32_T:
+      return AsmType_LONGWORD;
+    case U64_T:
+    case I64_T:
+      return AsmType_QUADWORD;
+    default:
+      return AsmType_QUADWORD;
+  }
+}
+
 struct AsmOperand {
   enum AsmOperandKind kind;
+  enum AsmType asm_type;
   union {
     int imm;
     char *pseudo;
@@ -2290,6 +2422,7 @@ struct AsmInstrPop {
 
 struct AsmInstr {
   enum AsmInstrKind kind;
+  enum AsmType asm_type;
   union {
     struct AsmInstrMov mov;
     struct AsmInstrBinary binary;
@@ -2326,7 +2459,7 @@ struct AsmOperand codegen_irvalue(struct IRValue *val)
       struct AsmOperand operand;
       operand.kind = AsmOperand_IMM;
       operand.as.imm = val->as.konst;
-
+      operand.asm_type = type_to_asm_type(val->type);
       return operand;
     }
     case IRValue_VAR: {
@@ -2369,8 +2502,8 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         padding_instr.as.binary.kind = AsmInstrBinary_SUB;
         padding_instr.as.binary.lhs = (struct AsmOperand){
             .kind = AsmOperand_IMM, .as.imm = stack_padding};
-        padding_instr.as.binary.rhs =
-            (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = SP};
+        padding_instr.as.binary.rhs = (struct AsmOperand){
+            .kind = AsmOperand_REG, .as.reg = SP, .asm_type = AsmType_QUADWORD};
 
         vec_insert(instrs, padding_instr);
       }
@@ -2384,6 +2517,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         mov_instr.as.mov.src = arg_op;
         mov_instr.as.mov.dst =
             (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = arg_regs[i]};
+        mov_instr.asm_type = arg_op.asm_type;
 
         vec_insert(instrs, mov_instr);
       }
@@ -2414,8 +2548,8 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         cleanup_instr.as.binary.kind = AsmInstrBinary_ADD;
         cleanup_instr.as.binary.lhs = (struct AsmOperand){
             .kind = AsmOperand_IMM, .as.imm = bytes_to_remove};
-        cleanup_instr.as.binary.rhs =
-            (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = SP};
+        cleanup_instr.as.binary.rhs = (struct AsmOperand){
+            .kind = AsmOperand_REG, .as.reg = SP, .asm_type = AsmType_QUADWORD};
         vec_insert(instrs, cleanup_instr);
       }
 
@@ -2428,6 +2562,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         mov_instr.as.mov.src =
             (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = AX};
         mov_instr.as.mov.dst = dst_op;
+        mov_instr.asm_type = dst_op.asm_type;
         vec_insert(instrs, mov_instr);
       }
 
@@ -2445,6 +2580,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       mov.src = src;
       mov.dst = dst;
 
+      i.asm_type = src.asm_type;
       i.kind = AsmInstr_MOV;
       i.as.mov = mov;
 
@@ -2481,11 +2617,13 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       i1.kind = AsmInstr_MOV;
       i1.as.mov.src = lhs;
       i1.as.mov.dst = dst;
+      i1.asm_type = dst.asm_type;
 
       i2.kind = AsmInstr_BINARY;
       i2.as.binary.kind = kind;
       i2.as.binary.lhs = rhs;
       i2.as.binary.rhs = dst;
+      i2.asm_type = dst.asm_type;
 
       vec_insert(instrs, i1);
       vec_insert(instrs, i2);
@@ -2509,15 +2647,20 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
 
       i1.kind = AsmInstr_MOV;
       i1.as.mov.src = retval;
-      i1.as.mov.dst = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = AX};
+      i1.as.mov.dst = (struct AsmOperand){
+          .kind = AsmOperand_REG, .as.reg = AX, .asm_type = retval.asm_type};
 
-      mov.src = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = BP};
-      mov.dst = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = SP};
+      mov.src = (struct AsmOperand){
+          .kind = AsmOperand_REG, .as.reg = BP, .asm_type = AsmType_QUADWORD};
+      mov.dst = (struct AsmOperand){
+          .kind = AsmOperand_REG, .as.reg = SP, .asm_type = AsmType_QUADWORD};
 
-      pop.op = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = BP};
+      pop.op = (struct AsmOperand){
+          .kind = AsmOperand_REG, .as.reg = BP, .asm_type = AsmType_QUADWORD};
 
       e1.kind = AsmInstr_MOV;
       e1.as.mov = mov;
+      e1.asm_type = AsmType_QUADWORD;
 
       e2.kind = AsmInstr_POP;
       e2.as.pop = pop;
@@ -2548,23 +2691,29 @@ struct AsmFunction codegen_fn(struct IRFunction *ir_func)
   func.name = ir_func->name;
 
   /*  In the prologue, we save the caller's BP.  */
-  push.op = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = BP};
+  push.op = (struct AsmOperand){
+      .kind = AsmOperand_REG, .as.reg = BP, .asm_type = AsmType_QUADWORD};
   p1.kind = AsmInstr_PUSH;
   p1.as.push = push;
-
   /*  ...and place ours SP into BP.  */
-  mov.src = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = SP};
-  mov.dst = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = BP};
+  mov.src = (struct AsmOperand){
+      .kind = AsmOperand_REG, .as.reg = SP, .asm_type = AsmType_QUADWORD};
+  mov.dst = (struct AsmOperand){
+      .kind = AsmOperand_REG, .as.reg = BP, .asm_type = AsmType_QUADWORD};
   p2.kind = AsmInstr_MOV;
   p2.as.mov = mov;
+  p2.asm_type = AsmType_QUADWORD;
 
   /* We will need to reserve the stack space for our local variables.
    * NOTE: 0 for now is a placeholder that is patched up later on.  */
   sub.kind = AsmInstrBinary_SUB;
   sub.lhs = (struct AsmOperand){.kind = AsmOperand_IMM, .as.imm = 0};
-  sub.rhs = (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = SP};
+  sub.rhs = (struct AsmOperand){
+      .kind = AsmOperand_REG, .as.reg = SP, .asm_type = AsmType_QUADWORD};
+
   p3.kind = AsmInstr_BINARY;
   p3.as.binary = sub;
+  p3.asm_type = AsmType_QUADWORD;
 
   vec_insert(&func.body, p1);
   vec_insert(&func.body, p2);
@@ -2643,53 +2792,241 @@ void print_asm_operand(struct AsmOperand *op)
     }
     case AsmOperand_REG: {
       printf("AsmOperand_REG(");
+
       switch (op->as.reg) {
         case AX: {
-          printf("AX");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              printf("%%al");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%ax");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%eax");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%rax");
+              break;
+            }
+            default:
+              assert(0);
+          }
+
+          printf(")");
           break;
         }
         case DI: {
-          printf("DI");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              printf("%%dil");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%di");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%edi");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%rdi");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
         case SI: {
-          printf("SI");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              printf("%%sil");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%si");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%esi");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%rsi");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
         case DX: {
-          printf("DX");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              printf("%%dl");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%dx");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%edx");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%rdx");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
         case CX: {
-          printf("CX");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              printf("%%cl");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%cx");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%ecx");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%rcx");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
-
         case R8: {
-          printf("R8");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              printf("%%r8b");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%r8w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%r8d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%r8");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
         case R9: {
-          printf("R9");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              printf("%%r9b");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%r9w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%r9d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%r9");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
-
         case R10: {
-          printf("R10");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              printf("%%r10b");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%r10w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%r10d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%r10");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
         case BP: {
-          printf("BP");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              printf("%%bpl");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%bp");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%ebp");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%rbp");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
         case SP: {
-          printf("SP");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              printf("%%spl");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%sp");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%esp");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%rsp");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
-        default:
-          assert(0);
       }
-      printf(")");
       break;
     }
     case AsmOperand_STACK: {
@@ -2928,6 +3265,7 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
 
             scratch_op.kind = AsmOperand_REG;
             scratch_op.as.reg = scratch_reg;
+            scratch_op.asm_type = asminstr->asm_type;
 
             i1.kind = AsmInstr_MOV;
             mov1.src = asminstr->as.mov.src;
@@ -2953,7 +3291,8 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
               asminstr->as.binary.rhs.kind == AsmOperand_STACK) {
             enum AsmRegister scratch_reg = R10;
             struct AsmOperand scratch_op = {.kind = AsmOperand_REG,
-                                            .as.reg = scratch_reg};
+                                            .as.reg = scratch_reg,
+                                            .asm_type = asminstr->asm_type};
             struct AsmInstrMov mov1, mov2;
             struct AsmInstrBinary bin;
             struct AsmInstr i1, i2, i3;
@@ -2994,6 +3333,7 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
 
             scratch_op.kind = AsmOperand_REG;
             scratch_op.as.reg = scratch_reg;
+            scratch_op.asm_type = asminstr->asm_type;
 
             i1.kind = AsmInstr_MOV;
             mov.src = asminstr->as.binary.lhs;
@@ -3043,50 +3383,240 @@ void emit_operand(FILE *f, struct AsmOperand *op)
     case AsmOperand_REG: {
       switch (op->as.reg) {
         case AX: {
-          fprintf(f, "%%rax");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              fprintf(f, "%%al");
+              break;
+            }
+            case AsmType_WORD: {
+              fprintf(f, "%%ax");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              fprintf(f, "%%eax");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              fprintf(f, "%%rax");
+            }
+            default:
+              assert(0);
+          }
+
           break;
         }
         case DI: {
-          fprintf(f, "%%rdi");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              fprintf(f, "%%dil");
+              break;
+            }
+            case AsmType_WORD: {
+              fprintf(f, "%%di");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              fprintf(f, "%%edi");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              fprintf(f, "%%rdi");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
         case SI: {
-          fprintf(f, "%%rsi");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              fprintf(f, "%%sil");
+              break;
+            }
+            case AsmType_WORD: {
+              fprintf(f, "%%si");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              fprintf(f, "%%esi");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              fprintf(f, "%%rsi");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
         case DX: {
-          fprintf(f, "%%rdx");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              fprintf(f, "%%dl");
+              break;
+            }
+            case AsmType_WORD: {
+              fprintf(f, "%%dx");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              fprintf(f, "%%edx");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              fprintf(f, "%%rdx");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
         case CX: {
-          fprintf(f, "%%rcx");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              fprintf(f, "%%cl");
+              break;
+            }
+            case AsmType_WORD: {
+              fprintf(f, "%%cx");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              fprintf(f, "%%ecx");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              fprintf(f, "%%rcx");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
         case R8: {
-          fprintf(f, "%%r8");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              fprintf(f, "%%r8b");
+              break;
+            }
+            case AsmType_WORD: {
+              fprintf(f, "%%r8w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              fprintf(f, "%%r8d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              fprintf(f, "%%r8");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
         case R9: {
-          fprintf(f, "%%r9");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              fprintf(f, "%%r9b");
+              break;
+            }
+            case AsmType_WORD: {
+              fprintf(f, "%%r9w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              fprintf(f, "%%r9d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              fprintf(f, "%%r9");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
         case R10: {
-          fprintf(f, "%%r10");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              fprintf(f, "%%r10b");
+              break;
+            }
+            case AsmType_WORD: {
+              fprintf(f, "%%r10w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              fprintf(f, "%%r10d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              fprintf(f, "%%r10");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
         case BP: {
-          fprintf(f, "%%rbp");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              fprintf(f, "%%bpl");
+              break;
+            }
+            case AsmType_WORD: {
+              fprintf(f, "%%bp");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              fprintf(f, "%%ebp");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              fprintf(f, "%%rbp");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
         case SP: {
-          fprintf(f, "%%rsp");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              fprintf(f, "%%spl");
+              break;
+            }
+            case AsmType_WORD: {
+              fprintf(f, "%%sp");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              fprintf(f, "%%esp");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              fprintf(f, "%%rsp");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
       }
       break;
     }
     case AsmOperand_STACK: {
-      fprintf(f, "%d(%%rbp)", op->as.stack_offset);
+      fprintf(f, "%d(%%rsp)", op->as.stack_offset);
       break;
     }
   }
@@ -3122,7 +3652,25 @@ void emit(struct AsmProgram *prog)
           break;
         }
         case AsmInstr_MOV: {
-          fprintf(f, "movq ");
+          fprintf(f, "mov");
+
+          switch (instr->asm_type) {
+            case AsmType_BYTE:
+              fprintf(f, "b");
+              break;
+            case AsmType_WORD:
+              fprintf(f, "w");
+              break;
+            case AsmType_LONGWORD:
+              fprintf(f, "l");
+              break;
+            case AsmType_QUADWORD:
+              fprintf(f, "q");
+              break;
+          }
+
+          fprintf(f, " ");
+
           emit_operand(f, &instr->as.mov.src);
           fprintf(f, ", ");
           emit_operand(f, &instr->as.mov.dst);
@@ -3132,15 +3680,64 @@ void emit(struct AsmProgram *prog)
         case AsmInstr_BINARY: {
           switch (instr->as.binary.kind) {
             case AsmInstrBinary_ADD: {
-              fprintf(f, "addq ");
+              fprintf(f, "add ");
+
+              switch (instr->asm_type) {
+                case AsmType_BYTE:
+                  fprintf(f, "b");
+                  break;
+                case AsmType_WORD:
+                  fprintf(f, "w");
+                  break;
+                case AsmType_LONGWORD:
+                  fprintf(f, "l");
+                  break;
+                case AsmType_QUADWORD:
+                  fprintf(f, "q");
+                  break;
+              }
+
               break;
             }
             case AsmInstrBinary_SUB: {
-              fprintf(f, "subq ");
+              fprintf(f, "sub");
+
+              switch (instr->asm_type) {
+                case AsmType_BYTE:
+                  fprintf(f, "b");
+                  break;
+                case AsmType_WORD:
+                  fprintf(f, "w");
+                  break;
+                case AsmType_LONGWORD:
+                  fprintf(f, "l");
+                  break;
+                case AsmType_QUADWORD:
+                  fprintf(f, "q");
+                  break;
+              }
+
+              fprintf(f, " ");
+
               break;
             }
             case AsmInstrBinary_MUL: {
-              fprintf(f, "imulq ");
+              fprintf(f, "imul ");
+              switch (instr->asm_type) {
+                case AsmType_BYTE:
+                  fprintf(f, "b");
+                  break;
+                case AsmType_WORD:
+                  fprintf(f, "w");
+                  break;
+                case AsmType_LONGWORD:
+                  fprintf(f, "l");
+                  break;
+                case AsmType_QUADWORD:
+                  fprintf(f, "q");
+                  break;
+              }
+
               break;
             }
             default:
@@ -3187,10 +3784,8 @@ struct AssembleLinkResult assemble_and_link(const char *path,
     return result;
   } else if (pid == 0) {
     if (assemble_only) {
-      // gcc -c path -o out_path
       execlp("gcc", "gcc", "-c", path, "-o", out_path, NULL);
     } else {
-      // gcc path -o out_path
       execlp("gcc", "gcc", path, "-o", out_path, NULL);
     }
 
@@ -3240,6 +3835,13 @@ void insert_symbol(struct Symbol **sym, char *name, Type type)
 void free_type(Type *t)
 {
   switch (t->kind) {
+    case U8_T:
+    case U16_T:
+    case U32_T:
+    case U64_T:
+    case I8_T:
+    case I16_T:
+    case I32_T:
     case I64_T:
     case STR_T:
     case UNKNOWN_T:
@@ -3265,6 +3867,27 @@ struct Symbol *lookup_symbol(struct Symbol *sym, char *name)
 void print_type(Type *type)
 {
   switch (type->kind) {
+    case U8_T:
+      printf("u8");
+      break;
+    case U16_T:
+      printf("u16");
+      break;
+    case U32_T:
+      printf("u32");
+      break;
+    case U64_T:
+      printf("u64");
+      break;
+     case I8_T:
+      printf("i8");
+      break;
+    case I16_T:
+      printf("i16");
+      break;
+    case I32_T:
+      printf("i32");
+      break;
     case I64_T:
       printf("i64");
       break;
@@ -3296,6 +3919,32 @@ void print_symbol(struct Symbol *sym)
   printf("type: ");
   print_type(&sym->type);
   printf(")");
+}
+
+#define IN_RANGE(val, min, max) ((val) >= (min) && (val) <= (max))
+
+bool value_fits_in_type(long long val, Type type)
+{
+  switch (type.kind) {
+    case U8_T:
+      return IN_RANGE(val, 0, UCHAR_MAX);
+    case U16_T:
+      return IN_RANGE(val, 0, USHRT_MAX);
+    case U32_T:
+      return IN_RANGE(val, 0, UINT_MAX);
+    case U64_T:
+      return IN_RANGE(val, 0, ULONG_MAX);
+    case I8_T:
+      return IN_RANGE(val, SCHAR_MIN, SCHAR_MAX);
+    case I16_T:
+      return IN_RANGE(val, SHRT_MIN, SHRT_MAX);
+    case I32_T:
+      return IN_RANGE(val, INT_MIN, INT_MAX);
+    case I64_T:
+      return true;
+    default:
+      return false;
+  }
 }
 
 struct TypecheckResult typecheck_expr(struct Expr *expr,
@@ -3460,6 +4109,19 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
       res = typecheck_expr(stmt->as.let.init, *sym_table);
       if (!res.is_ok) {
         return res;
+      }
+
+      if (stmt->as.let.init->kind == EXPR_LITERAL &&
+          stmt->as.let.init->as.literal.kind == LITERAL_NUM) {
+        long long val = stmt->as.let.init->as.literal.as.num;
+        if (!value_fits_in_type(val, stmt->as.let.type)) {
+          return (struct TypecheckResult){
+              .is_ok = false,
+              .msg = "Numeric literal overflow for the target type"};
+        }
+
+        stmt->as.let.init->type = stmt->as.let.type;
+        stmt->as.let.init->as.literal.type = stmt->as.let.type;
       }
 
       if (stmt->as.let.type.kind != stmt->as.let.init->type.kind) {
