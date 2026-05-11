@@ -812,7 +812,7 @@ struct Parameter {
 };
 
 Type parse_type(struct Token *token)
-{ 
+{
   if (strncmp(token->start, "i8", token->len) == 0) {
     return (Type){.kind = I8_T};
   } else if (strncmp(token->start, "i16", token->len) == 0) {
@@ -887,7 +887,8 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
             .msg = "Expected `name: type` format for parameters"};
       }
 
-      type_token = consume_any(parser, 5, TOKEN_I8, TOKEN_I16, TOKEN_I32, TOKEN_I64, TOKEN_STR);
+      type_token = consume_any(parser, 5, TOKEN_I8, TOKEN_I16, TOKEN_I32,
+                               TOKEN_I64, TOKEN_STR);
       if (!type_token) {
         return (struct ParseFnResult){
             .is_ok = false,
@@ -924,7 +925,8 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
         .is_ok = false, .as.stmt = {0}, .msg = "Expected token '->' after ')'"};
   }
 
-  token_retval = consume_any(parser, 5, TOKEN_I8, TOKEN_I16, TOKEN_I32, TOKEN_I64, TOKEN_STR);
+  token_retval = consume_any(parser, 5, TOKEN_I8, TOKEN_I16, TOKEN_I32,
+                             TOKEN_I64, TOKEN_STR);
   if (!token_retval) {
     return (struct ParseFnResult){.is_ok = false,
                                   .as.stmt = {0},
@@ -2288,8 +2290,8 @@ enum AsmRegister {
 };
 
 enum AsmType {
-  AsmType_BYTE     = 1,
-  AsmType_WORD     = 2,
+  AsmType_BYTE = 1,
+  AsmType_WORD = 2,
   AsmType_LONGWORD = 4,
   AsmType_QUADWORD = 8,
 };
@@ -2687,53 +2689,240 @@ void print_asm_operand(struct AsmOperand *op)
     }
     case AsmOperand_REG: {
       printf("AsmOperand_REG(");
+     
       switch (op->as.reg) {
         case AX: {
-          printf("AX");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              printf("%%al");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%ax");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%eax");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%rax");
+              break;
+            }
+            default:
+              assert(0);
+          }
+
           break;
         }
         case DI: {
-          printf("DI");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              printf("%%dil");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%di");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%edi");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%rdi");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
         case SI: {
-          printf("SI");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              printf("%%sil");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%si");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%esi");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%rsi");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
         case DX: {
-          printf("DX");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              printf("%%dl");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%dx");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%edx");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%rdx");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
         case CX: {
-          printf("CX");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              printf("%%cl");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%cx");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%ecx");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%rcx");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
-
         case R8: {
-          printf("R8");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              printf("%%r8b");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%r8w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%r8d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%r8");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
         case R9: {
-          printf("R9");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              printf("%%r9b");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%r9w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%r9d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%r9");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
-
         case R10: {
-          printf("R10");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              printf("%%r10b");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%r10w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%r10d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%r10");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
         case BP: {
-          printf("BP");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              printf("%%bpl");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%bp");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%ebp");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%rbp");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
         case SP: {
-          printf("SP");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              printf("%%spl");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%sp");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%esp");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%rsp");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
-        default:
-          assert(0);
       }
-      printf(")");
       break;
     }
     case AsmOperand_STACK: {
@@ -3087,50 +3276,263 @@ void emit_operand(FILE *f, struct AsmOperand *op)
     case AsmOperand_REG: {
       switch (op->as.reg) {
         case AX: {
-          fprintf(f, "%%rax");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              fprintf(f, "%%al");
+              break;
+            }
+            case AsmType_WORD: {
+              fprintf(f, "%%ax");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              fprintf(f, "%%eax");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              fprintf(f, "%%rax");
+              break;
+            }
+            default:
+              assert(0);
+          }
+
           break;
         }
         case DI: {
-          fprintf(f, "%%rdi");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              fprintf(f, "%%dil");
+              break;
+            }
+            case AsmType_WORD: {
+              fprintf(f, "%%di");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              fprintf(f, "%%edi");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              fprintf(f, "%%rdi");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
         case SI: {
-          fprintf(f, "%%rsi");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              fprintf(f, "%%sil");
+              break;
+            }
+            case AsmType_WORD: {
+              fprintf(f, "%%si");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              fprintf(f, "%%esi");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              fprintf(f, "%%rsi");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
         case DX: {
-          fprintf(f, "%%rdx");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              fprintf(f, "%%dl");
+              break;
+            }
+            case AsmType_WORD: {
+              fprintf(f, "%%dx");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              fprintf(f, "%%edx");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              fprintf(f, "%%rdx");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
         case CX: {
-          fprintf(f, "%%rcx");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              fprintf(f, "%%cl");
+              break;
+            }
+            case AsmType_WORD: {
+              fprintf(f, "%%cx");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              fprintf(f, "%%ecx");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              fprintf(f, "%%rcx");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
         case R8: {
-          fprintf(f, "%%r8");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              fprintf(f, "%%r8b");
+              break;
+            }
+            case AsmType_WORD: {
+              fprintf(f, "%%r8w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              fprintf(f, "%%r8d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              fprintf(f, "%%r8");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
         case R9: {
-          fprintf(f, "%%r9");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              fprintf(f, "%%r9b");
+              break;
+            }
+            case AsmType_WORD: {
+              fprintf(f, "%%r9w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              fprintf(f, "%%r9d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              fprintf(f, "%%r9");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
         case R10: {
-          fprintf(f, "%%r10");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              fprintf(f, "%%r10b");
+              break;
+            }
+            case AsmType_WORD: {
+              fprintf(f, "%%r10w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              fprintf(f, "%%r10d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              fprintf(f, "%%r10");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
         case BP: {
-          fprintf(f, "%%rbp");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              fprintf(f, "%%bpl");
+              break;
+            }
+            case AsmType_WORD: {
+              fprintf(f, "%%bp");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              fprintf(f, "%%ebp");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              fprintf(f, "%%rbp");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
         case SP: {
-          fprintf(f, "%%rsp");
+          switch (op->asm_type) {
+            case AsmType_BYTE: {
+              fprintf(f, "%%spl");
+              break;
+            }
+            case AsmType_WORD: {
+              fprintf(f, "%%sp");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              fprintf(f, "%%esp");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              fprintf(f, "%%rsp");
+              break;
+            }
+            default:
+              assert(0);
+          }
           break;
         }
       }
       break;
     }
     case AsmOperand_STACK: {
-      fprintf(f, "%d(%%rbp)", op->as.stack_offset);
+      fprintf(f, "%d", op->as.stack_offset);
+
+      switch (op->asm_type) {
+        case AsmType_BYTE: {
+          fprintf(f, "%%spl");
+          break;
+        }
+        case AsmType_WORD: {
+          fprintf(f, "%%sp");
+          break;
+        }
+        case AsmType_LONGWORD: {
+          fprintf(f, "%%esp");
+          break;
+        }
+        case AsmType_QUADWORD: {
+          fprintf(f, "%%rsp");
+          break;
+        }
+        default:
+          assert(0);
+      }
+
       break;
     }
   }
@@ -3312,16 +3714,16 @@ struct Symbol *lookup_symbol(struct Symbol *sym, char *name)
 void print_type(Type *type)
 {
   switch (type->kind) {
-   case I8_T:
+    case I8_T:
       printf("i8");
       break;
-   case I16_T:
+    case I16_T:
       printf("i16");
       break;
-   case I32_T:
+    case I32_T:
       printf("i32");
       break;
-   case I64_T:
+    case I64_T:
       printf("i64");
       break;
     case STR_T:
