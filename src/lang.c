@@ -464,6 +464,15 @@ void print_token(struct Token *token)
     case TOKEN_ARROW:
       printf("arrow");
       break;
+    case TOKEN_I8:
+      printf("i8");
+      break;
+    case TOKEN_I16:
+      printf("16");
+      break;
+    case TOKEN_I32:
+      printf("i32");
+      break;
     case TOKEN_I64:
       printf("i64");
       break;
