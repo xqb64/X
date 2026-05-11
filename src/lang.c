@@ -591,6 +591,9 @@ bool types_equal(Type a, Type b)
   }
 
   switch (a.kind) {
+    case I8_T:
+    case I16_T:
+    case I32_T:
     case I64_T:
     case STR_T:
     case UNKNOWN_T:
