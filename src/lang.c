@@ -537,6 +537,8 @@ struct Type {
   } as;
 };
 
+
+void print_type(Type *t);
 bool types_equal(Type a, Type b);
 
 bool vectype_equal(VecType a, VecType b)
@@ -754,6 +756,22 @@ struct Parameter {
   Type type;
 };
 
+Type parse_type(struct Token *token)
+{
+  char *t;
+
+  t = own_string_n(token->start, token->len);
+
+  if (strcmp(t, "i32") == 0) {
+    return (Type){.kind = I32_T};
+  } else if (strcmp(t, "str") == 0) {
+    return (Type){.kind = STR_T};
+  } else {
+    return (Type){.kind = UNKNOWN_T};
+  }
+
+}
+
 struct ParseFnResult parse_fn_stmt(struct Parser *parser)
 {
   struct ParseFnResult result;
@@ -899,6 +917,10 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
   }
 
   stmt_fn.body = body.as.block.stmts;
+  stmt_fn.retval = parse_type(token_retval);
+
+  printf("stmt_fn.retval is: \n");
+  print_type(&stmt_fn.retval);
 
   struct Stmt stmt;
   stmt.kind = STMT_FN;
@@ -1495,7 +1517,8 @@ void print_stmt(struct Stmt *stmt, int spaces)
       for (int i = 0; i < spaces + 2; i++) {
         printf(" ");
       }
-      printf("retval = %d,\n", stmt->as.fn.retval.kind);
+      printf("retval = ");
+      print_type(&stmt->as.fn.retval);
       for (int i = 0; i < spaces; i++) {
         printf(" ");
       }
