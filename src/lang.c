@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <getopt.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -298,11 +299,11 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
         break;
       }
       case 'i': {
-        if (lookahead(tokenizer, 1, "8")) {
+        if (lookahead(tokenizer, 1, "8") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_I8, 2));
-        } else if (lookahead(tokenizer, 2, "16")) {
+        } else if (lookahead(tokenizer, 2, "16") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_I16, 3));
-        } else if (lookahead(tokenizer, 2, "32")) {
+        } else if (lookahead(tokenizer, 2, "32") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_I32, 3));
         } else if (lookahead(tokenizer, 2, "64") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_I64, 3));
@@ -507,12 +508,37 @@ enum LiteralKind {
   LITERAL_STR,
 };
 
+enum TypeKind {
+  I8_T,
+  I16_T,
+  I32_T,
+  I64_T,
+  STR_T,
+  FN_T,
+  UNKNOWN_T,
+};
+
+typedef struct Type Type;
+
+typedef Vector(Type) VecType;
+
+struct Type {
+  enum TypeKind kind;
+  union {
+    struct {
+      VecType params;
+      Type *retval;
+    } func;
+  } as;
+};
+
 struct Literal {
   enum LiteralKind kind;
   union {
     char *str;
     long long num;
   } as;
+  Type type;
 };
 
 enum ExprKind {
@@ -540,30 +566,6 @@ typedef Vector(struct Expr) VecExpr;
 struct ExprCall {
   struct Expr *target;
   VecExpr arguments;
-};
-
-enum TypeKind {
-  I8_T,
-  I16_T,
-  I32_T,
-  I64_T,
-  STR_T,
-  FN_T,
-  UNKNOWN_T,
-};
-
-typedef struct Type Type;
-
-typedef Vector(Type) VecType;
-
-struct Type {
-  enum TypeKind kind;
-  union {
-    struct {
-      VecType params;
-      Type *retval;
-    } func;
-  } as;
 };
 
 void print_type(Type *t);
@@ -750,10 +752,9 @@ struct Token *consume_any(struct Parser *parser, int n, ...)
     struct Token *t;
 
     kind = va_arg(ap, enum TokenKind);
-    t = consume(parser, kind);
-    if (t) {
+    if (parser->curr && parser->curr->kind == kind) {
       va_end(ap);
-      return t;
+      return advance_parser(parser);
     }
   }
 
@@ -943,14 +944,7 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
   struct StmtFn stmt_fn;
   stmt_fn.name = own_string_n(token_id->start, token_id->len);
   stmt_fn.params = parameters;
-
-  if (strncmp(token_retval->start, "i64", token_retval->len) == 0) {
-    stmt_fn.retval = (Type){.kind = I64_T};
-  } else if (strncmp(token_retval->start, "str", token_retval->len) == 0) {
-    stmt_fn.retval = (Type){.kind = STR_T};
-  } else {
-    stmt_fn.retval = (Type){.kind = UNKNOWN_T};
-  }
+  stmt_fn.retval = parse_type(token_retval);
 
   struct StmtFn *prev_fn = parser->current_fn;
   parser->current_fn = &stmt_fn;
@@ -1011,6 +1005,7 @@ struct ParseFnResult primary(struct Parser *parser)
   if (check(parser, TOKEN_NUMBER)) {
     struct Literal literal;
     struct Token *token_literal;
+    long long val;
 
     token_literal = consume(parser, TOKEN_NUMBER);
     if (!token_literal) {
@@ -1018,10 +1013,23 @@ struct ParseFnResult primary(struct Parser *parser)
           .is_ok = false, .as.expr = {0}, .msg = "Expected number"};
     }
 
-    literal.kind = LITERAL_NUM;
-    literal.as.num = strtol(parser->prev->start, NULL, 10);
+    val = strtoll(parser->prev->start, NULL, 10);
 
-    res.as.expr = (struct Expr){.kind = EXPR_LITERAL, .as.literal = literal};
+    literal.kind = LITERAL_NUM;
+    literal.as.num = val;
+
+    if (val >= -128 && val <= 127) {
+      literal.type = (Type){.kind = I8_T};
+    } else if (val >= -32768 && val <= 32767) {
+      literal.type = (Type){.kind = I16_T};
+    } else if (val >= -2147483648LL && val <= 2147483647LL) {
+      literal.type = (Type){.kind = I32_T};
+    } else {
+      literal.type = (Type){.kind = I64_T};
+    }
+
+    res.as.expr = (struct Expr){
+        .kind = EXPR_LITERAL, .as.literal = literal, .type = literal.type};
   } else if (check(parser, TOKEN_STRING)) {
     struct Literal literal;
     struct Token *token_literal;
@@ -1297,26 +1305,10 @@ skip_parsing_expr:
   return result;
 }
 
-Type parse_type_decl(struct Parser *parser)
-{
-  if (match(parser, 1, TOKEN_I8)) {
-    return (Type){.kind = I8_T};
-  } else if (match(parser, 1, TOKEN_I16)) {
-    return (Type){.kind = I16_T};
-  } else if (match(parser, 1, TOKEN_I32)) {
-    return (Type){.kind = I32_T};
-  } else if (match(parser, 1, TOKEN_I64)) {
-    return (Type){.kind = I64_T};
-  } else if (match(parser, 1, TOKEN_STR)) {
-    return (Type){.kind = STR_T};
-  }
-  return (Type){.kind = UNKNOWN_T};
-}
-
 struct ParseFnResult parse_let_stmt(struct Parser *parser)
 {
   struct ParseFnResult result, init_res;
-  struct Token *token_let, *token_id, *token_colon, *token_equal,
+  struct Token *token_let, *token_id, *token_colon, *token_type, *token_equal,
       *token_semicolon;
   Type type;
   struct Expr init;
@@ -1348,7 +1340,16 @@ struct ParseFnResult parse_let_stmt(struct Parser *parser)
         .msg = "Expected token ':' after identifier in let stmt"};
   }
 
-  type = parse_type_decl(parser);
+  token_type = consume_any(parser, 5, TOKEN_I8, TOKEN_I16, TOKEN_I32, TOKEN_I64,
+                           TOKEN_STR);
+  if (!token_type) {
+    free(name);
+    return (struct ParseFnResult){.is_ok = false,
+                                  .as.stmt = {0},
+                                  .msg = "Expected type after ':' in let stmt"};
+  }
+
+  type = parse_type(token_type);
 
   token_equal = consume(parser, TOKEN_EQUAL);
   if (!token_equal) {
@@ -1479,7 +1480,13 @@ void print_expr(struct Expr *expr, int spaces)
   switch (expr->kind) {
     case EXPR_LITERAL: {
       if (expr->as.literal.kind == LITERAL_NUM) {
-        printf("Literal(%lld)", expr->as.literal.as.num);
+        printf("Literal(\n");
+        print_indent(spaces + 2);
+        printf("v: %lld,\n", expr->as.literal.as.num);
+        print_indent(spaces + 2);
+        printf("type: ");
+        print_type(&expr->as.literal.type);
+        printf(")\n");
       } else {
         printf("Literal(\"%s\")", expr->as.literal.as.str);
       }
@@ -3775,6 +3782,24 @@ void print_symbol(struct Symbol *sym)
   printf(")");
 }
 
+#define IN_RANGE(val, min, max) ((val) >= (min) && (val) <= (max))
+
+bool value_fits_in_type(long long val, Type type)
+{
+  switch (type.kind) {
+    case I8_T:
+      return IN_RANGE(val, SCHAR_MIN, SCHAR_MAX);
+    case I16_T:
+      return IN_RANGE(val, SHRT_MIN, SHRT_MAX);
+    case I32_T:
+      return IN_RANGE(val, INT_MIN, INT_MAX);
+    case I64_T:
+      return true;
+    default:
+      return false;
+  }
+}
+
 struct TypecheckResult typecheck_expr(struct Expr *expr,
                                       struct Symbol *sym_table)
 {
@@ -3937,6 +3962,19 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
       res = typecheck_expr(stmt->as.let.init, *sym_table);
       if (!res.is_ok) {
         return res;
+      }
+
+      if (stmt->as.let.init->kind == EXPR_LITERAL &&
+          stmt->as.let.init->as.literal.kind == LITERAL_NUM) {
+        long long val = stmt->as.let.init->as.literal.as.num;
+        if (!value_fits_in_type(val, stmt->as.let.type)) {
+          return (struct TypecheckResult){
+              .is_ok = false,
+              .msg = "Numeric literal overflow for the target type"};
+        }
+
+        stmt->as.let.init->type = stmt->as.let.type;
+        stmt->as.let.init->as.literal.type = stmt->as.let.type;
       }
 
       if (stmt->as.let.type.kind != stmt->as.let.init->type.kind) {
