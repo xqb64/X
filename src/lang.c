@@ -3304,7 +3304,16 @@ struct Symbol *lookup_symbol(struct Symbol *sym, char *name)
 void print_type(Type *type)
 {
   switch (type->kind) {
-    case I64_T:
+   case I8_T:
+      printf("i8");
+      break;
+   case I16_T:
+      printf("i16");
+      break;
+   case I32_T:
+      printf("i32");
+      break;
+   case I64_T:
       printf("i64");
       break;
     case STR_T:
