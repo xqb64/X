@@ -3276,6 +3276,9 @@ void insert_symbol(struct Symbol **sym, char *name, Type type)
 void free_type(Type *t)
 {
   switch (t->kind) {
+    case I8_T:
+    case I16_T:
+    case I32_T:
     case I64_T:
     case STR_T:
     case UNKNOWN_T:
