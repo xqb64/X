@@ -715,6 +715,27 @@ struct Token *consume(struct Parser *parser, enum TokenKind kind)
   return NULL;
 }
 
+struct Token *consume_any(struct Parser *parser, int n, ...)
+{
+  va_list ap;
+  va_start(ap, n);
+
+  for (int i = 0; i < n; i++) {
+    enum TokenKind kind;
+    struct Token *t;
+
+    kind = va_arg(ap, enum TokenKind);
+    t = consume(parser, kind);
+    if (t) {
+      va_end(ap);
+      return t;
+    }
+  }
+
+  va_end(ap);
+  return NULL;
+}
+
 struct ParseFnResult parse_stmt(struct Parser *parser);
 
 bool check(struct Parser *parser, enum TokenKind kind)
@@ -839,8 +860,7 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
             .msg = "Expected `name: type` format for parameters"};
       }
 
-      // FIXME:  don't harcode the type
-      type_token = consume(parser, TOKEN_I32);
+      type_token = consume_any(parser, 2, TOKEN_I32, TOKEN_STR);
       if (!type_token) {
         return (struct ParseFnResult){
             .is_ok = false,
@@ -849,7 +869,7 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
       }
 
       name = own_string_n(name_token->start, name_token->len);
-      type = (Type){.kind = I32_T};  // FIXME:  don't harcode the type
+      type = parse_type(type_token);
 
       struct Parameter p;
 
@@ -877,7 +897,7 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
         .is_ok = false, .as.stmt = {0}, .msg = "Expected token '->' after ')'"};
   }
 
-  token_retval = consume(parser, TOKEN_I32);
+  token_retval = consume_any(parser, 2, TOKEN_I32, TOKEN_STR);
   if (!token_retval) {
     return (struct ParseFnResult){.is_ok = false,
                                   .as.stmt = {0},
