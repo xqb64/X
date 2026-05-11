@@ -120,6 +120,13 @@ struct Token {
   int len;
 };
 
+static inline void print_indent(int spaces)
+{
+  if (spaces > 0) {
+    printf("%*s", spaces, "");
+  }
+}
+
 struct Tokenizer {
   char *src;
 };
@@ -537,7 +544,6 @@ struct Type {
   } as;
 };
 
-
 void print_type(Type *t);
 bool types_equal(Type a, Type b);
 
@@ -769,7 +775,6 @@ Type parse_type(struct Token *token)
   } else {
     return (Type){.kind = UNKNOWN_T};
   }
-
 }
 
 struct ParseFnResult parse_fn_stmt(struct Parser *parser)
@@ -918,9 +923,6 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
 
   stmt_fn.body = body.as.block.stmts;
   stmt_fn.retval = parse_type(token_retval);
-
-  printf("stmt_fn.retval is: \n");
-  print_type(&stmt_fn.retval);
 
   struct Stmt stmt;
   stmt.kind = STMT_FN;
@@ -1393,6 +1395,26 @@ struct ParseResult parse(struct Parser *parser)
 
   return result;
 }
+void print_binary_op(int kind)
+{
+  switch (kind) {
+    case EXPR_BIN_ADD:
+      printf("ADD");
+      break;
+    case EXPR_BIN_SUB:
+      printf("SUB");
+      break;
+    case EXPR_BIN_MUL:
+      printf("MUL");
+      break;
+    case EXPR_BIN_DIV:
+      printf("DIV");
+      break;
+    default:
+      printf("???");
+      break;
+  }
+}
 
 void print_expr(struct Expr *expr, int spaces)
 {
@@ -1411,85 +1433,49 @@ void print_expr(struct Expr *expr, int spaces)
     }
     case EXPR_BINARY: {
       printf("Binary(\n");
-      for (int i = 0; i < spaces + 2; i++) {
-        printf(" ");
-      }
+
+      print_indent(spaces + 2);
       printf("lhs = ");
       print_expr(expr->as.binary.lhs, spaces + 4);
       printf(",\n");
-      for (int i = 0; i < spaces + 2; i++) {
-        printf(" ");
-      }
+
+      print_indent(spaces + 2);
       printf("rhs = ");
       print_expr(expr->as.binary.rhs, spaces + 4);
-
       printf(",\n");
 
-      for (int i = 0; i < spaces + 2; i++) {
-        printf(" ");
-      }
-
-      switch (expr->as.binary.kind) {
-        case EXPR_BIN_ADD: {
-          printf("kind = ADD");
-          break;
-        }
-        case EXPR_BIN_SUB: {
-          printf("kind = SUB");
-          break;
-        }
-        case EXPR_BIN_MUL: {
-          printf("kind = MUL");
-          break;
-        }
-        case EXPR_BIN_DIV: {
-          printf("kind = DIV");
-          break;
-        }
-      }
-
+      print_indent(spaces + 2);
+      printf("kind = ");
+      print_binary_op(expr->as.binary.kind);
       printf(",\n");
 
-      for (int i = 0; i < spaces; i++) {
-        printf(" ");
-      }
+      print_indent(spaces);
       printf(")");
-
       break;
     }
     case EXPR_CALL: {
       printf("Call(\n");
-      for (int i = 0; i < spaces + 2; i++) {
-        printf(" ");
-      }
+
+      print_indent(spaces + 2);
       printf("target = ");
       print_expr(expr->as.call.target, 0);
       printf(",\n");
 
-      for (int i = 0; i < spaces + 2; i++) {
-        printf(" ");
-      }
+      print_indent(spaces + 2);
       printf("arguments: [\n");
 
       for (int i = 0; i < expr->as.call.arguments.len; i++) {
-        for (int i = 0; i < spaces + 4; i++) {
-          printf(" ");
-        }
-
+        print_indent(spaces + 4);
         print_expr(&expr->as.call.arguments.data[i], 0);
         printf(",\n");
       }
 
-      for (int i = 0; i < spaces + 2; i++) {
-        printf(" ");
-      }
-
+      print_indent(spaces + 2);
       printf("],\n");
 
-      for (int i = 0; i < spaces; i++) {
-        printf(" ");
-      }
+      print_indent(spaces);
       printf(")");
+      break;
     }
   }
 }
@@ -1499,110 +1485,78 @@ void print_stmt(struct Stmt *stmt, int spaces)
   switch (stmt->kind) {
     case STMT_FN: {
       printf("STMT_FN(\n");
-      for (int i = 0; i < spaces + 2; i++) {
-        printf(" ");
-      }
+
+      print_indent(spaces + 2);
       printf("name = %s,\n", stmt->as.fn.name);
-      for (int i = 0; i < spaces + 2; i++) {
-        printf(" ");
-      }
+
+      print_indent(spaces + 2);
       printf("body = [\n");
       for (int i = 0; i < stmt->as.fn.body.len; i++) {
         print_stmt(&stmt->as.fn.body.data[i], spaces + 4);
       }
-      for (int i = 0; i < spaces + 2; i++) {
-        printf(" ");
-      }
+
+      print_indent(spaces + 2);
       printf("],\n");
-      for (int i = 0; i < spaces + 2; i++) {
-        printf(" ");
-      }
+
+      print_indent(spaces + 2);
       printf("retval = ");
       print_type(&stmt->as.fn.retval);
-      for (int i = 0; i < spaces; i++) {
-        printf(" ");
-      }
+      printf(",\n");
+
+      print_indent(spaces);
       printf(")\n");
       break;
     }
     case STMT_BLOCK: {
       printf("STMT_BLOCK(\n");
-      for (int i = 0; i < spaces + 2; i++) {
-        printf(" ");
-      }
+
+      print_indent(spaces + 2);
       printf("body = [\n");
       for (int i = 0; i < stmt->as.block.stmts.len; i++) {
         print_stmt(&stmt->as.block.stmts.data[i], spaces + 4);
       }
-      printf(")");
+
+      print_indent(spaces + 2);
+      printf("]\n");
+
+      print_indent(spaces);
+      printf(")\n");
       break;
     }
     case STMT_RET: {
-      for (int i = 0; i < spaces; i++) {
-        printf(" ");
-      }
+      print_indent(spaces);
       printf("STMT_RET(\n");
-      for (int i = 0; i < spaces + 2; i++) {
-        printf(" ");
-      }
+
+      print_indent(spaces + 2);
       printf("val = ");
       if (stmt->as.ret.val) {
         print_expr(stmt->as.ret.val, spaces + 2);
       }
       printf("\n");
-      for (int i = 0; i < spaces; i++) {
-        printf(" ");
-      }
-      printf(")");
-      printf("\n");
+
+      print_indent(spaces);
+      printf(")\n");
       break;
     }
     case STMT_LET: {
-      for (int i = 0; i < spaces; i++) {
-        printf(" ");
-      }
-
+      print_indent(spaces);
       printf("STMT_LET(\n");
-      for (int i = 0; i < spaces + 2; i++) {
-        printf(" ");
-      }
+
+      print_indent(spaces + 2);
       printf("name = %s,\n", stmt->as.let.name);
 
-      for (int i = 0; i < spaces + 2; i++) {
-        printf(" ");
-      }
-
+      print_indent(spaces + 2);
       printf("type = ");
-      switch (stmt->as.let.type.kind) {
-        case I32_T:
-          printf("i32");
-          break;
-        case STR_T:
-          printf("str");
-          break;
-        case FN_T:
-          printf("fn");
-          break;
-        case UNKNOWN_T:
-          printf("unknown");
-          break;
-      }
-
+      print_type(&stmt->as.let.type);
       printf(",\n");
 
-      for (int i = 0; i < spaces + 2; i++) {
-        printf(" ");
-      }
+      print_indent(spaces + 2);
       printf("init: ");
       print_expr(stmt->as.let.init, spaces + 2);
-
       printf(",\n");
-      for (int i = 0; i < spaces; i++) {
-        printf(" ");
-      }
-      printf(")");
-      printf("\n");
-      break;
+
+      print_indent(spaces);
+      printf(")\n");
       break;
     }
     default:
@@ -2072,38 +2026,53 @@ void free_ir_prog(struct IRProgram *prog)
   vec_free(&prog->funcs);
 }
 
+void print_ir_binary_op(int kind)
+{
+  switch (kind) {
+    case IRInstrBinary_ADD:
+      printf("ADD");
+      break;
+    case IRInstrBinary_SUB:
+      printf("SUB");
+      break;
+    case IRInstrBinary_MUL:
+      printf("MUL");
+      break;
+    case IRInstrBinary_DIV:
+      printf("DIV");
+      break;
+    default:
+      printf("???");
+      break;
+  }
+}
+
 void print_ir_val(struct IRValue *ir_val, int spaces)
 {
   switch (ir_val->kind) {
     case IRValue_CONST: {
       printf("IRValue(\n");
-      for (int i = 0; i < spaces + 2; i++) {
-        printf(" ");
-      }
+
+      print_indent(spaces + 2);
       printf("type = CONST,\n");
-      for (int i = 0; i < spaces + 2; i++) {
-        printf(" ");
-      }
+
+      print_indent(spaces + 2);
       printf("value = %d,\n", ir_val->as.konst);
-      for (int i = 0; i < spaces; i++) {
-        printf(" ");
-      }
+
+      print_indent(spaces);
       printf(")");
       break;
     }
     case IRValue_VAR: {
       printf("IRValue(\n");
-      for (int i = 0; i < spaces + 2; i++) {
-        printf(" ");
-      }
+
+      print_indent(spaces + 2);
       printf("type = VAR,\n");
-      for (int i = 0; i < spaces + 2; i++) {
-        printf(" ");
-      }
+
+      print_indent(spaces + 2);
       printf("name = %s,\n", ir_val->as.var);
-      for (int i = 0; i < spaces; i++) {
-        printf(" ");
-      }
+
+      print_indent(spaces);
       printf(")");
       break;
     }
@@ -2112,138 +2081,95 @@ void print_ir_val(struct IRValue *ir_val, int spaces)
 
 void print_ir_instr(struct IRInstr *instr, int spaces)
 {
-  for (int i = 0; i < spaces; i++) {
-    printf(" ");
-  }
+  print_indent(spaces);
+
   switch (instr->kind) {
     case IRInstr_COPY: {
       printf("IRInstr_COPY(\n");
-      for (int i = 0; i < spaces + 2; i++) {
-        printf(" ");
-      }
+
+      print_indent(spaces + 2);
       printf("src = ");
       print_ir_val(instr->as.copy.src, spaces + 2);
       printf(",\n");
-      for (int i = 0; i < spaces + 2; i++) {
-        printf(" ");
-      }
+
+      print_indent(spaces + 2);
       printf("dst = ");
       print_ir_val(instr->as.copy.dst, spaces + 2);
-      printf(",\n");
-      for (int i = 0; i < spaces + 2; i++) {
-        printf(" ");
-      }
+      printf("\n");
 
-      printf(",\n");
-
-      for (int i = 0; i < spaces; i++) {
-        printf(" ");
-      }
-
+      print_indent(spaces);
       printf(")");
-
       break;
     }
     case IRInstr_BINARY: {
       printf("IRInstr_BINARY(\n");
-      for (int i = 0; i < spaces + 2; i++) {
-        printf(" ");
-      }
+
+      print_indent(spaces + 2);
       printf("type = ");
-      switch (instr->as.binary.kind) {
-        case IRInstrBinary_ADD: {
-          printf("ADD");
-          break;
-        }
-        case IRInstrBinary_SUB: {
-          printf("SUB");
-          break;
-        }
-        case IRInstrBinary_MUL: {
-          printf("MUL");
-          break;
-        }
-        case IRInstrBinary_DIV: {
-          printf("DIV");
-          break;
-        }
-      }
+      print_ir_binary_op(instr->as.binary.kind);
       printf(",\n");
-      for (int i = 0; i < spaces + 2; i++) {
-        printf(" ");
-      }
+
+      print_indent(spaces + 2);
       printf("lhs = ");
       print_ir_val(instr->as.binary.lhs, spaces + 2);
       printf(",\n");
-      for (int i = 0; i < spaces + 2; i++) {
-        printf(" ");
-      }
+
+      print_indent(spaces + 2);
       printf("rhs = ");
       print_ir_val(instr->as.binary.rhs, spaces + 2);
       printf(",\n");
-      for (int i = 0; i < spaces + 2; i++) {
-        printf(" ");
-      }
+
+      print_indent(spaces + 2);
       printf("dst = ");
       print_ir_val(instr->as.binary.dst, spaces + 2);
+      printf("\n");
 
-      printf(",\n");
-
-      for (int i = 0; i < spaces; i++) {
-        printf(" ");
-      }
-
+      print_indent(spaces);
       printf(")");
-
       break;
     }
     case IRInstr_RET: {
       printf("IRInstr_RET(\n");
-      for (int i = 0; i < spaces + 2; i++) {
-        printf(" ");
-      }
+
+      print_indent(spaces + 2);
       printf("val = ");
       if (instr->as.ret.val) {
         print_ir_val(instr->as.ret.val, spaces + 2);
       }
       printf("\n");
-      for (int i = 0; i < spaces; i++) {
-        printf(" ");
-      }
+
+      print_indent(spaces);
       printf(")");
       break;
     }
     case IRInstr_CALL: {
       printf("IRInstr_CALL(\n");
-      for (int i = 0; i < spaces + 2; i++) {
-        printf(" ");
-      }
 
+      print_indent(spaces + 2);
       printf("target = ");
       print_expr(&instr->as.call.target, spaces + 2);
-      printf("\n");
+      printf(",\n");
 
+      print_indent(spaces + 2);
       printf("args: [\n");
       for (int k = 0; k < instr->as.call.args.len; k++) {
-        for (int i = 0; i < spaces + 2; i++) {
-          printf(" ");
-        }
-        print_ir_val(instr->as.call.args.data[k], spaces + 2);
+        print_indent(spaces + 4);
+        print_ir_val(instr->as.call.args.data[k], spaces + 4);
+        printf(",\n");
       }
+      print_indent(spaces + 2);
+      printf("],\n");
 
-      printf("\n");
-
+      print_indent(spaces + 2); 
+      printf("dst: ");
       if (instr->as.call.dst) {
-        printf("dst: ");
         print_ir_val(instr->as.call.dst, spaces + 2);
       } else {
         printf("NULL");
       }
-
       printf("\n");
-      for (int i = 0; i < spaces; i++) {
-        printf(" ");
-      }
+
+      print_indent(spaces);
       printf(")");
       break;
     }
