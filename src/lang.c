@@ -2336,6 +2336,7 @@ struct AsmInstrPop {
 
 struct AsmInstr {
   enum AsmInstrKind kind;
+  enum AsmType asm_type;
   union {
     struct AsmInstrMov mov;
     struct AsmInstrBinary binary;
@@ -2491,6 +2492,8 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       mov.src = src;
       mov.dst = dst;
 
+      /* FIXME: _______________ */
+      i.asm_type = AsmType_BYTE;
       i.kind = AsmInstr_MOV;
       i.as.mov = mov;
 
@@ -2689,7 +2692,7 @@ void print_asm_operand(struct AsmOperand *op)
     }
     case AsmOperand_REG: {
       printf("AsmOperand_REG(");
-     
+
       switch (op->as.reg) {
         case AX: {
           switch (op->asm_type) {
@@ -3568,7 +3571,23 @@ void emit(struct AsmProgram *prog)
           break;
         }
         case AsmInstr_MOV: {
-          fprintf(f, "movq ");
+          fprintf(f, "mov ");
+
+          switch (instr->asm_type) {
+            case AsmType_BYTE:
+              printf("b");
+              break;
+            case AsmType_WORD:
+              printf("w");
+              break;
+            case AsmType_LONGWORD:
+              printf("l");
+              break;
+            case AsmType_QUADWORD:
+              printf("q");
+              break;
+          }
+
           emit_operand(f, &instr->as.mov.src);
           fprintf(f, ", ");
           emit_operand(f, &instr->as.mov.dst);
