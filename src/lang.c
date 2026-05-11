@@ -1721,7 +1721,7 @@ struct IRValue {
   enum IRValueKind kind;
   union {
     char *var;
-    int konst;
+    long long konst;
   } as;
 };
 
