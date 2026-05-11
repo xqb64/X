@@ -3588,7 +3588,6 @@ struct ResolveResult resolve_expr(struct VariableMap **varmap,
     case EXPR_LITERAL:
       break;
     case EXPR_VARIABLE: {
-      printf("looking up: %s\n", expr->as.var.name);
       char *resolved_name = lookup_varmap(*varmap, expr->as.var.name);
       if (!resolved_name) {
         return (struct ResolveResult){.is_ok = false,
