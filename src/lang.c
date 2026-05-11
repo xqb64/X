@@ -812,8 +812,14 @@ struct Parameter {
 };
 
 Type parse_type(struct Token *token)
-{
-  if (strncmp(token->start, "i64", token->len) == 0) {
+{ 
+  if (strncmp(token->start, "i8", token->len) == 0) {
+    return (Type){.kind = I8_T};
+  } else if (strncmp(token->start, "i16", token->len) == 0) {
+    return (Type){.kind = I16_T};
+  } else if (strncmp(token->start, "i32", token->len) == 0) {
+    return (Type){.kind = I32_T};
+  } else if (strncmp(token->start, "i64", token->len) == 0) {
     return (Type){.kind = I64_T};
   } else if (strncmp(token->start, "str", token->len) == 0) {
     return (Type){.kind = STR_T};
