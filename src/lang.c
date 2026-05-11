@@ -3341,7 +3341,6 @@ void emit_operand(FILE *f, struct AsmOperand *op)
             }
             case AsmType_QUADWORD: {
               fprintf(f, "%%rax");
-
             }
             default:
               assert(0);
@@ -3613,7 +3612,7 @@ void emit(struct AsmProgram *prog)
               break;
           }
 
-	  fprintf(f, " ");
+          fprintf(f, " ");
 
           emit_operand(f, &instr->as.mov.src);
           fprintf(f, ", ");
@@ -3661,7 +3660,7 @@ void emit(struct AsmProgram *prog)
                   break;
               }
 
-	      fprintf(f, " ");
+              fprintf(f, " ");
 
               break;
             }
