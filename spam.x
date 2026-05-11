@@ -1,10 +1,8 @@
 fn add(a: i32, b: i32) -> i32 {
-  return a + b;
+  return a + z;
 }
 
 fn main(void) -> i32 {
-  let x: i32 = 1;
-  let y: str = "Hello, world!";
-  let spam: i32 = add(x, y);
+  let spam: i32 = add(1, "Bello");
   return spam;
 }

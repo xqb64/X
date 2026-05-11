@@ -1044,8 +1044,6 @@ struct ParseFnResult call(struct Parser *parser)
 
   struct Expr expr = expr_result.as.expr;
 
-  print_expr(&expr, 0);
-
   for (;;) {
     if (match(parser, 1, TOKEN_LPAREN)) {
       struct ParseFnResult finish_call_result;
@@ -1444,6 +1442,7 @@ void print_expr(struct Expr *expr, int spaces)
       }
       printf("target = ");
       print_expr(expr->as.call.target, 0);
+      printf(",\n");
 
       for (int i = 0; i < spaces + 2; i++) {
         printf(" ");
@@ -1451,8 +1450,19 @@ void print_expr(struct Expr *expr, int spaces)
       printf("arguments: [\n");
 
       for (int i = 0; i < expr->as.call.arguments.len; i++) {
-        print_expr(&expr->as.call.arguments.data[i], spaces + 4);
+        for (int i = 0; i < spaces + 4; i++) {
+          printf(" ");
+        }
+
+        print_expr(&expr->as.call.arguments.data[i], 0);
+        printf(",\n");
       }
+
+      for (int i = 0; i < spaces + 2; i++) {
+        printf(" ");
+      }
+
+      printf("],\n");
 
       for (int i = 0; i < spaces; i++) {
         printf(" ");
