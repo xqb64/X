@@ -777,7 +777,7 @@ char *own_string_n(const char *string, int n)
 
   s = malloc(strlen(string) + 1);
   snprintf(s, n + 1, "%s", string);
-  
+
   return s;
 }
 
@@ -788,13 +788,9 @@ struct Parameter {
 
 Type parse_type(struct Token *token)
 {
-  char *t;
-
-  t = own_string_n(token->start, token->len);
-
-  if (strcmp(t, "i32") == 0) {
+  if (strncmp(token->start, "i32", token->len) == 0) {
     return (Type){.kind = I32_T};
-  } else if (strcmp(t, "str") == 0) {
+  } else if (strncmp(token->start, "str", token->len) == 0) {
     return (Type){.kind = STR_T};
   } else {
     return (Type){.kind = UNKNOWN_T};
@@ -2183,7 +2179,7 @@ void print_ir_instr(struct IRInstr *instr, int spaces)
       print_indent(spaces + 2);
       printf("],\n");
 
-      print_indent(spaces + 2); 
+      print_indent(spaces + 2);
       printf("dst: ");
       if (instr->as.call.dst) {
         print_ir_val(instr->as.call.dst, spaces + 2);
@@ -3230,15 +3226,17 @@ void insert_symbol(struct Symbol **sym, char *name, Type type)
   *sym = node;
 }
 
-void free_symbol_table(struct Symbol *sym)
+void free_type(Type *t)
 {
-  struct Symbol *curr, *tmp;
-
-  curr = sym;
-  while (curr) {
-    tmp = curr;
-    curr = curr->next;
-    free(tmp);
+  switch (t->kind) {
+    case I32_T:
+    case STR_T:
+    case UNKNOWN_T:
+      break;
+    case FN_T: {
+      vec_free(&t->as.func.params);
+      break;
+    }
   }
 }
 
@@ -3387,6 +3385,12 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
   return res;
 }
 
+void free_symbol(struct Symbol *sym)
+{
+  free_type(&sym->type);
+  free(sym);
+}
+
 struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
                                       struct Symbol **sym_table)
 {
@@ -3427,7 +3431,7 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
       while (fn_sym_table && fn_sym_table != outer_sym) {
         struct Symbol *tmp = fn_sym_table;
         fn_sym_table = fn_sym_table->next;
-        free(tmp);
+        free_symbol(tmp);
       }
 
       break;
@@ -3498,7 +3502,7 @@ struct TypecheckResult typecheck(struct AST *ast)
       while (global_sym) {
         struct Symbol *tmp = global_sym;
         global_sym = global_sym->next;
-        free(tmp);
+        free_symbol(tmp);
       }
       return r;
     }
@@ -3507,7 +3511,7 @@ struct TypecheckResult typecheck(struct AST *ast)
   while (global_sym) {
     struct Symbol *tmp = global_sym;
     global_sym = global_sym->next;
-    free(tmp);
+    free_symbol(tmp);
   }
 
   return (struct TypecheckResult){.is_ok = true, .msg = NULL, .ast = ast};
@@ -3643,7 +3647,7 @@ struct ResolveResult resolve_param(struct VariableMap **varmap,
   int digit_len, total_len, i;
   char *uniq_name;
 
-  uniq_name = mkuniq(param->name); 
+  uniq_name = mkuniq(param->name);
 
   insert_var_into_varmap(varmap, param->name, uniq_name, true);
 
@@ -3726,7 +3730,7 @@ struct ResolveResult resolve_stmt(struct VariableMap **varmap,
       char *uniq_name;
 
       uniq_name = mkuniq(stmt->as.let.name);
-     
+
       insert_var_into_varmap(varmap, stmt->as.let.name, uniq_name, true);
 
       free(stmt->as.let.name);
