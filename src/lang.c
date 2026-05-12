@@ -864,7 +864,6 @@ struct Token *consume_any(struct Parser *parser, int n, ...)
 
   for (int i = 0; i < n; i++) {
     enum TokenKind kind;
-    struct Token *t;
 
     kind = va_arg(ap, enum TokenKind);
     if (parser->curr && parser->curr->kind == kind) {
@@ -1211,7 +1210,7 @@ struct ParseFnResult finish_call(struct Parser *parser, struct Expr callee)
 
       r = parse_expr(parser);
       if (!r.is_ok) {
-        for (size_t i = 0; i < arguments.len; i++) {
+        for (int i = 0; i < arguments.len; i++) {
           free_expr(&arguments.data[i]);
         }
         vec_free(&arguments);
@@ -1225,7 +1224,7 @@ struct ParseFnResult finish_call(struct Parser *parser, struct Expr callee)
 
   token_rparen = consume(parser, TOKEN_RPAREN);
   if (!token_rparen) {
-    for (size_t i = 0; i < arguments.len; i++) {
+    for (int i = 0; i < arguments.len; i++) {
       free_expr(&arguments.data[i]);
     }
     vec_free(&arguments);
@@ -3081,7 +3080,6 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
     case IRInstr_JUMP_IF_ZERO: {
       struct AsmInstr i1, i2;
       struct AsmInstrCmp cmp;
-      struct AsmInstrJmpCC jmpcc;
       struct AsmOperand cond;
 
       cond = codegen_irvalue(&ir_instr->as.jz.cond);
@@ -4152,6 +4150,7 @@ void emit_operand(FILE *f, struct AsmOperand *op)
             }
             case AsmType_QUADWORD: {
               fprintf(f, "%%rax");
+              break;
             }
             default:
               assert(0);
@@ -4807,7 +4806,7 @@ bool value_fits_in_type(long long val, Type type)
     case U32_T:
       return IN_RANGE(val, 0, UINT_MAX);
     case U64_T:
-      return IN_RANGE(val, 0, ULONG_MAX);
+      return (val >= 0) && ((unsigned long long) val <= ULONG_MAX);
     case I8_T:
       return IN_RANGE(val, SCHAR_MIN, SCHAR_MAX);
     case I16_T:
@@ -5078,6 +5077,9 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
 
       if (stmt->as.if_stmt.else_block) {
         else_res = typecheck_stmt(stmt->as.if_stmt.else_block, sym_table);
+        if (!else_res.is_ok) {
+          return else_res;
+        }
       }
 
       break;
@@ -5127,7 +5129,7 @@ struct ResolveResult {
 };
 
 struct Variable {
-  char *unique_name;
+  char *uniq_name;
   bool current_scope;
 };
 
@@ -5143,7 +5145,7 @@ void insert_var_into_varmap(struct VariableMap **varmap, char *name,
   struct Variable v;
   struct VariableMap *node;
 
-  v.unique_name = uniq_name;
+  v.uniq_name = uniq_name;
   v.current_scope = current_scope;
 
   node = malloc(sizeof(struct VariableMap));
@@ -5161,7 +5163,7 @@ char *lookup_varmap(struct VariableMap *varmap, char *name)
 {
   while (varmap) {
     if (strcmp(varmap->name, name) == 0) {
-      return varmap->value.unique_name;
+      return varmap->value.uniq_name;
     }
     varmap = varmap->next;
   }
@@ -5241,7 +5243,6 @@ char *mkuniq(char *s)
 struct ResolveResult resolve_param(struct VariableMap **varmap,
                                    struct Parameter *param)
 {
-  int digit_len, total_len, i;
   char *uniq_name;
 
   uniq_name = mkuniq(param->name);
@@ -5275,6 +5276,9 @@ struct ResolveResult resolve_stmt(struct VariableMap **varmap,
 
       if (stmt->as.if_stmt.else_block) {
         else_res = resolve_stmt(varmap, stmt->as.if_stmt.else_block);
+        if (!else_res.is_ok) {
+          return else_res;
+        }
       }
 
       break;
@@ -5318,7 +5322,7 @@ struct ResolveResult resolve_stmt(struct VariableMap **varmap,
         variable_map = variable_map->next;
 
         free(tmp->name);
-        free(tmp->value.unique_name);
+        free(tmp->value.uniq_name);
         free(tmp);
       }
 
@@ -5386,7 +5390,7 @@ struct ResolveResult resolve(struct AST *ast)
         global_map = global_map->next;
 
         free(tmp->name);
-        free(tmp->value.unique_name);
+        free(tmp->value.uniq_name);
         free(tmp);
       }
       return r;
@@ -5397,7 +5401,7 @@ struct ResolveResult resolve(struct AST *ast)
     struct VariableMap *tmp = global_map;
     global_map = global_map->next;
     free(tmp->name);
-    free(tmp->value.unique_name);
+    free(tmp->value.uniq_name);
     free(tmp);
   }
 
@@ -5539,7 +5543,7 @@ int main(int argc, char **argv)
   read_file_result = read_file(path);
   if (!read_file_result.is_ok) {
     fprintf(stderr, "Couldn't read file: %s\n", path);
-    return 1;
+    goto free_up2_fread;
   }
 
   src = read_file_result.contents;
@@ -5594,14 +5598,16 @@ int main(int argc, char **argv)
     goto free_up2_parse;
   }
 
+  typechecked_ast = typecheck_result.ast;
+
   printf("typechecked ast:\n");
-  print_ast(typecheck_result.ast);
+  print_ast(typechecked_ast);
 
   if (target_stage == STAGE_TYPECHECK) {
     goto free_up2_parse;
   }
 
-  irfy_result = irfy_ast(ast);
+  irfy_result = irfy_ast(typechecked_ast);
   if (!irfy_result.is_ok) {
     fprintf(stderr, "err: %s\n", irfy_result.msg);
     goto free_up2_irfy;
