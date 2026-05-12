@@ -100,6 +100,12 @@ enum TokenKind {
   TOKEN_RPAREN,
   TOKEN_LBRACE,
   TOKEN_LESS,
+  TOKEN_GREATER,
+  TOKEN_LESS_EQUAL,
+  TOKEN_GREATER_EQUAL,
+  TOKEN_EQUAL_EQUAL,
+  TOKEN_BANG,
+  TOKEN_BANG_EQUAL,
   TOKEN_LET,
   TOKEN_EQUAL,
   TOKEN_RETURN,
@@ -396,7 +402,17 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
         vec_insert(&tokens, mktoken(tokenizer, TOKEN_RBRACE, 1));
         break;
       }
+      case '!': {
+        if (lookahead(tokenizer, 1, "=") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_BANG_EQUAL, 2));
+        }
+        vec_insert(&tokens, mktoken(tokenizer, TOKEN_BANG, 1));
+        break;
+      }
       case '=': {
+        if (lookahead(tokenizer, 1, "=") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_EQUAL_EQUAL, 2));
+        }
         vec_insert(&tokens, mktoken(tokenizer, TOKEN_EQUAL, 1));
         break;
       }
@@ -416,7 +432,17 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
         vec_insert(&tokens, string(tokenizer));
         break;
       }
+      case '>': {
+        if (lookahead(tokenizer, 1, "=") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_GREATER_EQUAL, 2));
+        }
+        vec_insert(&tokens, mktoken(tokenizer, TOKEN_GREATER, 1));
+        break;
+      }
       case '<': {
+        if (lookahead(tokenizer, 1, "=") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_LESS_EQUAL, 2));
+        }
         vec_insert(&tokens, mktoken(tokenizer, TOKEN_LESS, 1));
         break;
       }
@@ -606,6 +632,11 @@ enum ExprBinKind {
   EXPR_BIN_MUL,
   EXPR_BIN_DIV,
   EXPR_BIN_LESS,
+  EXPR_BIN_GREATER,
+  EXPR_BIN_LESS_EQUAL,
+  EXPR_BIN_GREATER_EQUAL,
+  EXPR_BIN_EQUAL_EQUAL,
+  EXPR_BIN_BANG_EQUAL,
 };
 
 struct ExprBin {
@@ -1326,7 +1357,10 @@ struct ParseFnResult comparison(struct Parser *parser)
   }
 
   left = left_res.as.expr;
-  while (match(parser, 1, TOKEN_LESS)) {
+  while (match(parser, 6, TOKEN_LESS, TOKEN_LESS_EQUAL, TOKEN_GREATER,
+               TOKEN_GREATER_EQUAL, TOKEN_EQUAL_EQUAL, TOKEN_BANG_EQUAL)) {
+    char *op = parser->prev->start;
+
     right_res = term(parser);
     if (!right_res.is_ok) {
       return right_res;
@@ -1335,7 +1369,21 @@ struct ParseFnResult comparison(struct Parser *parser)
     right = right_res.as.expr;
 
     struct ExprBin binexpr;
-    binexpr.kind = EXPR_BIN_LESS;
+
+    if (strncmp(op, "<", 1) == 0) {
+      binexpr.kind = EXPR_BIN_LESS;
+    } else if (strncmp(op, ">", 1) == 0) {
+      binexpr.kind = EXPR_BIN_GREATER;
+    } else if (strncmp(op, "<=", 2) == 0) {
+      binexpr.kind = EXPR_BIN_LESS_EQUAL;
+    } else if (strncmp(op, ">=", 2) == 0) {
+      binexpr.kind = EXPR_BIN_GREATER_EQUAL;
+    } else if (strncmp(op, "==", 2) == 0) {
+      binexpr.kind = EXPR_BIN_EQUAL_EQUAL;
+    } else if (strncmp(op, "!=", 2) == 0) {
+      binexpr.kind = EXPR_BIN_BANG_EQUAL;
+    }
+
     binexpr.lhs = ALLOC(left);
     binexpr.rhs = ALLOC(right);
 
@@ -1670,6 +1718,7 @@ struct ParseResult parse(struct Parser *parser)
 
   return result;
 }
+
 void print_binary_op(int kind)
 {
   switch (kind) {
@@ -1687,6 +1736,21 @@ void print_binary_op(int kind)
       break;
     case EXPR_BIN_LESS:
       printf("LESS");
+      break;
+    case EXPR_BIN_GREATER:
+      printf("GREATER");
+      break;
+    case EXPR_BIN_LESS_EQUAL:
+      printf("LESS EQUAL");
+      break;
+    case EXPR_BIN_GREATER_EQUAL:
+      printf("GREATER EQUAL");
+      break;
+    case EXPR_BIN_EQUAL_EQUAL:
+      printf("EQUAL EQUAL");
+      break;
+    case EXPR_BIN_BANG_EQUAL:
+      printf("BANG EQUAL");
       break;
     default:
       printf("???");
@@ -1966,6 +2030,11 @@ enum IRInstrBinaryKind {
   IRInstrBinary_MUL,
   IRInstrBinary_DIV,
   IRInstrBinary_LESS,
+  IRInstrBinary_LESS_EQUAL,
+  IRInstrBinary_GREATER,
+  IRInstrBinary_GREATER_EQUAL,
+  IRInstrBinary_EQUAL_EQUAL,
+  IRInstrBinary_BANG_EQUAL,
 };
 
 enum IRValueKind {
@@ -2128,6 +2197,21 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
           break;
         case EXPR_BIN_LESS:
           kind = IRInstrBinary_LESS;
+          break;
+        case EXPR_BIN_LESS_EQUAL:
+          kind = IRInstrBinary_LESS_EQUAL;
+          break;
+        case EXPR_BIN_GREATER:
+          kind = IRInstrBinary_GREATER;
+          break;
+        case EXPR_BIN_GREATER_EQUAL:
+          kind = IRInstrBinary_GREATER_EQUAL;
+          break;
+        case EXPR_BIN_EQUAL_EQUAL:
+          kind = IRInstrBinary_EQUAL_EQUAL;
+          break;
+        case EXPR_BIN_BANG_EQUAL:
+          kind = IRInstrBinary_BANG_EQUAL;
           break;
         default:
           assert(0);
@@ -2637,6 +2721,11 @@ enum AsmInstrBinaryKind {
   AsmInstrBinary_MUL,
   AsmInstrBinary_DIV,
   AsmInstrBinary_LESS,
+  AsmInstrBinary_LESS_EQUAL,
+  AsmInstrBinary_GREATER,
+  AsmInstrBinary_GREATER_EQUAL,
+  AsmInstrBinary_EQUAL_EQUAL,
+  AsmInstrBinary_BANG_EQUAL,
 };
 
 enum AsmInstrKind {
@@ -2903,6 +2992,14 @@ struct AsmOperand codegen_irvalue(struct IRValue *val)
   }
 }
 
+bool is_comparison(enum IRInstrBinaryKind kind)
+{
+  return kind == IRInstrBinary_LESS || kind == IRInstrBinary_GREATER ||
+         kind == IRInstrBinary_LESS_EQUAL ||
+         kind == IRInstrBinary_GREATER_EQUAL ||
+         kind == IRInstrBinary_EQUAL_EQUAL || kind == IRInstrBinary_BANG_EQUAL;
+}
+
 void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
 {
   switch (ir_instr->kind) {
@@ -3064,7 +3161,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       break;
     }
     case IRInstr_BINARY: {
-      if (ir_instr->as.binary.kind == IRInstrBinary_LESS) {
+      if (is_comparison(ir_instr->as.binary.kind)) {
         Type common = ir_instr->as.binary.dst->type;
         bool is_signed = !is_unsigned(common.kind);
 
@@ -3072,16 +3169,46 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
 
         if (is_signed) {
           switch (ir_instr->as.binary.kind) {
-            case EXPR_BIN_LESS:
+            case IRInstrBinary_LESS:
               cc = L;
+              break;
+            case IRInstrBinary_GREATER:
+              cc = G;
+              break;
+            case IRInstrBinary_LESS_EQUAL:
+              cc = LE;
+              break;
+            case IRInstrBinary_GREATER_EQUAL:
+              cc = GE;
+              break;
+            case IRInstrBinary_EQUAL_EQUAL:
+              cc = E;
+              break;
+            case IRInstrBinary_BANG_EQUAL:
+              cc = NE;
               break;
             default:
               assert(0 && "Unreachable or unhandled signed condition");
           }
         } else {
           switch (ir_instr->as.binary.kind) {
-            case EXPR_BIN_LESS:
+            case IRInstrBinary_LESS:
               cc = B;
+              break;
+            case IRInstrBinary_GREATER:
+              cc = A;
+              break;
+            case IRInstrBinary_LESS_EQUAL:
+              cc = BE;
+              break;
+            case IRInstrBinary_GREATER_EQUAL:
+              cc = AE;
+              break;
+            case IRInstrBinary_EQUAL_EQUAL:
+              cc = E;
+              break;
+            case IRInstrBinary_BANG_EQUAL:
+              cc = NE;
               break;
             default:
               assert(0 && "Unreachable or unhandled unsigned condition");
@@ -3113,8 +3240,10 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         vec_insert(instrs, cmp_instr);
         vec_insert(instrs, mov_instr);
         vec_insert(instrs, setcc);
+
         break;
       }
+
       enum AsmInstrBinaryKind kind;
       struct AsmOperand lhs, rhs, dst;
 
