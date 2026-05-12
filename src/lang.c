@@ -2006,8 +2006,10 @@ void free_stmt(struct Stmt *stmt)
     case STMT_IF: {
       free_expr(&stmt->as.if_stmt.cond);
       free_stmt(stmt->as.if_stmt.then_block);
+      free(stmt->as.if_stmt.then_block);
       if (stmt->as.if_stmt.else_block) {
         free_stmt(stmt->as.if_stmt.else_block);
+        free(stmt->as.if_stmt.else_block);
       }
       break;
     }
@@ -2341,23 +2343,18 @@ void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
       assert(0);
     case STMT_IF: {
       int tmp;
-      char *else_label, *end_label;
       struct IRValue *cond;
 
       tmp = mktmp();
-
-      else_label = mklbl("Else", tmp);
-      end_label = mklbl("End", tmp);
-
       cond = irfy_expr(instrs, &stmt->as.if_stmt.cond);
 
       if (!stmt->as.if_stmt.else_block) {
-        struct IRInstr i1, i2;
-        struct IRInstr_JumpIfZero ijz;
-        struct IRInstr_Label ilbl;
+        struct IRInstr i1 = {0}, i2 = {0};
+        struct IRInstr_JumpIfZero ijz = {0};
+        struct IRInstr_Label ilbl = {0};
 
         ijz.cond = *cond;
-        ijz.target = end_label;
+        ijz.target = mklbl("End", tmp);
 
         i1.kind = IRInstr_JUMP_IF_ZERO;
         i1.as.jz = ijz;
@@ -2366,46 +2363,45 @@ void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
 
         irfy_stmt(instrs, stmt->as.if_stmt.then_block);
 
-        ilbl.name = end_label;
+        ilbl.name = mklbl("End", tmp);
 
         i2.kind = IRInstr_LABEL;
         i2.as.label = ilbl;
 
         vec_insert(instrs, i2);
       } else {
-        struct IRValue *cond = irfy_expr(instrs, &stmt->as.if_stmt.cond);
-
-        struct IRInstr jz_instr;
+        struct IRInstr jz_instr = {0};
         jz_instr.kind = IRInstr_JUMP_IF_ZERO;
         jz_instr.as.jz.cond = *cond;
-        jz_instr.as.jz.target = else_label;
+        jz_instr.as.jz.target = mklbl("Else", tmp);
         vec_insert(instrs, jz_instr);
 
         irfy_stmt(instrs, stmt->as.if_stmt.then_block);
 
-        struct IRInstr jmp_end;
+        struct IRInstr jmp_end = {0};
         jmp_end.kind = IRInstr_JUMP;
-        jmp_end.as.jmp.target = end_label;
+        jmp_end.as.jmp.target = mklbl("End", tmp);
         vec_insert(instrs, jmp_end);
 
-        struct IRInstr label_else;
+        struct IRInstr label_else = {0};
         label_else.kind = IRInstr_LABEL;
-        label_else.as.label.name = else_label;
+        label_else.as.label.name = mklbl("Else", tmp);
         vec_insert(instrs, label_else);
 
         irfy_stmt(instrs, stmt->as.if_stmt.else_block);
 
-        struct IRInstr label_end;
+        struct IRInstr label_end = {0};
         label_end.kind = IRInstr_LABEL;
-        label_end.as.label.name = end_label;
+        label_end.as.label.name = mklbl("End", tmp);
         vec_insert(instrs, label_end);
       }
 
+      free(cond);
       break;
     }
     case STMT_LET: {
       struct IRValue *res, *dst;
-      struct IRInstr cpy;
+      struct IRInstr cpy = {0};
 
       res = irfy_expr(instrs, stmt->as.let.init);
 
@@ -2430,7 +2426,7 @@ void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
       break;
     }
     case STMT_RET: {
-      struct IRInstr i;
+      struct IRInstr i = {0};
 
       i.kind = IRInstr_RET;
       i.as.ret.val =
@@ -2538,9 +2534,11 @@ void free_ir_instr(struct IRInstr *instr)
       break;
     }
     case IRInstr_JUMP: {
+      free(instr->as.jmp.target);
       break;
     }
     case IRInstr_JUMP_IF_ZERO: {
+      free(instr->as.jz.target);
       if (instr->as.jz.cond.kind == IRValue_VAR) {
         free(instr->as.jz.cond.as.var);
       }
@@ -3066,7 +3064,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
 {
   switch (ir_instr->kind) {
     case IRInstr_JUMP: {
-      struct AsmInstr i;
+      struct AsmInstr i = {0};
       struct AsmInstrJmp jmp;
 
       jmp.target = ir_instr->as.jmp.target;
@@ -3078,7 +3076,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       break;
     }
     case IRInstr_JUMP_IF_ZERO: {
-      struct AsmInstr i1, i2;
+      struct AsmInstr i1 = {0}, i2 = {0};
       struct AsmInstrCmp cmp;
       struct AsmOperand cond;
 
@@ -3099,7 +3097,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       break;
     }
     case IRInstr_LABEL: {
-      struct AsmInstr i;
+      struct AsmInstr i = {0};
       struct AsmInstrLabel lbl;
 
       lbl.name = ir_instr->as.label.name;
@@ -3129,9 +3127,11 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       int stack_padding = (num_stack_args % 2 != 0) ? 8 : 0;
 
       if (stack_padding != 0) {
-        struct AsmInstr padding_instr;
+        struct AsmInstr padding_instr = {0};
 
         padding_instr.kind = AsmInstr_BINARY;
+        padding_instr.asm_type = AsmType_QUADWORD;
+
         padding_instr.as.binary.kind = AsmInstrBinary_SUB;
         padding_instr.as.binary.lhs = (struct AsmOperand){
             .kind = AsmOperand_IMM, .as.imm = stack_padding};
@@ -3145,7 +3145,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       for (int i = 0; i < num_reg_args; i++) {
         struct AsmOperand arg_op =
             codegen_irvalue(ir_instr->as.call.args.data[i]);
-        struct AsmInstr mov_instr;
+        struct AsmInstr mov_instr = {0};
         mov_instr.kind = AsmInstr_MOV;
         mov_instr.as.mov.src = arg_op;
         mov_instr.as.mov.dst = (struct AsmOperand){.kind = AsmOperand_REG,
@@ -3160,13 +3160,13 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       for (int i = num_args - 1; i >= 6; i--) {
         struct AsmOperand arg_op =
             codegen_irvalue(ir_instr->as.call.args.data[i]);
-        struct AsmInstr push_instr;
+        struct AsmInstr push_instr = {0};
         push_instr.kind = AsmInstr_PUSH;
         push_instr.as.push.op = arg_op;
         vec_insert(instrs, push_instr);
       }
 
-      struct AsmInstr call_instr;
+      struct AsmInstr call_instr = {0};
       call_instr.kind = AsmInstr_CALL;
 
       call_instr.as.call.target = ir_instr->as.call.target.as.var.name;
@@ -3177,8 +3177,10 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
        * SUB).  */
       int bytes_to_remove = (num_stack_args * 8) + stack_padding;
       if (bytes_to_remove != 0) {
-        struct AsmInstr cleanup_instr;
+        struct AsmInstr cleanup_instr = {0};
         cleanup_instr.kind = AsmInstr_BINARY;
+        cleanup_instr.asm_type = AsmType_QUADWORD;
+
         cleanup_instr.as.binary.kind = AsmInstrBinary_ADD;
         cleanup_instr.as.binary.lhs = (struct AsmOperand){
             .kind = AsmOperand_IMM, .as.imm = bytes_to_remove};
@@ -3191,7 +3193,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
        * destination if it wants to keep it, because AX is easily clobbered.  */
       if (ir_instr->as.call.dst) {
         struct AsmOperand dst_op = codegen_irvalue(ir_instr->as.call.dst);
-        struct AsmInstr mov_instr;
+        struct AsmInstr mov_instr = {0};
         mov_instr.kind = AsmInstr_MOV;
         mov_instr.as.mov.src = (struct AsmOperand){
             .kind = AsmOperand_REG, .as.reg = AX, .asm_type = dst_op.asm_type};
@@ -3208,7 +3210,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       src = codegen_irvalue(ir_instr->as.copy.src);
       dst = codegen_irvalue(ir_instr->as.copy.dst);
 
-      struct AsmInstr i;
+      struct AsmInstr i = {0};
       struct AsmInstrMov mov;
 
       mov.src = src;
@@ -3276,7 +3278,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
           }
         }
 
-        struct AsmInstr cmp_instr;
+        struct AsmInstr cmp_instr = {0};
         cmp_instr.kind = AsmInstr_CMP;
 
         struct AsmOperand lhs;
@@ -3286,14 +3288,14 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         cmp_instr.as.cmp.lhs = codegen_irvalue(ir_instr->as.binary.rhs);
         cmp_instr.as.cmp.rhs = lhs;
 
-        struct AsmInstr mov_instr;
+        struct AsmInstr mov_instr = {0};
         mov_instr.kind = AsmInstr_MOV;
         mov_instr.asm_type = type_to_asm_type(ir_instr->as.binary.dst->type);
         mov_instr.as.mov.src =
             (struct AsmOperand){.kind = AsmOperand_IMM, .as.imm = 0};
         mov_instr.as.mov.dst = codegen_irvalue(ir_instr->as.binary.dst);
 
-        struct AsmInstr setcc;
+        struct AsmInstr setcc = {0};
         setcc.kind = AsmInstr_SetCC;
         setcc.as.setcc.cc = cc;
         setcc.as.setcc.op = codegen_irvalue(ir_instr->as.binary.dst);
@@ -3329,7 +3331,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       rhs = codegen_irvalue(ir_instr->as.binary.rhs);
       dst = codegen_irvalue(ir_instr->as.binary.dst);
 
-      struct AsmInstr i1, i2;
+      struct AsmInstr i1 = {0}, i2 = {0};
 
       i1.kind = AsmInstr_MOV;
       i1.as.mov.src = lhs;
@@ -3352,7 +3354,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       struct AsmInstrMov mov;
       struct AsmInstrRet ret;
       struct AsmOperand retval;
-      struct AsmInstr i1, e1, e2, i2;
+      struct AsmInstr i1 = {0}, e1 = {0}, e2 = {0}, i2 = {0};
 
       ret.__dummy = 0;
 
@@ -3363,6 +3365,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       }
 
       i1.kind = AsmInstr_MOV;
+      i1.asm_type = retval.asm_type;
       i1.as.mov.src = retval;
       i1.as.mov.dst = (struct AsmOperand){
           .kind = AsmOperand_REG, .as.reg = AX, .asm_type = retval.asm_type};
@@ -4009,7 +4012,7 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
             enum AsmRegister scratch_reg;
             struct AsmOperand scratch_op;
             struct AsmInstrMov mov1, mov2;
-            struct AsmInstr i1, i2;
+            struct AsmInstr i1 = {0}, i2 = {0};
 
             scratch_reg = R10;
 
@@ -4047,23 +4050,26 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
                                             .asm_type = asminstr->asm_type};
             struct AsmInstrMov mov1, mov2;
             struct AsmInstrBinary bin;
-            struct AsmInstr i1, i2, i3;
+            struct AsmInstr i1 = {0}, i2 = {0}, i3 = {0};
 
             i1.kind = AsmInstr_MOV;
             mov1.src = asminstr->as.binary.rhs;
             mov1.dst = scratch_op;
             i1.as.mov = mov1;
+            i1.asm_type = asminstr->asm_type;
 
             i2.kind = AsmInstr_BINARY;
             bin.kind = AsmInstrBinary_MUL;
             bin.lhs = asminstr->as.binary.lhs;
             bin.rhs = scratch_op;
             i2.as.binary = bin;
+            i2.asm_type = asminstr->asm_type;
 
             i3.kind = AsmInstr_MOV;
             mov2.src = scratch_op;
             mov2.dst = asminstr->as.binary.rhs;
             i3.as.mov = mov2;
+            i3.asm_type = asminstr->asm_type;
 
             vec_insert(&instrs, i1);
             vec_insert(&instrs, i2);
@@ -4079,7 +4085,7 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
             struct AsmOperand scratch_op;
             struct AsmInstrMov mov;
             struct AsmInstrBinary bin;
-            struct AsmInstr i1, i2;
+            struct AsmInstr i1 = {0}, i2 = {0};
 
             scratch_reg = R10;
 
@@ -4091,12 +4097,14 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
             mov.src = asminstr->as.binary.lhs;
             mov.dst = scratch_op;
             i1.as.mov = mov;
+            i1.asm_type = asminstr->asm_type;
 
             i2.kind = AsmInstr_BINARY;
             bin.kind = asminstr->as.binary.kind;
             bin.lhs = scratch_op;
             bin.rhs = asminstr->as.binary.rhs;
             i2.as.binary = bin;
+            i2.asm_type = asminstr->asm_type;
 
             vec_insert(&instrs, i1);
             vec_insert(&instrs, i2);
