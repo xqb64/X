@@ -92,11 +92,14 @@ end:
 
 enum TokenKind {
   TOKEN_FN,
+  TOKEN_IF,
+  TOKEN_ELSE,
   TOKEN_IDENTIFIER,
   TOKEN_LPAREN,
   TOKEN_VOID,
   TOKEN_RPAREN,
   TOKEN_LBRACE,
+  TOKEN_LESS,
   TOKEN_LET,
   TOKEN_EQUAL,
   TOKEN_RETURN,
@@ -305,6 +308,8 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
       case 'i': {
         if (lookahead(tokenizer, 1, "8") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_I8, 2));
+        } else if (lookahead(tokenizer, 1, "f") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_IF, 2));
         } else if (lookahead(tokenizer, 2, "16") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_I16, 3));
         } else if (lookahead(tokenizer, 2, "32") == 0) {
@@ -411,8 +416,11 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
         vec_insert(&tokens, string(tokenizer));
         break;
       }
+      case '<': {
+        vec_insert(&tokens, mktoken(tokenizer, TOKEN_LESS, 1));
+        break;
+      }
       default:
-
         if (is_alpha(*tokenizer->src)) {
           vec_insert(&tokens, identifier(tokenizer));
         } else {
@@ -520,6 +528,15 @@ void print_token(struct Token *token)
     case TOKEN_COMMA:
       printf("comma");
       break;
+    case TOKEN_LESS:
+      printf("less");
+      break;
+    case TOKEN_IF:
+      printf("if");
+      break;
+    case TOKEN_ELSE:
+      printf("else");
+      break;
     default:
       assert(0);
   }
@@ -588,6 +605,7 @@ enum ExprBinKind {
   EXPR_BIN_SUB,
   EXPR_BIN_MUL,
   EXPR_BIN_DIV,
+  EXPR_BIN_LESS,
 };
 
 struct ExprBin {
@@ -692,6 +710,7 @@ struct StmtBlock {
 
 enum StmtKind {
   STMT_LET,
+  STMT_IF,
   STMT_FN,
   STMT_BLOCK,
   STMT_RET,
@@ -706,6 +725,12 @@ struct StmtFn {
   VecStmt body;
 };
 
+struct StmtIf {
+  struct Expr cond;
+  struct Stmt *then_block;
+  struct Stmt *else_block;
+};
+
 struct Stmt {
   enum StmtKind kind;
   union {
@@ -713,6 +738,7 @@ struct Stmt {
     struct StmtRet ret;
     struct StmtFn fn;
     struct StmtBlock block;
+    struct StmtIf if_stmt;
   } as;
 };
 
@@ -1003,8 +1029,7 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
   parser->current_fn = prev_fn;
 
   if (!block_result.is_ok) {
-    return (struct ParseFnResult){
-        .is_ok = false, .as.stmt = {0}, .msg = "Expected block after '{'"};
+    return block_result;
   }
 
   struct Stmt body = block_result.as.stmt;
@@ -1290,6 +1315,37 @@ struct ParseFnResult term(struct Parser *parser)
   return left_res;
 }
 
+struct ParseFnResult comparison(struct Parser *parser)
+{
+  struct ParseFnResult left_res, right_res;
+  struct Expr left, right;
+
+  left_res = term(parser);
+  if (!left_res.is_ok) {
+    return left_res;
+  }
+
+  left = left_res.as.expr;
+  while (match(parser, 1, TOKEN_LESS)) {
+    right_res = term(parser);
+    if (!right_res.is_ok) {
+      return right_res;
+    }
+
+    right = right_res.as.expr;
+
+    struct ExprBin binexpr;
+    binexpr.kind = EXPR_BIN_LESS;
+    binexpr.lhs = ALLOC(left);
+    binexpr.rhs = ALLOC(right);
+
+    left = (struct Expr){.kind = EXPR_BINARY, .as.binary = binexpr};
+    left_res.as.expr = left;
+  }
+
+  return left_res;
+}
+
 struct ParseFnResult parse_expr(struct Parser *parser)
 {
   struct ParseFnResult res;
@@ -1298,7 +1354,7 @@ struct ParseFnResult parse_expr(struct Parser *parser)
   res.is_ok = false;
   res.msg = NULL;
 
-  res = term(parser);
+  res = comparison(parser);
   if (!res.is_ok) {
     return res;
   }
@@ -1447,6 +1503,104 @@ struct ParseFnResult parse_let_stmt(struct Parser *parser)
   return result;
 }
 
+struct ParseFnResult parse_if_stmt(struct Parser *parser)
+{
+  struct ParseFnResult result, cond_res, then_res, else_res;
+  struct Token *token_if, *token_lparen, *token_rparen, *token_lbrace,
+      *token_rbrace, *token_else;
+  struct Expr cond;
+  struct Stmt *then_block, *else_block;
+
+  result.is_ok = true;
+  result.msg = NULL;
+
+  token_if = consume(parser, TOKEN_IF);
+  if (!token_if) {
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Expected 'if'", .as.stmt = {0}};
+  }
+
+  token_lparen = consume(parser, TOKEN_LPAREN);
+  if (!token_lparen) {
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Expected '(' after 'if'", .as.stmt = {0}};
+  }
+
+  cond_res = parse_expr(parser);
+  if (!cond_res.is_ok) {
+    return cond_res;
+  }
+
+  cond = cond_res.as.expr;
+
+  token_rparen = consume(parser, TOKEN_RPAREN);
+  if (!token_rparen) {
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Expected ')' after 'if' cond", .as.stmt = {0}};
+  }
+
+  token_lbrace = consume(parser, TOKEN_LBRACE);
+  if (!token_lbrace) {
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Expected '{' after 'if' cond", .as.stmt = {0}};
+  }
+
+  then_res = block(parser);
+  if (!then_res.is_ok) {
+    return then_res;
+  }
+
+  token_rbrace = consume(parser, TOKEN_RBRACE);
+  if (!token_rbrace) {
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Expected '}' after 'if' block", .as.stmt = {0}};
+  }
+
+  then_block = ALLOC(then_res.as.stmt);
+
+  else_block = NULL;
+  if (check(parser, TOKEN_ELSE)) {
+    token_else = consume(parser, TOKEN_ELSE);
+    if (!token_else) {
+      return (struct ParseFnResult){
+          .is_ok = false, .msg = "Expected 'else'", .as.stmt = {0}};
+    }
+
+    token_lbrace = consume(parser, TOKEN_LBRACE);
+    if (!token_lbrace) {
+      return (struct ParseFnResult){
+          .is_ok = false, .msg = "Expected '{' after else", .as.stmt = {0}};
+    }
+
+    else_res = block(parser);
+    if (!else_res.is_ok) {
+      return else_res;
+    }
+
+    token_rbrace = consume(parser, TOKEN_RBRACE);
+    if (!token_rbrace) {
+      return (struct ParseFnResult){.is_ok = false,
+                                    .msg = "Expected '}' after 'else' block",
+                                    .as.stmt = {0}};
+    }
+
+    else_block = ALLOC(else_res.as.stmt);
+  }
+
+  struct StmtIf if_stmt;
+  if_stmt.cond = cond;
+  if_stmt.then_block = then_block;
+  if_stmt.else_block = else_block;
+
+  struct Stmt stmt;
+  stmt.kind = STMT_IF;
+  stmt.as.if_stmt = if_stmt;
+
+  result.as.stmt = stmt;
+
+  return result;
+}
+
 struct ParseFnResult parse_stmt(struct Parser *parser)
 {
   struct ParseFnResult result;
@@ -1458,8 +1612,7 @@ struct ParseFnResult parse_stmt(struct Parser *parser)
     case TOKEN_FN: {
       struct ParseFnResult fn_res = parse_fn_stmt(parser);
       if (!fn_res.is_ok) {
-        return (struct ParseFnResult){
-            .is_ok = false, .msg = "Failed parsing 'fn' stmt", .as.stmt = {0}};
+        return fn_res;
       }
       result.as.stmt = fn_res.as.stmt;
       break;
@@ -1467,8 +1620,7 @@ struct ParseFnResult parse_stmt(struct Parser *parser)
     case TOKEN_RETURN: {
       struct ParseFnResult ret_res = parse_ret_stmt(parser);
       if (!ret_res.is_ok) {
-        return (struct ParseFnResult){
-            .is_ok = false, .msg = "Failed parsing 'ret' stmt", .as.stmt = {0}};
+        return ret_res;
       }
       result.as.stmt = ret_res.as.stmt;
       break;
@@ -1479,6 +1631,14 @@ struct ParseFnResult parse_stmt(struct Parser *parser)
         return let_res;
       }
       result.as.stmt = let_res.as.stmt;
+      break;
+    }
+    case TOKEN_IF: {
+      struct ParseFnResult if_res = parse_if_stmt(parser);
+      if (!if_res.is_ok) {
+        return if_res;
+      }
+      result.as.stmt = if_res.as.stmt;
       break;
     }
     default:
@@ -1524,6 +1684,9 @@ void print_binary_op(int kind)
       break;
     case EXPR_BIN_DIV:
       printf("DIV");
+      break;
+    case EXPR_BIN_LESS:
+      printf("LESS");
       break;
     default:
       printf("???");
@@ -1604,6 +1767,30 @@ void print_expr(struct Expr *expr, int spaces)
 void print_stmt(struct Stmt *stmt, int spaces)
 {
   switch (stmt->kind) {
+    case STMT_IF: {
+      printf("STMT_IF\n");
+
+      print_indent(spaces + 2);
+      printf("cond =");
+      print_expr(&stmt->as.if_stmt.cond, 0);
+      printf(",\n");
+
+      print_indent(spaces + 2);
+      printf("then: ");
+      print_stmt(stmt->as.if_stmt.then_block, 0);
+
+      printf("\n");
+
+      print_indent(spaces + 2);
+      printf("else: ");
+
+      if (stmt->as.if_stmt.else_block) {
+        print_stmt(stmt->as.if_stmt.else_block, 0);
+      }
+      printf("\n)");
+
+      break;
+    }
     case STMT_FN: {
       printf("STMT_FN(\n");
 
@@ -1768,6 +1955,9 @@ enum IRInstrKind {
   IRInstr_RET,
   IRInstr_COPY,
   IRInstr_CALL,
+  IRInstr_JUMP,
+  IRInstr_JUMP_IF_ZERO,
+  IRInstr_LABEL,
 };
 
 enum IRInstrBinaryKind {
@@ -1775,6 +1965,7 @@ enum IRInstrBinaryKind {
   IRInstrBinary_SUB,
   IRInstrBinary_MUL,
   IRInstrBinary_DIV,
+  IRInstrBinary_LESS,
 };
 
 enum IRValueKind {
@@ -1797,6 +1988,19 @@ struct IRInstr_Call {
   struct Expr target;
   VecIRValuePtr args;
   struct IRValue *dst;
+};
+
+struct IRInstr_Jump {
+  char *target;
+};
+
+struct IRInstr_JumpIfZero {
+  struct IRValue cond;
+  char *target;
+};
+
+struct IRInstr_Label {
+  char *name;
 };
 
 struct IRInstr_Binary {
@@ -1822,6 +2026,9 @@ struct IRInstr {
     struct IRInstr_Binary binary;
     struct IRInstr_Ret ret;
     struct IRInstr_Copy copy;
+    struct IRInstr_Jump jmp;
+    struct IRInstr_JumpIfZero jz;
+    struct IRInstr_Label label;
   } as;
 };
 
@@ -1903,6 +2110,7 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       rhs = irfy_expr(instrs, expr->as.binary.rhs);
 
       dst = make_ir_var();
+      dst->type = expr->type;
 
       enum IRInstrBinaryKind kind;
       switch (expr->as.binary.kind) {
@@ -1917,6 +2125,9 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
           break;
         case EXPR_BIN_DIV:
           kind = IRInstrBinary_DIV;
+          break;
+        case EXPR_BIN_LESS:
+          kind = IRInstrBinary_LESS;
           break;
         default:
           assert(0);
@@ -1945,6 +2156,10 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
     case EXPR_CALL: {
       struct IRValue *result =
           expr->type.kind == UNKNOWN_T ? NULL : make_ir_var();
+
+      if (result) {
+        result->type = expr->type;
+      }
 
       VecIRValuePtr args = {0};
       for (int i = 0; i < expr->as.call.arguments.len; i++) {
@@ -1995,11 +2210,89 @@ void free_ir_val(struct IRValue *val)
   free(val);
 }
 
+char *mklbl(char *s, int d)
+{
+  int digit_len, total_len;
+  char *lbl;
+
+  digit_len = snprintf(NULL, 0, "%d", d);
+  total_len = strlen(s) + strlen(".") + digit_len + 1;
+
+  lbl = malloc(total_len);
+  snprintf(lbl, total_len, "%s.%d", s, d);
+
+  return lbl;
+}
+
 void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
 {
   switch (stmt->kind) {
     case STMT_FN:
       assert(0);
+    case STMT_IF: {
+      int tmp;
+      char *else_label, *end_label;
+      struct IRValue *cond;
+
+      tmp = mktmp();
+
+      else_label = mklbl("Else", tmp);
+      end_label = mklbl("End", tmp);
+
+      cond = irfy_expr(instrs, &stmt->as.if_stmt.cond);
+
+      if (!stmt->as.if_stmt.else_block) {
+        struct IRInstr i1, i2;
+        struct IRInstr_JumpIfZero ijz;
+        struct IRInstr_Label ilbl;
+
+        ijz.cond = *cond;
+        ijz.target = end_label;
+
+        i1.kind = IRInstr_JUMP_IF_ZERO;
+        i1.as.jz = ijz;
+
+        vec_insert(instrs, i1);
+
+        irfy_stmt(instrs, stmt->as.if_stmt.then_block);
+
+        ilbl.name = end_label;
+
+        i2.kind = IRInstr_LABEL;
+        i2.as.label = ilbl;
+
+        vec_insert(instrs, i2);
+      } else {
+        struct IRValue *cond = irfy_expr(instrs, &stmt->as.if_stmt.cond);
+
+        struct IRInstr jz_instr;
+        jz_instr.kind = IRInstr_JUMP_IF_ZERO;
+        jz_instr.as.jz.cond = *cond;
+        jz_instr.as.jz.target = else_label;
+        vec_insert(instrs, jz_instr);
+
+        irfy_stmt(instrs, stmt->as.if_stmt.then_block);
+
+        struct IRInstr jmp_end;
+        jmp_end.kind = IRInstr_JUMP;
+        jmp_end.as.jmp.target = end_label;
+        vec_insert(instrs, jmp_end);
+
+        struct IRInstr label_else;
+        label_else.kind = IRInstr_LABEL;
+        label_else.as.label.name = else_label;
+        vec_insert(instrs, label_else);
+
+        irfy_stmt(instrs, stmt->as.if_stmt.else_block);
+
+        struct IRInstr label_end;
+        label_end.kind = IRInstr_LABEL;
+        label_end.as.label.name = end_label;
+        vec_insert(instrs, label_end);
+      }
+
+      break;
+    }
     case STMT_LET: {
       struct IRValue *res, *dst;
       struct IRInstr cpy;
@@ -2128,11 +2421,27 @@ void free_ir_instr(struct IRInstr *instr)
         free_ir_val(instr->as.call.args.data[i]);
       }
       vec_free(&instr->as.call.args);
-      free_ir_val(instr->as.call.dst);
+
+      if (instr->as.call.dst) {
+        free_ir_val(instr->as.call.dst);
+      }
+      break;
+    }
+    case IRInstr_JUMP: {
+      break;
+    }
+    case IRInstr_JUMP_IF_ZERO: {
+      if (instr->as.jz.cond.kind == IRValue_VAR) {
+        free(instr->as.jz.cond.as.var);
+      }
+      break;
+    }
+    case IRInstr_LABEL: {
+      free(instr->as.label.name);
       break;
     }
     default:
-      assert(0);
+      assert(0 && "Unhandled IR instruction in free_ir_instr");
   }
 }
 
@@ -2327,6 +2636,7 @@ enum AsmInstrBinaryKind {
   AsmInstrBinary_SUB,
   AsmInstrBinary_MUL,
   AsmInstrBinary_DIV,
+  AsmInstrBinary_LESS,
 };
 
 enum AsmInstrKind {
@@ -2336,6 +2646,11 @@ enum AsmInstrKind {
   AsmInstr_BINARY,
   AsmInstr_RET,
   AsmInstr_CALL,
+  AsmInstr_JUMP,
+  AsmInstr_LABEL,
+  AsmInstr_CMP,
+  AsmInstr_JmpCC,
+  AsmInstr_SetCC,
 };
 
 enum AsmOperandKind {
@@ -2423,6 +2738,46 @@ struct AsmInstrPop {
   struct AsmOperand op;
 };
 
+struct AsmInstrLabel {
+  char *name;
+};
+
+struct AsmInstrJmp {
+  char *target;
+};
+
+enum ConditionCode {
+  /* signed */
+  E,  /* equal */
+  NE, /* not equal */
+  L,  /* less, */
+  LE, /* less or equal */
+  G,  /* greater */
+  GE, /* greater or equal */
+
+  /* unsigned */
+  A,  /* above */
+  AE, /* above or equal */
+  B,  /* below */
+  BE, /* below or equal */
+};
+
+struct AsmInstrJmpCC {
+  enum ConditionCode cc;
+  char *target;
+};
+
+struct AsmInstrSetCC {
+  enum ConditionCode cc;
+  struct AsmOperand op;
+};
+
+struct AsmInstrCmp {
+  enum AsmType asm_type;
+  struct AsmOperand lhs;
+  struct AsmOperand rhs;
+};
+
 struct AsmInstr {
   enum AsmInstrKind kind;
   enum AsmType asm_type;
@@ -2433,6 +2788,11 @@ struct AsmInstr {
     struct AsmInstrPush push;
     struct AsmInstrPop pop;
     struct AsmInstrCall call;
+    struct AsmInstrJmp jmp;
+    struct AsmInstrJmpCC jmpcc;
+    struct AsmInstrSetCC setcc;
+    struct AsmInstrCmp cmp;
+    struct AsmInstrLabel lbl;
   } as;
 };
 
@@ -2455,6 +2815,72 @@ struct AsmResult {
   struct AsmProgram prog;
 };
 
+static inline int get_type_size(enum TypeKind kind)
+{
+  switch (kind) {
+    case I8_T:
+    case U8_T:
+      return 1;
+    case I16_T:
+    case U16_T:
+      return 2;
+    case I32_T:
+    case U32_T:
+      return 4;
+    case I64_T:
+    case U64_T:
+      return 8;
+    default:
+      return -1;
+  }
+}
+
+static inline bool is_unsigned(enum TypeKind kind)
+{
+  switch (kind) {
+    case U8_T:
+    case U16_T:
+    case U32_T:
+    case U64_T:
+      return true;
+    default:
+      return false;
+  }
+}
+
+Type get_common_type(struct Expr *lhs, struct Expr *rhs)
+{
+  Type t1 = lhs->type;
+  Type t2 = rhs->type;
+
+  if (t1.kind == t2.kind) {
+    return t1;
+  }
+
+  int size1 = get_type_size(t1.kind);
+  int size2 = get_type_size(t2.kind);
+
+  if (size1 == -1 || size2 == -1) {
+    return (Type){.kind = UNKNOWN_T};
+  }
+
+  if (size1 > size2) {
+    return t1;
+  }
+  if (size2 > size1) {
+    return t2;
+  }
+
+  if (is_unsigned(t1.kind)) {
+    return t1;
+  }
+  if (is_unsigned(t2.kind)) {
+    return t2;
+  }
+
+  return (Type){.kind = UNKNOWN_T};
+}
+
 struct AsmOperand codegen_irvalue(struct IRValue *val)
 {
   switch (val->kind) {
@@ -2469,6 +2895,7 @@ struct AsmOperand codegen_irvalue(struct IRValue *val)
       struct AsmOperand operand;
       operand.kind = AsmOperand_PSEUDO;
       operand.as.pseudo = val->as.var;
+      operand.asm_type = type_to_asm_type(val->type);
       return operand;
     }
     default:
@@ -2479,6 +2906,51 @@ struct AsmOperand codegen_irvalue(struct IRValue *val)
 void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
 {
   switch (ir_instr->kind) {
+    case IRInstr_JUMP: {
+      struct AsmInstr i;
+      struct AsmInstrJmp jmp;
+
+      jmp.target = ir_instr->as.jmp.target;
+
+      i.kind = AsmInstr_JUMP;
+      i.as.jmp = jmp;
+
+      vec_insert(instrs, i);
+      break;
+    }
+    case IRInstr_JUMP_IF_ZERO: {
+      struct AsmInstr i1, i2;
+      struct AsmInstrCmp cmp;
+      struct AsmInstrJmpCC jmpcc;
+      struct AsmOperand cond;
+
+      cond = codegen_irvalue(&ir_instr->as.jz.cond);
+
+      i1.kind = AsmInstr_CMP;
+      cmp.asm_type = cond.asm_type;
+      cmp.lhs = (struct AsmOperand){.kind = AsmOperand_IMM, .as.imm = 0};
+      cmp.rhs = cond;
+      i1.as.cmp = cmp;
+
+      i2.kind = AsmInstr_JmpCC;
+      i2.as.jmpcc.cc = E;
+      i2.as.jmpcc.target = ir_instr->as.jz.target;
+
+      vec_insert(instrs, i1);
+      vec_insert(instrs, i2);
+      break;
+    }
+    case IRInstr_LABEL: {
+      struct AsmInstr i;
+      struct AsmInstrLabel lbl;
+
+      lbl.name = ir_instr->as.label.name;
+      i.kind = AsmInstr_LABEL;
+      i.as.lbl = lbl;
+
+      vec_insert(instrs, i);
+      break;
+    }
     case IRInstr_CALL: {
       /* Since i64 is the only data type for now, we worry only about these
        * registers. The first six arguments to the callee are passed via these
@@ -2518,8 +2990,9 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         struct AsmInstr mov_instr;
         mov_instr.kind = AsmInstr_MOV;
         mov_instr.as.mov.src = arg_op;
-        mov_instr.as.mov.dst =
-            (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = arg_regs[i]};
+        mov_instr.as.mov.dst = (struct AsmOperand){.kind = AsmOperand_REG,
+                                                   .as.reg = arg_regs[i],
+                                                   .asm_type = arg_op.asm_type};
         mov_instr.asm_type = arg_op.asm_type;
 
         vec_insert(instrs, mov_instr);
@@ -2562,8 +3035,8 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         struct AsmOperand dst_op = codegen_irvalue(ir_instr->as.call.dst);
         struct AsmInstr mov_instr;
         mov_instr.kind = AsmInstr_MOV;
-        mov_instr.as.mov.src =
-            (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = AX};
+        mov_instr.as.mov.src = (struct AsmOperand){
+            .kind = AsmOperand_REG, .as.reg = AX, .asm_type = dst_op.asm_type};
         mov_instr.as.mov.dst = dst_op;
         mov_instr.asm_type = dst_op.asm_type;
         vec_insert(instrs, mov_instr);
@@ -2591,6 +3064,57 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       break;
     }
     case IRInstr_BINARY: {
+      if (ir_instr->as.binary.kind == IRInstrBinary_LESS) {
+        Type common = ir_instr->as.binary.dst->type;
+        bool is_signed = !is_unsigned(common.kind);
+
+        enum ConditionCode cc;
+
+        if (is_signed) {
+          switch (ir_instr->as.binary.kind) {
+            case EXPR_BIN_LESS:
+              cc = L;
+              break;
+            default:
+              assert(0 && "Unreachable or unhandled signed condition");
+          }
+        } else {
+          switch (ir_instr->as.binary.kind) {
+            case EXPR_BIN_LESS:
+              cc = B;
+              break;
+            default:
+              assert(0 && "Unreachable or unhandled unsigned condition");
+          }
+        }
+
+        struct AsmInstr cmp_instr;
+        cmp_instr.kind = AsmInstr_CMP;
+
+        struct AsmOperand lhs;
+        lhs = codegen_irvalue(ir_instr->as.binary.lhs);
+
+        cmp_instr.as.cmp.asm_type = lhs.asm_type;
+        cmp_instr.as.cmp.lhs = codegen_irvalue(ir_instr->as.binary.rhs);
+        cmp_instr.as.cmp.rhs = lhs;
+
+        struct AsmInstr mov_instr;
+        mov_instr.kind = AsmInstr_MOV;
+        mov_instr.asm_type = type_to_asm_type(ir_instr->as.binary.dst->type);
+        mov_instr.as.mov.src =
+            (struct AsmOperand){.kind = AsmOperand_IMM, .as.imm = 0};
+        mov_instr.as.mov.dst = codegen_irvalue(ir_instr->as.binary.dst);
+
+        struct AsmInstr setcc;
+        setcc.kind = AsmInstr_SetCC;
+        setcc.as.setcc.cc = cc;
+        setcc.as.setcc.op = codegen_irvalue(ir_instr->as.binary.dst);
+
+        vec_insert(instrs, cmp_instr);
+        vec_insert(instrs, mov_instr);
+        vec_insert(instrs, setcc);
+        break;
+      }
       enum AsmInstrBinaryKind kind;
       struct AsmOperand lhs, rhs, dst;
 
@@ -2728,14 +3252,20 @@ struct AsmFunction codegen_fn(struct IRFunction *ir_func)
   /* Move the values from the registers and from the stack that we had received
    * previously by the caller, into pseudo registers.  */
   for (int i = 0; i < num_params; i++) {
+    enum AsmType param_asm_type;
+
+    param_asm_type = type_to_asm_type(ir_func->params.data[i].type);
+
     struct AsmOperand dst;
     dst.kind = AsmOperand_PSEUDO;
     dst.as.pseudo = ir_func->params.data[i].name;
+    dst.asm_type = param_asm_type;
 
     struct AsmOperand src;
     if (i < 6) {
       src.kind = AsmOperand_REG;
       src.as.reg = arg_regs[i];
+      src.asm_type = param_asm_type;
     } else {
       src.kind = AsmOperand_STACK;
       /* Upon executing the call instruction by the caller.
@@ -2748,12 +3278,14 @@ struct AsmFunction codegen_fn(struct IRFunction *ir_func)
        * stack argument is at 16(%rbp) (more backward in time).
        * The local variables are at -8(%rbp).  */
       src.as.stack_offset = 16 + ((i - 6) * 8);
+      src.asm_type = param_asm_type;
     }
 
     struct AsmInstr param_mov;
     param_mov.kind = AsmInstr_MOV;
     param_mov.as.mov.src = src;
     param_mov.as.mov.dst = dst;
+    param_mov.asm_type = param_asm_type;
 
     vec_insert(&func.body, param_mov);
   }
@@ -3194,6 +3726,15 @@ struct AsmProgram *replace_pseudo(struct AsmProgram *asmcode)
     for (int j = 0; j < asmcode->funcs.data[i].body.len; j++) {
       struct AsmInstr *asminstr = &asmcode->funcs.data[i].body.data[j];
       switch (asminstr->kind) {
+        case AsmInstr_SetCC: {
+          if (asminstr->as.setcc.op.kind == AsmOperand_PSEUDO) {
+            asminstr->as.setcc.op.kind = AsmOperand_STACK;
+            asminstr->as.setcc.op.as.stack_offset =
+                get_offset(map, asminstr->as.setcc.op.as.pseudo, &offset);
+          }
+          break;
+        }
+
         case AsmInstr_MOV: {
           if (asminstr->as.mov.src.kind == AsmOperand_PSEUDO) {
             asminstr->as.mov.src.kind = AsmOperand_STACK;
@@ -3223,6 +3764,19 @@ struct AsmProgram *replace_pseudo(struct AsmProgram *asmcode)
           break;
         }
         case AsmInstr_RET: {
+          break;
+        }
+        case AsmInstr_CMP: {
+          if (asminstr->as.cmp.lhs.kind == AsmOperand_PSEUDO) {
+            asminstr->as.cmp.lhs.kind = AsmOperand_STACK;
+            asminstr->as.cmp.lhs.as.stack_offset =
+                get_offset(map, asminstr->as.cmp.lhs.as.pseudo, &offset);
+          }
+          if (asminstr->as.cmp.rhs.kind == AsmOperand_PSEUDO) {
+            asminstr->as.cmp.rhs.kind = AsmOperand_STACK;
+            asminstr->as.cmp.rhs.as.stack_offset =
+                get_offset(map, asminstr->as.cmp.rhs.as.pseudo, &offset);
+          }
           break;
         }
         default:
@@ -3274,11 +3828,13 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
             mov1.src = asminstr->as.mov.src;
             mov1.dst = scratch_op;
             i1.as.mov = mov1;
+            i1.asm_type = asminstr->asm_type;
 
             i2.kind = AsmInstr_MOV;
             mov2.src = scratch_op;
             mov2.dst = asminstr->as.mov.dst;
             i2.as.mov = mov2;
+            i2.asm_type = asminstr->asm_type;
 
             vec_insert(&instrs, i1);
             vec_insert(&instrs, i2);
@@ -3619,7 +4175,7 @@ void emit_operand(FILE *f, struct AsmOperand *op)
       break;
     }
     case AsmOperand_STACK: {
-      fprintf(f, "%d(%%rsp)", op->as.stack_offset);
+      fprintf(f, "%d(%%rbp)", op->as.stack_offset);
       break;
     }
   }
@@ -3638,6 +4194,124 @@ void emit(struct AsmProgram *prog)
       struct AsmInstr *instr = &prog->funcs.data[i].body.data[j];
       fprintf(f, "\t");
       switch (instr->kind) {
+        case AsmInstr_JUMP: {
+          fprintf(f, "jmp .L%s\n", instr->as.jmp.target);
+          break;
+        }
+        case AsmInstr_LABEL: {
+          fprintf(f, ".L%s:\n", instr->as.lbl.name);
+          break;
+        }
+        case AsmInstr_JmpCC: {
+          char *suffix;
+
+          switch (instr->as.jmpcc.cc) {
+            case E:
+              suffix = "e";
+              break;
+            case NE:
+              suffix = "ne";
+              break;
+            case L:
+              suffix = "l";
+              break;
+            case LE:
+              suffix = "le";
+              break;
+            case G:
+              suffix = "g";
+              break;
+            case GE:
+              suffix = "ge";
+              break;
+            case A:
+              suffix = "a";
+              break;
+            case AE:
+              suffix = "ae";
+              break;
+            case B:
+              suffix = "b";
+              break;
+            case BE:
+              suffix = "be";
+              break;
+          }
+
+          fprintf(f, "j%s .L%s\n", suffix, instr->as.jmpcc.target);
+          break;
+        }
+        case AsmInstr_SetCC: {
+          char *suffix;
+
+          switch (instr->as.jmpcc.cc) {
+            case E:
+              suffix = "e";
+              break;
+            case NE:
+              suffix = "ne";
+              break;
+            case L:
+              suffix = "l";
+              break;
+            case LE:
+              suffix = "le";
+              break;
+            case G:
+              suffix = "g";
+              break;
+            case GE:
+              suffix = "ge";
+              break;
+            case A:
+              suffix = "a";
+              break;
+            case AE:
+              suffix = "ae";
+              break;
+            case B:
+              suffix = "b";
+              break;
+            case BE:
+              suffix = "be";
+              break;
+          }
+
+          fprintf(f, "set%s ", suffix);
+          emit_operand(f, &instr->as.setcc.op);
+          fprintf(f, "\n");
+          break;
+        }
+        case AsmInstr_CMP: {
+          char *i;
+
+          switch (instr->as.cmp.asm_type) {
+            case AsmType_BYTE:
+              i = "cmpb";
+              break;
+            case AsmType_WORD:
+              i = "cmpw";
+              break;
+            case AsmType_LONGWORD:
+              i = "cmpl";
+              break;
+            case AsmType_QUADWORD:
+              i = "cmpq";
+              break;
+          }
+
+          fprintf(f, "%s ", i);
+
+          emit_operand(f, &instr->as.cmp.lhs);
+
+          fprintf(f, ", ");
+
+          emit_operand(f, &instr->as.cmp.rhs);
+
+          fprintf(f, "\n");
+
+          break;
+        }
         case AsmInstr_CALL: {
           fprintf(f, "call %s\n", instr->as.call.target);
           break;
@@ -3683,7 +4357,7 @@ void emit(struct AsmProgram *prog)
         case AsmInstr_BINARY: {
           switch (instr->as.binary.kind) {
             case AsmInstrBinary_ADD: {
-              fprintf(f, "add ");
+              fprintf(f, "add");
 
               switch (instr->asm_type) {
                 case AsmType_BYTE:
@@ -3699,6 +4373,8 @@ void emit(struct AsmProgram *prog)
                   fprintf(f, "q");
                   break;
               }
+
+              fprintf(f, " ");
 
               break;
             }
@@ -3957,15 +4633,14 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
 
   switch (expr->kind) {
     case EXPR_LITERAL: {
-      if (expr->as.literal.kind == LITERAL_NUM) {
-        expr->type = (Type){.kind = I64_T};
-      } else {
+      if (expr->as.literal.kind == LITERAL_STR) {
         expr->type = (Type){.kind = STR_T};
       }
       break;
     }
     case EXPR_VARIABLE: {
       struct Symbol *sym = lookup_symbol(sym_table, expr->as.var.name);
+      printf("looking up sym: %s\n", expr->as.var.name);
 
       if (!sym) {
         return (struct TypecheckResult){
@@ -3996,15 +4671,17 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
         return rhs_res;
       }
 
-      if (expr->as.binary.lhs->type.kind != I64_T ||
-          expr->as.binary.rhs->type.kind != I64_T) {
-        return (struct TypecheckResult){
-            .is_ok = false,
-            .msg = "Binary operations require i64 operands",
-            .ast = NULL};
+      Type common_type;
+
+      common_type = get_common_type(expr->as.binary.lhs, expr->as.binary.rhs);
+      if (common_type.kind == UNKNOWN_T) {
+        return (struct TypecheckResult){.is_ok = false,
+                                        .msg = "Unable to compute common type",
+                                        .ast = NULL};
       }
 
-      expr->type = (Type){.kind = I64_T};
+      expr->type = common_type;
+
       break;
     }
     case EXPR_CALL: {
@@ -4030,8 +4707,27 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
           return arg_res;
         }
 
-        if (!types_equal(expr->as.call.arguments.data[i].type,
-                         callee_sym->type.as.func.params.data[i])) {
+        struct Expr *arg = &expr->as.call.arguments.data[i];
+        Type param_type = callee_sym->type.as.func.params.data[i];
+
+        if (arg->kind == EXPR_LITERAL && arg->as.literal.kind == LITERAL_NUM) {
+          long long val = arg->as.literal.as.num;
+
+          if (!value_fits_in_type(val, param_type)) {
+            return (struct TypecheckResult){
+                .is_ok = false,
+                .msg = "Numeric literal overflow for function parameter",
+                .ast = NULL};
+          }
+
+          arg->type = param_type;
+          arg->as.literal.type = param_type;
+        }
+
+        print_type(&arg->type);
+        print_type(&param_type);
+
+        if (!types_equal(arg->type, param_type)) {
           return (struct TypecheckResult){
               .is_ok = false,
               .msg = "Called with an arg of wrong type",
@@ -4158,6 +4854,25 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
               .ast = NULL};
         }
       }
+      break;
+    }
+    case STMT_IF: {
+      struct TypecheckResult cond_res, then_res, else_res;
+
+      cond_res = typecheck_expr(&stmt->as.if_stmt.cond, *sym_table);
+      if (!cond_res.is_ok) {
+        return cond_res;
+      }
+
+      then_res = typecheck_stmt(stmt->as.if_stmt.then_block, sym_table);
+      if (!then_res.is_ok) {
+        return then_res;
+      }
+
+      if (stmt->as.if_stmt.else_block) {
+        else_res = typecheck_stmt(stmt->as.if_stmt.else_block, sym_table);
+      }
+
       break;
     }
     default:
@@ -4338,12 +5053,28 @@ struct ResolveResult resolve_stmt(struct VariableMap **varmap,
                                   struct Stmt *stmt)
 {
   switch (stmt->kind) {
+    case STMT_IF: {
+      struct ResolveResult cond_res, then_res, else_res;
+
+      cond_res = resolve_expr(varmap, &stmt->as.if_stmt.cond);
+      if (!cond_res.is_ok) {
+        return cond_res;
+      }
+
+      then_res = resolve_stmt(varmap, stmt->as.if_stmt.then_block);
+      if (!then_res.is_ok) {
+        return then_res;
+      }
+
+      if (stmt->as.if_stmt.else_block) {
+        else_res = resolve_stmt(varmap, stmt->as.if_stmt.else_block);
+      }
+
+      break;
+    }
     case STMT_FN: {
       struct VariableMap *variable_map, *outer_map;
       char *cpy;
-
-      variable_map = varmap ? *varmap : NULL;
-      outer_map = variable_map;
 
       cpy = malloc(strlen(stmt->as.fn.name) + 1);
       strcpy(cpy, stmt->as.fn.name);
@@ -4351,6 +5082,9 @@ struct ResolveResult resolve_stmt(struct VariableMap **varmap,
       if (varmap) {
         insert_var_into_varmap(varmap, stmt->as.fn.name, cpy, true);
       }
+
+      variable_map = varmap ? *varmap : NULL;
+      outer_map = variable_map;
 
       for (int i = 0; i < stmt->as.fn.params.len; i++) {
         struct ResolveResult r;
@@ -4463,7 +5197,7 @@ struct ResolveResult resolve(struct AST *ast)
   return (struct ResolveResult){.is_ok = true, .msg = NULL, .as.ast = ast};
 }
 
-typedef enum {
+enum TargetStage {
   STAGE_FULL,
   STAGE_TOKENIZE,
   STAGE_PARSE,
@@ -4476,16 +5210,16 @@ typedef enum {
   STAGE_EMIT,
   STAGE_ASM,
   STAGE_LINK,
-} TargetStage;
+};
 
-typedef struct {
-  TargetStage target_stage;
+struct CompilerOptions {
+  enum TargetStage target_stage;
   const char *path;
-} CompilerOptions;
+};
 
-CompilerOptions parse_args(int argc, char **argv)
+struct CompilerOptions parse_args(int argc, char **argv)
 {
-  CompilerOptions opts;
+  struct CompilerOptions opts;
   opts.target_stage = STAGE_FULL;
   opts.path = "spam.x";
 
@@ -4573,10 +5307,9 @@ CompilerOptions parse_args(int argc, char **argv)
 
 int main(int argc, char **argv)
 {
-  CompilerOptions opts = parse_args(argc, argv);
-  TargetStage target_stage = opts.target_stage;
-  const char *path = opts.path;
-
+  struct CompilerOptions opts;
+  enum TargetStage target_stage;
+  const char *path;
   struct ReadFileResult read_file_result;
   char *src;
   struct Tokenizer tokenizer;
@@ -4591,6 +5324,10 @@ int main(int argc, char **argv)
   struct IRProgram ir_prog;
   struct AsmResult asm_result;
   struct AsmProgram asm_prog;
+
+  opts = parse_args(argc, argv);
+  target_stage = opts.target_stage;
+  path = opts.path;
 
   read_file_result = read_file(path);
   if (!read_file_result.is_ok) {
