@@ -93,11 +93,13 @@ end:
 enum TokenKind {
   TOKEN_FN,
   TOKEN_IF,
+  TOKEN_ELSE,
   TOKEN_IDENTIFIER,
   TOKEN_LPAREN,
   TOKEN_VOID,
   TOKEN_RPAREN,
   TOKEN_LBRACE,
+  TOKEN_LESS,
   TOKEN_LET,
   TOKEN_EQUAL,
   TOKEN_RETURN,
@@ -306,9 +308,9 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
       case 'i': {
         if (lookahead(tokenizer, 1, "8") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_I8, 2));
-        } else if (lookahead(tokenizer, 1, "f")) {
-	  vec_insert(&tokens, mktoken(tokenizer, TOKEN_IF, 2));
-	} else if (lookahead(tokenizer, 2, "16") == 0) {
+        } else if (lookahead(tokenizer, 1, "f") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_IF, 2));
+        } else if (lookahead(tokenizer, 2, "16") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_I16, 3));
         } else if (lookahead(tokenizer, 2, "32") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_I32, 3));
@@ -414,8 +416,11 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
         vec_insert(&tokens, string(tokenizer));
         break;
       }
+      case '<': {
+        vec_insert(&tokens, mktoken(tokenizer, TOKEN_LESS, 1));
+        break;
+      }
       default:
-
         if (is_alpha(*tokenizer->src)) {
           vec_insert(&tokens, identifier(tokenizer));
         } else {
@@ -523,6 +528,15 @@ void print_token(struct Token *token)
     case TOKEN_COMMA:
       printf("comma");
       break;
+    case TOKEN_LESS:
+      printf("less");
+      break;
+    case TOKEN_IF:
+      printf("if");
+      break;
+    case TOKEN_ELSE:
+      printf("else");
+      break;
     default:
       assert(0);
   }
@@ -591,6 +605,7 @@ enum ExprBinKind {
   EXPR_BIN_SUB,
   EXPR_BIN_MUL,
   EXPR_BIN_DIV,
+  EXPR_BIN_LESS,
 };
 
 struct ExprBin {
@@ -695,6 +710,7 @@ struct StmtBlock {
 
 enum StmtKind {
   STMT_LET,
+  STMT_IF,
   STMT_FN,
   STMT_BLOCK,
   STMT_RET,
@@ -709,6 +725,12 @@ struct StmtFn {
   VecStmt body;
 };
 
+struct StmtIf {
+  struct Expr cond;
+  struct Stmt *then_block;
+  struct Stmt *else_block;
+};
+
 struct Stmt {
   enum StmtKind kind;
   union {
@@ -716,6 +738,7 @@ struct Stmt {
     struct StmtRet ret;
     struct StmtFn fn;
     struct StmtBlock block;
+    struct StmtIf if_stmt;
   } as;
 };
 
@@ -1006,8 +1029,7 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
   parser->current_fn = prev_fn;
 
   if (!block_result.is_ok) {
-    return (struct ParseFnResult){
-        .is_ok = false, .as.stmt = {0}, .msg = "Expected block after '{'"};
+    return block_result;
   }
 
   struct Stmt body = block_result.as.stmt;
@@ -1293,6 +1315,37 @@ struct ParseFnResult term(struct Parser *parser)
   return left_res;
 }
 
+struct ParseFnResult comparison(struct Parser *parser)
+{
+  struct ParseFnResult left_res, right_res;
+  struct Expr left, right;
+
+  left_res = term(parser);
+  if (!left_res.is_ok) {
+    return left_res;
+  }
+
+  left = left_res.as.expr;
+  while (match(parser, 1, TOKEN_LESS)) {
+    right_res = term(parser);
+    if (!right_res.is_ok) {
+      return right_res;
+    }
+
+    right = right_res.as.expr;
+
+    struct ExprBin binexpr;
+    binexpr.kind = EXPR_BIN_LESS;
+    binexpr.lhs = ALLOC(left);
+    binexpr.rhs = ALLOC(right);
+
+    left = (struct Expr){.kind = EXPR_BINARY, .as.binary = binexpr};
+    left_res.as.expr = left;
+  }
+
+  return left_res;
+}
+
 struct ParseFnResult parse_expr(struct Parser *parser)
 {
   struct ParseFnResult res;
@@ -1301,7 +1354,7 @@ struct ParseFnResult parse_expr(struct Parser *parser)
   res.is_ok = false;
   res.msg = NULL;
 
-  res = term(parser);
+  res = comparison(parser);
   if (!res.is_ok) {
     return res;
   }
@@ -1452,7 +1505,99 @@ struct ParseFnResult parse_let_stmt(struct Parser *parser)
 
 struct ParseFnResult parse_if_stmt(struct Parser *parser)
 {
-  struct ParseFnResult result;
+  struct ParseFnResult result, cond_res, then_res, else_res;
+  struct Token *token_if, *token_lparen, *token_rparen, *token_lbrace,
+      *token_rbrace, *token_else;
+  struct Expr cond;
+  struct Stmt *then_block, *else_block;
+
+  result.is_ok = true;
+  result.msg = NULL;
+
+  token_if = consume(parser, TOKEN_IF);
+  if (!token_if) {
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Expected 'if'", .as.stmt = {0}};
+  }
+
+  token_lparen = consume(parser, TOKEN_LPAREN);
+  if (!token_lparen) {
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Expected '(' after 'if'", .as.stmt = {0}};
+  }
+
+  cond_res = parse_expr(parser);
+  if (!cond_res.is_ok) {
+    return cond_res;
+  }
+
+  cond = cond_res.as.expr;
+
+  token_rparen = consume(parser, TOKEN_RPAREN);
+  if (!token_rparen) {
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Expected ')' after 'if' cond", .as.stmt = {0}};
+  }
+
+  token_lbrace = consume(parser, TOKEN_LBRACE);
+  if (!token_lbrace) {
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Expected '{' after 'if' cond", .as.stmt = {0}};
+  }
+
+  then_res = block(parser);
+  if (!then_res.is_ok) {
+    return then_res;
+  }
+
+  token_rbrace = consume(parser, TOKEN_RBRACE);
+  if (!token_rbrace) {
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Expected '}' after 'if' block", .as.stmt = {0}};
+  }
+
+  then_block = ALLOC(then_res.as.stmt);
+
+  else_block = NULL;
+  if (check(parser, TOKEN_ELSE)) {
+    token_else = consume(parser, TOKEN_ELSE);
+    if (!token_else) {
+      return (struct ParseFnResult){
+          .is_ok = false, .msg = "Expected 'else'", .as.stmt = {0}};
+    }
+
+    token_lbrace = consume(parser, TOKEN_LBRACE);
+    if (!token_lbrace) {
+      return (struct ParseFnResult){
+          .is_ok = false, .msg = "Expected '{' after else", .as.stmt = {0}};
+    }
+
+    else_res = block(parser);
+    if (!else_res.is_ok) {
+      return else_res;
+    }
+
+    token_rbrace = consume(parser, TOKEN_RBRACE);
+    if (!token_rbrace) {
+      return (struct ParseFnResult){.is_ok = false,
+                                    .msg = "Expected '}' after 'else' block",
+                                    .as.stmt = {0}};
+    }
+
+    else_block = ALLOC(else_res.as.stmt);
+  }
+
+  struct StmtIf if_stmt;
+  if_stmt.cond = cond;
+  if_stmt.then_block = then_block;
+  if_stmt.else_block = else_block;
+
+  struct Stmt stmt;
+  stmt.kind = STMT_IF;
+  stmt.as.if_stmt = if_stmt;
+
+  result.as.stmt = stmt;
+
   return result;
 }
 
@@ -1467,8 +1612,7 @@ struct ParseFnResult parse_stmt(struct Parser *parser)
     case TOKEN_FN: {
       struct ParseFnResult fn_res = parse_fn_stmt(parser);
       if (!fn_res.is_ok) {
-        return (struct ParseFnResult){
-            .is_ok = false, .msg = "Failed parsing 'fn' stmt", .as.stmt = {0}};
+        return fn_res;
       }
       result.as.stmt = fn_res.as.stmt;
       break;
@@ -1476,8 +1620,7 @@ struct ParseFnResult parse_stmt(struct Parser *parser)
     case TOKEN_RETURN: {
       struct ParseFnResult ret_res = parse_ret_stmt(parser);
       if (!ret_res.is_ok) {
-        return (struct ParseFnResult){
-            .is_ok = false, .msg = "Failed parsing 'ret' stmt", .as.stmt = {0}};
+        return ret_res;
       }
       result.as.stmt = ret_res.as.stmt;
       break;
@@ -1488,6 +1631,14 @@ struct ParseFnResult parse_stmt(struct Parser *parser)
         return let_res;
       }
       result.as.stmt = let_res.as.stmt;
+      break;
+    }
+    case TOKEN_IF: {
+      struct ParseFnResult if_res = parse_if_stmt(parser);
+      if (!if_res.is_ok) {
+        return if_res;
+      }
+      result.as.stmt = if_res.as.stmt;
       break;
     }
     default:
@@ -1533,6 +1684,9 @@ void print_binary_op(int kind)
       break;
     case EXPR_BIN_DIV:
       printf("DIV");
+      break;
+    case EXPR_BIN_LESS:
+      printf("LESS");
       break;
     default:
       printf("???");
@@ -1613,6 +1767,30 @@ void print_expr(struct Expr *expr, int spaces)
 void print_stmt(struct Stmt *stmt, int spaces)
 {
   switch (stmt->kind) {
+    case STMT_IF: {
+      printf("STMT_IF\n");
+
+      print_indent(spaces + 2);
+      printf("cond =");
+      print_expr(&stmt->as.if_stmt.cond, 0);
+      printf(",\n");
+
+      print_indent(spaces + 2);
+      printf("then: ");
+      print_stmt(stmt->as.if_stmt.then_block, 0);
+
+      printf("\n");
+
+      print_indent(spaces + 2);
+      printf("else: ");
+
+      if (stmt->as.if_stmt.else_block) {
+        print_stmt(stmt->as.if_stmt.else_block, 0);
+      }
+      printf("\n)");
+
+      break;
+    }
     case STMT_FN: {
       printf("STMT_FN(\n");
 
@@ -1784,6 +1962,7 @@ enum IRInstrBinaryKind {
   IRInstrBinary_SUB,
   IRInstrBinary_MUL,
   IRInstrBinary_DIV,
+  IRInstrBinary_LESS,
 };
 
 enum IRValueKind {
@@ -1927,6 +2106,8 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
         case EXPR_BIN_DIV:
           kind = IRInstrBinary_DIV;
           break;
+        case EXPR_BIN_LESS:
+          kind = IRInstrBinary_LESS;
         default:
           assert(0);
       }
@@ -4351,15 +4532,15 @@ struct ResolveResult resolve_stmt(struct VariableMap **varmap,
       struct VariableMap *variable_map, *outer_map;
       char *cpy;
 
-      variable_map = varmap ? *varmap : NULL;
-      outer_map = variable_map;
-
       cpy = malloc(strlen(stmt->as.fn.name) + 1);
       strcpy(cpy, stmt->as.fn.name);
 
       if (varmap) {
         insert_var_into_varmap(varmap, stmt->as.fn.name, cpy, true);
       }
+
+      variable_map = varmap ? *varmap : NULL;
+      outer_map = variable_map;
 
       for (int i = 0; i < stmt->as.fn.params.len; i++) {
         struct ResolveResult r;

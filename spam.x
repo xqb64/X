@@ -1,4 +1,9 @@
-fn main(void) -> u8 {
-  let spam: u8 = 255;
-  return spam;
+fn fib(n: i32) -> i32 {
+  if (n < 2) { return n; }
+  return fib(n-1)+fib(n-2);
+}
+
+fn main(void) -> i32 {
+  let f: i32 = fib(40);
+  return f;
 }
