@@ -2128,6 +2128,7 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
           break;
         case EXPR_BIN_LESS:
           kind = IRInstrBinary_LESS;
+          break;
         default:
           assert(0);
       }
@@ -2155,6 +2156,10 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
     case EXPR_CALL: {
       struct IRValue *result =
           expr->type.kind == UNKNOWN_T ? NULL : make_ir_var();
+
+      if (result) {
+        result->type = expr->type;
+      }
 
       VecIRValuePtr args = {0};
       for (int i = 0; i < expr->as.call.arguments.len; i++) {
@@ -2207,14 +2212,14 @@ void free_ir_val(struct IRValue *val)
 
 char *mklbl(char *s, int d)
 {
-  int digit_len, total_len, i;
+  int digit_len, total_len;
   char *lbl;
 
   digit_len = snprintf(NULL, 0, "%d", d);
   total_len = strlen(s) + strlen(".") + digit_len + 1;
 
   lbl = malloc(total_len);
-  snprintf(lbl, total_len, "%s.%d", s, i);
+  snprintf(lbl, total_len, "%s.%d", s, d);
 
   return lbl;
 }
@@ -2258,42 +2263,32 @@ void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
 
         vec_insert(instrs, i2);
       } else {
-        struct IRInstr i1, i2, i3, i4;
-        struct IRInstr_JumpIfZero ijz;
-        struct IRInstr_Label ilbl1, ilbl2;
-        struct IRInstr_Jump ijmp;
+        struct IRValue *cond = irfy_expr(instrs, &stmt->as.if_stmt.cond);
 
-        ijz.cond = *cond;
-        ijz.target = else_label;
-
-        i1.kind = IRInstr_JUMP_IF_ZERO;
-        i1.as.jz = ijz;
-
-        vec_insert(instrs, i1);
+        struct IRInstr jz_instr;
+        jz_instr.kind = IRInstr_JUMP_IF_ZERO;
+        jz_instr.as.jz.cond = *cond;
+        jz_instr.as.jz.target = else_label;
+        vec_insert(instrs, jz_instr);
 
         irfy_stmt(instrs, stmt->as.if_stmt.then_block);
 
-        ijmp.target = end_label;
-        i3.kind = IRInstr_JUMP;
-        i3.as.jmp = ijmp;
+        struct IRInstr jmp_end;
+        jmp_end.kind = IRInstr_JUMP;
+        jmp_end.as.jmp.target = end_label;
+        vec_insert(instrs, jmp_end);
 
-        vec_insert(instrs, i3);
-
-        ilbl1.name = else_label;
-
-        i2.kind = IRInstr_LABEL;
-        i2.as.label = ilbl1;
-
-        vec_insert(instrs, i2);
+        struct IRInstr label_else;
+        label_else.kind = IRInstr_LABEL;
+        label_else.as.label.name = else_label;
+        vec_insert(instrs, label_else);
 
         irfy_stmt(instrs, stmt->as.if_stmt.else_block);
 
-        ilbl2.name = end_label;
-
-        i4.kind = IRInstr_LABEL;
-        i4.as.label = ilbl2;
-
-        vec_insert(instrs, i4);
+        struct IRInstr label_end;
+        label_end.kind = IRInstr_LABEL;
+        label_end.as.label.name = end_label;
+        vec_insert(instrs, label_end);
       }
 
       break;
@@ -2426,11 +2421,27 @@ void free_ir_instr(struct IRInstr *instr)
         free_ir_val(instr->as.call.args.data[i]);
       }
       vec_free(&instr->as.call.args);
-      free_ir_val(instr->as.call.dst);
+
+      if (instr->as.call.dst) {
+        free_ir_val(instr->as.call.dst);
+      }
+      break;
+    }
+    case IRInstr_JUMP: {
+      break;
+    }
+    case IRInstr_JUMP_IF_ZERO: {
+      if (instr->as.jz.cond.kind == IRValue_VAR) {
+        free(instr->as.jz.cond.as.var);
+      }
+      break;
+    }
+    case IRInstr_LABEL: {
+      free(instr->as.label.name);
       break;
     }
     default:
-      assert(0);
+      assert(0 && "Unhandled IR instruction in free_ir_instr");
   }
 }
 
@@ -2625,6 +2636,7 @@ enum AsmInstrBinaryKind {
   AsmInstrBinary_SUB,
   AsmInstrBinary_MUL,
   AsmInstrBinary_DIV,
+  AsmInstrBinary_LESS,
 };
 
 enum AsmInstrKind {
@@ -2634,6 +2646,11 @@ enum AsmInstrKind {
   AsmInstr_BINARY,
   AsmInstr_RET,
   AsmInstr_CALL,
+  AsmInstr_JUMP,
+  AsmInstr_LABEL,
+  AsmInstr_CMP,
+  AsmInstr_JmpCC,
+  AsmInstr_SetCC,
 };
 
 enum AsmOperandKind {
@@ -2721,6 +2738,46 @@ struct AsmInstrPop {
   struct AsmOperand op;
 };
 
+struct AsmInstrLabel {
+  char *name;
+};
+
+struct AsmInstrJmp {
+  char *target;
+};
+
+enum ConditionCode {
+  /* signed */
+  E,  /* equal */
+  NE, /* not equal */
+  L,  /* less, */
+  LE, /* less or equal */
+  G,  /* greater */
+  GE, /* greater or equal */
+
+  /* unsigned */
+  A,  /* above */
+  AE, /* above or equal */
+  B,  /* below */
+  BE, /* below or equal */
+};
+
+struct AsmInstrJmpCC {
+  enum ConditionCode cc;
+  char *target;
+};
+
+struct AsmInstrSetCC {
+  enum ConditionCode cc;
+  struct AsmOperand op;
+};
+
+struct AsmInstrCmp {
+  enum AsmType asm_type;
+  struct AsmOperand lhs;
+  struct AsmOperand rhs;
+};
+
 struct AsmInstr {
   enum AsmInstrKind kind;
   enum AsmType asm_type;
@@ -2731,6 +2788,11 @@ struct AsmInstr {
     struct AsmInstrPush push;
     struct AsmInstrPop pop;
     struct AsmInstrCall call;
+    struct AsmInstrJmp jmp;
+    struct AsmInstrJmpCC jmpcc;
+    struct AsmInstrSetCC setcc;
+    struct AsmInstrCmp cmp;
+    struct AsmInstrLabel lbl;
   } as;
 };
 
@@ -2752,6 +2814,72 @@ struct AsmResult {
   char *msg;
   struct AsmProgram prog;
 };
+
+static inline int get_type_size(enum TypeKind kind)
+{
+  switch (kind) {
+    case I8_T:
+    case U8_T:
+      return 1;
+    case I16_T:
+    case U16_T:
+      return 2;
+    case I32_T:
+    case U32_T:
+      return 4;
+    case I64_T:
+    case U64_T:
+      return 8;
+    default:
+      return -1;
+  }
+}
+
+static inline bool is_unsigned(enum TypeKind kind)
+{
+  switch (kind) {
+    case U8_T:
+    case U16_T:
+    case U32_T:
+    case U64_T:
+      return true;
+    default:
+      return false;
+  }
+}
+
+Type get_common_type(struct Expr *lhs, struct Expr *rhs)
+{
+  Type t1 = lhs->type;
+  Type t2 = rhs->type;
+
+  if (t1.kind == t2.kind) {
+    return t1;
+  }
+
+  int size1 = get_type_size(t1.kind);
+  int size2 = get_type_size(t2.kind);
+
+  if (size1 == -1 || size2 == -1) {
+    return (Type){.kind = UNKNOWN_T};
+  }
+
+  if (size1 > size2) {
+    return t1;
+  }
+  if (size2 > size1) {
+    return t2;
+  }
+
+  if (is_unsigned(t1.kind)) {
+    return t1;
+  }
+  if (is_unsigned(t2.kind)) {
+    return t2;
+  }
+
+  return (Type){.kind = UNKNOWN_T};
+}
 
 struct AsmOperand codegen_irvalue(struct IRValue *val)
 {
@@ -2778,6 +2906,51 @@ struct AsmOperand codegen_irvalue(struct IRValue *val)
 void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
 {
   switch (ir_instr->kind) {
+    case IRInstr_JUMP: {
+      struct AsmInstr i;
+      struct AsmInstrJmp jmp;
+
+      jmp.target = ir_instr->as.jmp.target;
+
+      i.kind = AsmInstr_JUMP;
+      i.as.jmp = jmp;
+
+      vec_insert(instrs, i);
+      break;
+    }
+    case IRInstr_JUMP_IF_ZERO: {
+      struct AsmInstr i1, i2;
+      struct AsmInstrCmp cmp;
+      struct AsmInstrJmpCC jmpcc;
+      struct AsmOperand cond;
+
+      cond = codegen_irvalue(&ir_instr->as.jz.cond);
+
+      i1.kind = AsmInstr_CMP;
+      cmp.asm_type = cond.asm_type;
+      cmp.lhs = (struct AsmOperand){.kind = AsmOperand_IMM, .as.imm = 0};
+      cmp.rhs = cond;
+      i1.as.cmp = cmp;
+
+      i2.kind = AsmInstr_JmpCC;
+      i2.as.jmpcc.cc = E;
+      i2.as.jmpcc.target = ir_instr->as.jz.target;
+
+      vec_insert(instrs, i1);
+      vec_insert(instrs, i2);
+      break;
+    }
+    case IRInstr_LABEL: {
+      struct AsmInstr i;
+      struct AsmInstrLabel lbl;
+
+      lbl.name = ir_instr->as.label.name;
+      i.kind = AsmInstr_LABEL;
+      i.as.lbl = lbl;
+
+      vec_insert(instrs, i);
+      break;
+    }
     case IRInstr_CALL: {
       /* Since i64 is the only data type for now, we worry only about these
        * registers. The first six arguments to the callee are passed via these
@@ -2891,6 +3064,57 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       break;
     }
     case IRInstr_BINARY: {
+      if (ir_instr->as.binary.kind == IRInstrBinary_LESS) {
+        Type common = ir_instr->as.binary.dst->type;
+        bool is_signed = !is_unsigned(common.kind);
+
+        enum ConditionCode cc;
+
+        if (is_signed) {
+          switch (ir_instr->as.binary.kind) {
+            case EXPR_BIN_LESS:
+              cc = L;
+              break;
+            default:
+              assert(0 && "Unreachable or unhandled signed condition");
+          }
+        } else {
+          switch (ir_instr->as.binary.kind) {
+            case EXPR_BIN_LESS:
+              cc = B;
+              break;
+            default:
+              assert(0 && "Unreachable or unhandled unsigned condition");
+          }
+        }
+
+        struct AsmInstr cmp_instr;
+        cmp_instr.kind = AsmInstr_CMP;
+
+        struct AsmOperand lhs;
+        lhs = codegen_irvalue(ir_instr->as.binary.lhs);
+
+        cmp_instr.as.cmp.asm_type = lhs.asm_type;
+        cmp_instr.as.cmp.lhs = codegen_irvalue(ir_instr->as.binary.rhs);
+        cmp_instr.as.cmp.rhs = lhs;
+
+        struct AsmInstr mov_instr;
+        mov_instr.kind = AsmInstr_MOV;
+        mov_instr.asm_type = type_to_asm_type(ir_instr->as.binary.dst->type);
+        mov_instr.as.mov.src =
+            (struct AsmOperand){.kind = AsmOperand_IMM, .as.imm = 0};
+        mov_instr.as.mov.dst = codegen_irvalue(ir_instr->as.binary.dst);
+
+        struct AsmInstr setcc;
+        setcc.kind = AsmInstr_SetCC;
+        setcc.as.setcc.cc = cc;
+        setcc.as.setcc.op = codegen_irvalue(ir_instr->as.binary.dst);
+
+        vec_insert(instrs, cmp_instr);
+        vec_insert(instrs, mov_instr);
+        vec_insert(instrs, setcc);
+        break;
+      }
       enum AsmInstrBinaryKind kind;
       struct AsmOperand lhs, rhs, dst;
 
@@ -3502,6 +3726,15 @@ struct AsmProgram *replace_pseudo(struct AsmProgram *asmcode)
     for (int j = 0; j < asmcode->funcs.data[i].body.len; j++) {
       struct AsmInstr *asminstr = &asmcode->funcs.data[i].body.data[j];
       switch (asminstr->kind) {
+        case AsmInstr_SetCC: {
+          if (asminstr->as.setcc.op.kind == AsmOperand_PSEUDO) {
+            asminstr->as.setcc.op.kind = AsmOperand_STACK;
+            asminstr->as.setcc.op.as.stack_offset =
+                get_offset(map, asminstr->as.setcc.op.as.pseudo, &offset);
+          }
+          break;
+        }
+
         case AsmInstr_MOV: {
           if (asminstr->as.mov.src.kind == AsmOperand_PSEUDO) {
             asminstr->as.mov.src.kind = AsmOperand_STACK;
@@ -3531,6 +3764,19 @@ struct AsmProgram *replace_pseudo(struct AsmProgram *asmcode)
           break;
         }
         case AsmInstr_RET: {
+          break;
+        }
+        case AsmInstr_CMP: {
+          if (asminstr->as.cmp.lhs.kind == AsmOperand_PSEUDO) {
+            asminstr->as.cmp.lhs.kind = AsmOperand_STACK;
+            asminstr->as.cmp.lhs.as.stack_offset =
+                get_offset(map, asminstr->as.cmp.lhs.as.pseudo, &offset);
+          }
+          if (asminstr->as.cmp.rhs.kind == AsmOperand_PSEUDO) {
+            asminstr->as.cmp.rhs.kind = AsmOperand_STACK;
+            asminstr->as.cmp.rhs.as.stack_offset =
+                get_offset(map, asminstr->as.cmp.rhs.as.pseudo, &offset);
+          }
           break;
         }
         default:
@@ -3929,7 +4175,7 @@ void emit_operand(FILE *f, struct AsmOperand *op)
       break;
     }
     case AsmOperand_STACK: {
-      fprintf(f, "%d(%%rsp)", op->as.stack_offset);
+      fprintf(f, "%d(%%rbp)", op->as.stack_offset);
       break;
     }
   }
@@ -3948,6 +4194,124 @@ void emit(struct AsmProgram *prog)
       struct AsmInstr *instr = &prog->funcs.data[i].body.data[j];
       fprintf(f, "\t");
       switch (instr->kind) {
+        case AsmInstr_JUMP: {
+          fprintf(f, "jmp .L%s\n", instr->as.jmp.target);
+          break;
+        }
+        case AsmInstr_LABEL: {
+          fprintf(f, ".L%s:\n", instr->as.lbl.name);
+          break;
+        }
+        case AsmInstr_JmpCC: {
+          char *suffix;
+
+          switch (instr->as.jmpcc.cc) {
+            case E:
+              suffix = "e";
+              break;
+            case NE:
+              suffix = "ne";
+              break;
+            case L:
+              suffix = "l";
+              break;
+            case LE:
+              suffix = "le";
+              break;
+            case G:
+              suffix = "g";
+              break;
+            case GE:
+              suffix = "ge";
+              break;
+            case A:
+              suffix = "a";
+              break;
+            case AE:
+              suffix = "ae";
+              break;
+            case B:
+              suffix = "b";
+              break;
+            case BE:
+              suffix = "be";
+              break;
+          }
+
+          fprintf(f, "j%s .L%s\n", suffix, instr->as.jmpcc.target);
+          break;
+        }
+        case AsmInstr_SetCC: {
+          char *suffix;
+
+          switch (instr->as.jmpcc.cc) {
+            case E:
+              suffix = "e";
+              break;
+            case NE:
+              suffix = "ne";
+              break;
+            case L:
+              suffix = "l";
+              break;
+            case LE:
+              suffix = "le";
+              break;
+            case G:
+              suffix = "g";
+              break;
+            case GE:
+              suffix = "ge";
+              break;
+            case A:
+              suffix = "a";
+              break;
+            case AE:
+              suffix = "ae";
+              break;
+            case B:
+              suffix = "b";
+              break;
+            case BE:
+              suffix = "be";
+              break;
+          }
+
+          fprintf(f, "set%s ", suffix);
+          emit_operand(f, &instr->as.setcc.op);
+          fprintf(f, "\n");
+          break;
+        }
+        case AsmInstr_CMP: {
+          char *i;
+
+          switch (instr->as.cmp.asm_type) {
+            case AsmType_BYTE:
+              i = "cmpb";
+              break;
+            case AsmType_WORD:
+              i = "cmpw";
+              break;
+            case AsmType_LONGWORD:
+              i = "cmpl";
+              break;
+            case AsmType_QUADWORD:
+              i = "cmpq";
+              break;
+          }
+
+          fprintf(f, "%s ", i);
+
+          emit_operand(f, &instr->as.cmp.lhs);
+
+          fprintf(f, ", ");
+
+          emit_operand(f, &instr->as.cmp.rhs);
+
+          fprintf(f, "\n");
+
+          break;
+        }
         case AsmInstr_CALL: {
           fprintf(f, "call %s\n", instr->as.call.target);
           break;
@@ -4260,72 +4624,6 @@ bool value_fits_in_type(long long val, Type type)
     default:
       return false;
   }
-}
-
-static inline int get_type_size(enum TypeKind kind)
-{
-  switch (kind) {
-    case I8_T:
-    case U8_T:
-      return 1;
-    case I16_T:
-    case U16_T:
-      return 2;
-    case I32_T:
-    case U32_T:
-      return 4;
-    case I64_T:
-    case U64_T:
-      return 8;
-    default:
-      return -1;
-  }
-}
-
-static inline bool is_unsigned(enum TypeKind kind)
-{
-  switch (kind) {
-    case U8_T:
-    case U16_T:
-    case U32_T:
-    case U64_T:
-      return true;
-    default:
-      return false;
-  }
-}
-
-Type get_common_type(struct Expr *lhs, struct Expr *rhs)
-{
-  Type t1 = lhs->type;
-  Type t2 = rhs->type;
-
-  if (t1.kind == t2.kind) {
-    return t1;
-  }
-
-  int size1 = get_type_size(t1.kind);
-  int size2 = get_type_size(t2.kind);
-
-  if (size1 == -1 || size2 == -1) {
-    return (Type){.kind = UNKNOWN_T};
-  }
-
-  if (size1 > size2) {
-    return t1;
-  }
-  if (size2 > size1) {
-    return t2;
-  }
-
-  if (is_unsigned(t1.kind)) {
-    return t1;
-  }
-  if (is_unsigned(t2.kind)) {
-    return t2;
-  }
-
-  return (Type){.kind = UNKNOWN_T};
 }
 
 struct TypecheckResult typecheck_expr(struct Expr *expr,
