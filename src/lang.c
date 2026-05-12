@@ -2004,6 +2004,14 @@ void free_stmt(struct Stmt *stmt)
       free(stmt->as.let.init);
       break;
     }
+    case STMT_IF: {
+      free_expr(&stmt->as.if_stmt.cond);
+      free_stmt(stmt->as.if_stmt.then_block);
+      if (stmt->as.if_stmt.else_block) {
+        free_stmt(stmt->as.if_stmt.else_block);
+      }
+      break;
+    }
     case STMT_FN: {
       free(stmt->as.fn.name);
       for (int i = 0; i < stmt->as.fn.params.len; i++) {
@@ -2580,6 +2588,24 @@ void print_ir_binary_op(int kind)
     case IRInstrBinary_DIV:
       printf("DIV");
       break;
+    case IRInstrBinary_LESS:
+      printf("LESS");
+      break;
+    case IRInstrBinary_LESS_EQUAL:
+      printf("LESS EQUAL");
+      break;
+    case IRInstrBinary_GREATER:
+      printf("GREATER");
+      break;
+    case IRInstrBinary_GREATER_EQUAL:
+      printf("GREATER EQUAL");
+      break;
+    case IRInstrBinary_EQUAL_EQUAL:
+      printf("EQUAL EQUAL");
+      break;
+    case IRInstrBinary_BANG_EQUAL:
+      printf("BANG EQUAL");
+      break;
     default:
       printf("???");
       break;
@@ -2623,6 +2649,24 @@ void print_ir_instr(struct IRInstr *instr, int spaces)
   print_indent(spaces);
 
   switch (instr->kind) {
+    case IRInstr_JUMP: {
+      printf("IRInstr_JUMP(target = %s)\n", instr->as.jmp.target);
+      break;
+    }
+    case IRInstr_JUMP_IF_ZERO: {
+      printf("IRInstr_JUMP_IF_ZERO(");
+      print_indent(spaces + 2);
+      printf("target = %s,\n", instr->as.jz.target);
+      print_indent(spaces + 2);
+      printf("cond: ");
+      print_ir_val(&instr->as.jz.cond, 0);
+      printf(")");
+      break;
+    }
+    case IRInstr_LABEL: {
+      printf("IRInstr_LABEL(name = %s)\n", instr->as.label.name);
+      break;
+    }
     case IRInstr_COPY: {
       printf("IRInstr_COPY(\n");
 
@@ -3724,6 +3768,26 @@ void print_asm_operand(struct AsmOperand *op)
 void print_asm_instr(struct AsmInstr *instr)
 {
   switch (instr->kind) {
+    case AsmInstr_CMP: {
+      printf("AsmInstr_CMP(...)");
+      break;
+    }
+    case AsmInstr_JUMP: {
+      printf("AsmInstr_JUMP(target = %s)\n", instr->as.jmp.target);
+      break;
+    }
+    case AsmInstr_LABEL: {
+      printf("AsmInstr_LABEL(name = %s)\n", instr->as.lbl.name);
+      break;
+    }
+    case AsmInstr_SetCC: {
+      printf("AsmInstr_SetCC(...)\n");
+      break;
+    }
+    case AsmInstr_JmpCC: {
+      printf("AsmInstr_JmpCC(...)");
+      break;
+    }
     case AsmInstr_CALL: {
       printf("AsmInstr_CALL(...)");
       break;
@@ -3750,24 +3814,7 @@ void print_asm_instr(struct AsmInstr *instr)
     }
     case AsmInstr_BINARY: {
       printf("AsmInstr_BINARY(kind = ");
-      switch (instr->as.binary.kind) {
-        case AsmInstrBinary_ADD: {
-          printf("ADD");
-          break;
-        }
-        case AsmInstrBinary_SUB: {
-          printf("SUB");
-          break;
-        }
-        case AsmInstrBinary_MUL: {
-          printf("MUL");
-          break;
-        }
-        case AsmInstrBinary_DIV: {
-          printf("DIV");
-          break;
-        }
-      }
+      print_binary_op(instr->as.binary.kind);
       printf(", lhs = ");
       print_asm_operand(&instr->as.binary.lhs);
       printf(", rhs = ");
