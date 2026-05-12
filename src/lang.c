@@ -2659,6 +2659,7 @@ struct AsmOperand codegen_irvalue(struct IRValue *val)
       struct AsmOperand operand;
       operand.kind = AsmOperand_PSEUDO;
       operand.as.pseudo = val->as.var;
+      operand.asm_type = type_to_asm_type(val->type);
       return operand;
     }
     default:
@@ -4140,6 +4141,72 @@ bool value_fits_in_type(long long val, Type type)
   }
 }
 
+static inline int get_type_size(enum TypeKind kind)
+{
+  switch (kind) {
+    case I8_T:
+    case U8_T:
+      return 1;
+    case I16_T:
+    case U16_T:
+      return 2;
+    case I32_T:
+    case U32_T:
+      return 4;
+    case I64_T:
+    case U64_T:
+      return 8;
+    default:
+      return -1;
+  }
+}
+
+static inline bool is_unsigned(enum TypeKind kind)
+{
+  switch (kind) {
+    case U8_T:
+    case U16_T:
+    case U32_T:
+    case U64_T:
+      return true;
+    default:
+      return false;
+  }
+}
+
+Type get_common_type(struct Expr *lhs, struct Expr *rhs)
+{
+  Type t1 = lhs->type;
+  Type t2 = rhs->type;
+
+  if (t1.kind == t2.kind) {
+    return t1;
+  }
+
+  int size1 = get_type_size(t1.kind);
+  int size2 = get_type_size(t2.kind);
+
+  if (size1 == -1 || size2 == -1) {
+    return (Type){.kind = UNKNOWN_T};
+  }
+
+  if (size1 > size2) {
+    return t1;
+  }
+  if (size2 > size1) {
+    return t2;
+  }
+
+  if (is_unsigned(t1.kind)) {
+    return t1;
+  }
+  if (is_unsigned(t2.kind)) {
+    return t2;
+  }
+
+  return (Type){.kind = UNKNOWN_T};
+}
+
 struct TypecheckResult typecheck_expr(struct Expr *expr,
                                       struct Symbol *sym_table)
 {
@@ -4147,9 +4214,7 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
 
   switch (expr->kind) {
     case EXPR_LITERAL: {
-      if (expr->as.literal.kind == LITERAL_NUM) {
-        expr->type = (Type){.kind = I64_T};
-      } else {
+      if (expr->as.literal.kind == LITERAL_STR) {
         expr->type = (Type){.kind = STR_T};
       }
       break;
@@ -4187,15 +4252,17 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
         return rhs_res;
       }
 
-      if (expr->as.binary.lhs->type.kind != I64_T ||
-          expr->as.binary.rhs->type.kind != I64_T) {
-        return (struct TypecheckResult){
-            .is_ok = false,
-            .msg = "Binary operations require i64 operands",
-            .ast = NULL};
+      Type common_type;
+
+      common_type = get_common_type(expr->as.binary.lhs, expr->as.binary.rhs);
+      if (common_type.kind == UNKNOWN_T) {
+        return (struct TypecheckResult){.is_ok = false,
+                                        .msg = "Unable to compute common type",
+                                        .ast = NULL};
       }
 
-      expr->type = (Type){.kind = I64_T};
+      expr->type = common_type;
+
       break;
     }
     case EXPR_CALL: {
@@ -4221,8 +4288,27 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
           return arg_res;
         }
 
-        if (!types_equal(expr->as.call.arguments.data[i].type,
-                         callee_sym->type.as.func.params.data[i])) {
+        struct Expr *arg = &expr->as.call.arguments.data[i];
+        Type param_type = callee_sym->type.as.func.params.data[i];
+
+        if (arg->kind == EXPR_LITERAL && arg->as.literal.kind == LITERAL_NUM) {
+          long long val = arg->as.literal.as.num;
+
+          if (!value_fits_in_type(val, param_type)) {
+            return (struct TypecheckResult){
+                .is_ok = false,
+                .msg = "Numeric literal overflow for function parameter",
+                .ast = NULL};
+          }
+
+          arg->type = param_type;
+          arg->as.literal.type = param_type;
+        }
+
+        print_type(&arg->type);
+        print_type(&param_type);
+
+        if (!types_equal(arg->type, param_type)) {
           return (struct TypecheckResult){
               .is_ok = false,
               .msg = "Called with an arg of wrong type",
