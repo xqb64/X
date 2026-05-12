@@ -405,15 +405,17 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
       case '!': {
         if (lookahead(tokenizer, 1, "=") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_BANG_EQUAL, 2));
+        } else {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_BANG, 1));
         }
-        vec_insert(&tokens, mktoken(tokenizer, TOKEN_BANG, 1));
         break;
       }
       case '=': {
         if (lookahead(tokenizer, 1, "=") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_EQUAL_EQUAL, 2));
+        } else {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_EQUAL, 1));
         }
-        vec_insert(&tokens, mktoken(tokenizer, TOKEN_EQUAL, 1));
         break;
       }
       case ',': {
@@ -435,15 +437,17 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
       case '>': {
         if (lookahead(tokenizer, 1, "=") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_GREATER_EQUAL, 2));
+        } else {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_GREATER, 1));
         }
-        vec_insert(&tokens, mktoken(tokenizer, TOKEN_GREATER, 1));
         break;
       }
       case '<': {
         if (lookahead(tokenizer, 1, "=") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_LESS_EQUAL, 2));
+        } else {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_LESS, 1));
         }
-        vec_insert(&tokens, mktoken(tokenizer, TOKEN_LESS, 1));
         break;
       }
       default:
@@ -1385,11 +1389,7 @@ struct ParseFnResult comparison(struct Parser *parser)
 
     struct ExprBin binexpr;
 
-    if (strncmp(op, "<", 1) == 0) {
-      binexpr.kind = EXPR_BIN_LESS;
-    } else if (strncmp(op, ">", 1) == 0) {
-      binexpr.kind = EXPR_BIN_GREATER;
-    } else if (strncmp(op, "<=", 2) == 0) {
+    if (strncmp(op, "<=", 2) == 0) {
       binexpr.kind = EXPR_BIN_LESS_EQUAL;
     } else if (strncmp(op, ">=", 2) == 0) {
       binexpr.kind = EXPR_BIN_GREATER_EQUAL;
@@ -1397,6 +1397,10 @@ struct ParseFnResult comparison(struct Parser *parser)
       binexpr.kind = EXPR_BIN_EQUAL_EQUAL;
     } else if (strncmp(op, "!=", 2) == 0) {
       binexpr.kind = EXPR_BIN_BANG_EQUAL;
+    } else if (strncmp(op, "<", 1) == 0) {
+      binexpr.kind = EXPR_BIN_LESS;
+    } else if (strncmp(op, ">", 1) == 0) {
+      binexpr.kind = EXPR_BIN_GREATER;
     }
 
     binexpr.lhs = ALLOC(left);
@@ -4784,7 +4788,6 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
     }
     case EXPR_VARIABLE: {
       struct Symbol *sym = lookup_symbol(sym_table, expr->as.var.name);
-      printf("looking up sym: %s\n", expr->as.var.name);
 
       if (!sym) {
         return (struct TypecheckResult){
@@ -4983,6 +4986,19 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
         if (!res.is_ok) {
           return res;
         }
+
+        if (stmt->as.ret.val->kind == EXPR_LITERAL &&
+            stmt->as.ret.val->as.literal.kind == LITERAL_NUM) {
+          long long val = stmt->as.ret.val->as.literal.as.num;
+          if (!value_fits_in_type(val, stmt->as.ret.expected_retval)) {
+            return (struct TypecheckResult){
+                .is_ok = false,
+                .msg = "Numeric literal overflow for the target type"};
+          }
+        }
+
+        stmt->as.ret.val->type = stmt->as.ret.expected_retval;
+        stmt->as.ret.val->as.literal.type = stmt->as.ret.expected_retval;
 
         if (stmt->as.ret.val->type.kind != stmt->as.ret.expected_retval.kind) {
           return (struct TypecheckResult){
@@ -5530,6 +5546,9 @@ int main(int argc, char **argv)
     fprintf(stderr, "err: %s\n", typecheck_result.msg);
     goto free_up2_parse;
   }
+
+  printf("typechecked ast:\n");
+  print_ast(typecheck_result.ast);
 
   if (target_stage == STAGE_TYPECHECK) {
     goto free_up2_parse;
