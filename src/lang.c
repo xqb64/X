@@ -1955,6 +1955,9 @@ enum IRInstrKind {
   IRInstr_RET,
   IRInstr_COPY,
   IRInstr_CALL,
+  IRInstr_JUMP,
+  IRInstr_JUMP_IF_ZERO,
+  IRInstr_LABEL,
 };
 
 enum IRInstrBinaryKind {
@@ -1987,6 +1990,19 @@ struct IRInstr_Call {
   struct IRValue *dst;
 };
 
+struct IRInstr_Jump {
+  char *target;
+};
+
+struct IRInstr_JumpIfZero {
+  struct IRValue cond;
+  char *target;
+};
+
+struct IRInstr_Label {
+  char *name;
+};
+
 struct IRInstr_Binary {
   enum IRInstrBinaryKind kind;
   struct IRValue *lhs;
@@ -2010,6 +2026,9 @@ struct IRInstr {
     struct IRInstr_Binary binary;
     struct IRInstr_Ret ret;
     struct IRInstr_Copy copy;
+    struct IRInstr_Jump jmp;
+    struct IRInstr_JumpIfZero jz;
+    struct IRInstr_Label label;
   } as;
 };
 
@@ -2186,11 +2205,99 @@ void free_ir_val(struct IRValue *val)
   free(val);
 }
 
+char *mklbl(char *s, int d)
+{
+  int digit_len, total_len, i;
+  char *lbl;
+
+  digit_len = snprintf(NULL, 0, "%d", d);
+  total_len = strlen(s) + strlen(".") + digit_len + 1;
+
+  lbl = malloc(total_len);
+  snprintf(lbl, total_len, "%s.%d", s, i);
+
+  return lbl;
+}
+
 void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
 {
   switch (stmt->kind) {
     case STMT_FN:
       assert(0);
+    case STMT_IF: {
+      int tmp;
+      char *else_label, *end_label;
+      struct IRValue *cond;
+
+      tmp = mktmp();
+
+      else_label = mklbl("Else", tmp);
+      end_label = mklbl("End", tmp);
+
+      cond = irfy_expr(instrs, &stmt->as.if_stmt.cond);
+
+      if (!stmt->as.if_stmt.else_block) {
+        struct IRInstr i1, i2;
+        struct IRInstr_JumpIfZero ijz;
+        struct IRInstr_Label ilbl;
+
+        ijz.cond = *cond;
+        ijz.target = end_label;
+
+        i1.kind = IRInstr_JUMP_IF_ZERO;
+        i1.as.jz = ijz;
+
+        vec_insert(instrs, i1);
+
+        irfy_stmt(instrs, stmt->as.if_stmt.then_block);
+
+        ilbl.name = end_label;
+
+        i2.kind = IRInstr_LABEL;
+        i2.as.label = ilbl;
+
+        vec_insert(instrs, i2);
+      } else {
+        struct IRInstr i1, i2, i3, i4;
+        struct IRInstr_JumpIfZero ijz;
+        struct IRInstr_Label ilbl1, ilbl2;
+        struct IRInstr_Jump ijmp;
+
+        ijz.cond = *cond;
+        ijz.target = else_label;
+
+        i1.kind = IRInstr_JUMP_IF_ZERO;
+        i1.as.jz = ijz;
+
+        vec_insert(instrs, i1);
+
+        irfy_stmt(instrs, stmt->as.if_stmt.then_block);
+
+        ijmp.target = end_label;
+        i3.kind = IRInstr_JUMP;
+        i3.as.jmp = ijmp;
+
+        vec_insert(instrs, i3);
+
+        ilbl1.name = else_label;
+
+        i2.kind = IRInstr_LABEL;
+        i2.as.label = ilbl1;
+
+        vec_insert(instrs, i2);
+
+        irfy_stmt(instrs, stmt->as.if_stmt.else_block);
+
+        ilbl2.name = end_label;
+
+        i4.kind = IRInstr_LABEL;
+        i4.as.label = ilbl2;
+
+        vec_insert(instrs, i4);
+      }
+
+      break;
+    }
     case STMT_LET: {
       struct IRValue *res, *dst;
       struct IRInstr cpy;
