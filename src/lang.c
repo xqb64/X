@@ -4156,6 +4156,7 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
     }
     case EXPR_VARIABLE: {
       struct Symbol *sym = lookup_symbol(sym_table, expr->as.var.name);
+      printf("looking up sym: %s\n", expr->as.var.name);
 
       if (!sym) {
         return (struct TypecheckResult){
@@ -4350,6 +4351,25 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
       }
       break;
     }
+    case STMT_IF: {
+      struct TypecheckResult cond_res, then_res, else_res;
+
+      cond_res = typecheck_expr(&stmt->as.if_stmt.cond, *sym_table);
+      if (!cond_res.is_ok) {
+        return cond_res;
+      }
+
+      then_res = typecheck_stmt(stmt->as.if_stmt.then_block, sym_table);
+      if (!then_res.is_ok) {
+        return then_res;
+      }
+
+      if (stmt->as.if_stmt.else_block) {
+        else_res = typecheck_stmt(stmt->as.if_stmt.else_block, sym_table);
+      }
+
+      break;
+    }
     default:
       assert(0);
   }
@@ -4528,6 +4548,25 @@ struct ResolveResult resolve_stmt(struct VariableMap **varmap,
                                   struct Stmt *stmt)
 {
   switch (stmt->kind) {
+    case STMT_IF: {
+      struct ResolveResult cond_res, then_res, else_res;
+
+      cond_res = resolve_expr(varmap, &stmt->as.if_stmt.cond);
+      if (!cond_res.is_ok) {
+        return cond_res;
+      }
+
+      then_res = resolve_stmt(varmap, stmt->as.if_stmt.then_block);
+      if (!then_res.is_ok) {
+        return then_res;
+      }
+
+      if (stmt->as.if_stmt.else_block) {
+        else_res = resolve_stmt(varmap, stmt->as.if_stmt.else_block);
+      }
+
+      break;
+    }
     case STMT_FN: {
       struct VariableMap *variable_map, *outer_map;
       char *cpy;
