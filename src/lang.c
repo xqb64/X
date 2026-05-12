@@ -92,6 +92,7 @@ end:
 
 enum TokenKind {
   TOKEN_FN,
+  TOKEN_IF,
   TOKEN_IDENTIFIER,
   TOKEN_LPAREN,
   TOKEN_VOID,
@@ -305,7 +306,9 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
       case 'i': {
         if (lookahead(tokenizer, 1, "8") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_I8, 2));
-        } else if (lookahead(tokenizer, 2, "16") == 0) {
+        } else if (lookahead(tokenizer, 1, "f")) {
+	  vec_insert(&tokens, mktoken(tokenizer, TOKEN_IF, 2));
+	} else if (lookahead(tokenizer, 2, "16") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_I16, 3));
         } else if (lookahead(tokenizer, 2, "32") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_I32, 3));
@@ -1444,6 +1447,12 @@ struct ParseFnResult parse_let_stmt(struct Parser *parser)
 
   result.as.stmt = (struct Stmt){.kind = STMT_LET, .as.let = let_stmt};
 
+  return result;
+}
+
+struct ParseFnResult parse_if_stmt(struct Parser *parser)
+{
+  struct ParseFnResult result;
   return result;
 }
 
@@ -4463,7 +4472,7 @@ struct ResolveResult resolve(struct AST *ast)
   return (struct ResolveResult){.is_ok = true, .msg = NULL, .as.ast = ast};
 }
 
-typedef enum {
+enum TargetStage {
   STAGE_FULL,
   STAGE_TOKENIZE,
   STAGE_PARSE,
@@ -4476,16 +4485,16 @@ typedef enum {
   STAGE_EMIT,
   STAGE_ASM,
   STAGE_LINK,
-} TargetStage;
+};
 
-typedef struct {
-  TargetStage target_stage;
+struct CompilerOptions {
+  enum TargetStage target_stage;
   const char *path;
-} CompilerOptions;
+};
 
-CompilerOptions parse_args(int argc, char **argv)
+struct CompilerOptions parse_args(int argc, char **argv)
 {
-  CompilerOptions opts;
+  struct CompilerOptions opts;
   opts.target_stage = STAGE_FULL;
   opts.path = "spam.x";
 
@@ -4573,10 +4582,9 @@ CompilerOptions parse_args(int argc, char **argv)
 
 int main(int argc, char **argv)
 {
-  CompilerOptions opts = parse_args(argc, argv);
-  TargetStage target_stage = opts.target_stage;
-  const char *path = opts.path;
-
+  struct CompilerOptions opts;
+  enum TargetStage target_stage;
+  const char *path;
   struct ReadFileResult read_file_result;
   char *src;
   struct Tokenizer tokenizer;
@@ -4591,6 +4599,10 @@ int main(int argc, char **argv)
   struct IRProgram ir_prog;
   struct AsmResult asm_result;
   struct AsmProgram asm_prog;
+
+  opts = parse_args(argc, argv);
+  target_stage = opts.target_stage;
+  path = opts.path;
 
   read_file_result = read_file(path);
   if (!read_file_result.is_ok) {
