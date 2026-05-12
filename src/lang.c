@@ -2091,6 +2091,7 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       rhs = irfy_expr(instrs, expr->as.binary.rhs);
 
       dst = make_ir_var();
+      dst->type = expr->type;
 
       enum IRInstrBinaryKind kind;
       switch (expr->as.binary.kind) {
@@ -2709,8 +2710,9 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         struct AsmInstr mov_instr;
         mov_instr.kind = AsmInstr_MOV;
         mov_instr.as.mov.src = arg_op;
-        mov_instr.as.mov.dst =
-            (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = arg_regs[i]};
+        mov_instr.as.mov.dst = (struct AsmOperand){.kind = AsmOperand_REG,
+                                                   .as.reg = arg_regs[i],
+                                                   .asm_type = arg_op.asm_type};
         mov_instr.asm_type = arg_op.asm_type;
 
         vec_insert(instrs, mov_instr);
@@ -2753,8 +2755,8 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         struct AsmOperand dst_op = codegen_irvalue(ir_instr->as.call.dst);
         struct AsmInstr mov_instr;
         mov_instr.kind = AsmInstr_MOV;
-        mov_instr.as.mov.src =
-            (struct AsmOperand){.kind = AsmOperand_REG, .as.reg = AX};
+        mov_instr.as.mov.src = (struct AsmOperand){
+            .kind = AsmOperand_REG, .as.reg = AX, .asm_type = dst_op.asm_type};
         mov_instr.as.mov.dst = dst_op;
         mov_instr.asm_type = dst_op.asm_type;
         vec_insert(instrs, mov_instr);
@@ -2919,14 +2921,20 @@ struct AsmFunction codegen_fn(struct IRFunction *ir_func)
   /* Move the values from the registers and from the stack that we had received
    * previously by the caller, into pseudo registers.  */
   for (int i = 0; i < num_params; i++) {
+    enum AsmType param_asm_type;
+
+    param_asm_type = type_to_asm_type(ir_func->params.data[i].type);
+
     struct AsmOperand dst;
     dst.kind = AsmOperand_PSEUDO;
     dst.as.pseudo = ir_func->params.data[i].name;
+    dst.asm_type = param_asm_type;
 
     struct AsmOperand src;
     if (i < 6) {
       src.kind = AsmOperand_REG;
       src.as.reg = arg_regs[i];
+      src.asm_type = param_asm_type;
     } else {
       src.kind = AsmOperand_STACK;
       /* Upon executing the call instruction by the caller.
@@ -2939,12 +2947,14 @@ struct AsmFunction codegen_fn(struct IRFunction *ir_func)
        * stack argument is at 16(%rbp) (more backward in time).
        * The local variables are at -8(%rbp).  */
       src.as.stack_offset = 16 + ((i - 6) * 8);
+      src.asm_type = param_asm_type;
     }
 
     struct AsmInstr param_mov;
     param_mov.kind = AsmInstr_MOV;
     param_mov.as.mov.src = src;
     param_mov.as.mov.dst = dst;
+    param_mov.asm_type = param_asm_type;
 
     vec_insert(&func.body, param_mov);
   }
@@ -3465,11 +3475,13 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
             mov1.src = asminstr->as.mov.src;
             mov1.dst = scratch_op;
             i1.as.mov = mov1;
+            i1.asm_type = asminstr->asm_type;
 
             i2.kind = AsmInstr_MOV;
             mov2.src = scratch_op;
             mov2.dst = asminstr->as.mov.dst;
             i2.as.mov = mov2;
+            i2.asm_type = asminstr->asm_type;
 
             vec_insert(&instrs, i1);
             vec_insert(&instrs, i2);
@@ -3874,7 +3886,7 @@ void emit(struct AsmProgram *prog)
         case AsmInstr_BINARY: {
           switch (instr->as.binary.kind) {
             case AsmInstrBinary_ADD: {
-              fprintf(f, "add ");
+              fprintf(f, "add");
 
               switch (instr->asm_type) {
                 case AsmType_BYTE:
@@ -3890,6 +3902,8 @@ void emit(struct AsmProgram *prog)
                   fprintf(f, "q");
                   break;
               }
+
+              fprintf(f, " ");
 
               break;
             }
