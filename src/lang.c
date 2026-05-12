@@ -557,6 +557,21 @@ void print_token(struct Token *token)
     case TOKEN_LESS:
       printf("less");
       break;
+    case TOKEN_LESS_EQUAL:
+      printf("less equal");
+      break;
+    case TOKEN_GREATER:
+      printf("greater");
+      break;
+    case TOKEN_GREATER_EQUAL:
+      printf("greater equal");
+      break;
+    case TOKEN_EQUAL_EQUAL:
+      printf("equal equal");
+      break;
+    case TOKEN_BANG_EQUAL:
+      printf("bang equal");
+      break;
     case TOKEN_IF:
       printf("if");
       break;
