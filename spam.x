@@ -4,5 +4,6 @@ fn fib(n: i32) -> i32 {
 }
 
 fn main(void) -> i32 {
-  ret fib(10);
+  let f: i32 = fib(10);
+  ret f;
 }
