@@ -5273,7 +5273,7 @@ struct VariableMap {
   struct Variable value;
 };
 
-void insert_var_into_varmap(struct VariableMap **varmap, char *name,
+void varmap_insert(struct VariableMap **varmap, char *name,
                             char *uniq_name, bool current_scope)
 {
   struct Variable v;
@@ -5292,7 +5292,7 @@ void insert_var_into_varmap(struct VariableMap **varmap, char *name,
   *varmap = node;
 }
 
-char *lookup_varmap(struct VariableMap *varmap, char *name)
+char *varmap_get(struct VariableMap *varmap, char *name)
 {
   while (varmap) {
     if (strcmp(varmap->name, name) == 0) {
@@ -5310,7 +5310,7 @@ struct ResolveResult resolve_expr(struct VariableMap **varmap,
     case EXPR_LITERAL:
       break;
     case EXPR_VARIABLE: {
-      char *resolved_name = lookup_varmap(*varmap, expr->as.var.name);
+      char *resolved_name = varmap_get(*varmap, expr->as.var.name);
       if (!resolved_name) {
         return (struct ResolveResult){.is_ok = false,
                                       .msg = "Undefined variable"};
@@ -5380,7 +5380,7 @@ struct ResolveResult resolve_param(struct VariableMap **varmap,
 
   uniq_name = mkuniq(param->name);
 
-  insert_var_into_varmap(varmap, param->name, uniq_name, true);
+  varmap_insert(varmap, param->name, uniq_name, true);
 
   free(param->name);
 
@@ -5422,7 +5422,7 @@ struct ResolveResult resolve_stmt(struct VariableMap **varmap,
       cpy = strdup(stmt->as.fn.name);
 
       if (varmap) {
-        insert_var_into_varmap(varmap, stmt->as.fn.name, cpy, true);
+        varmap_insert(varmap, stmt->as.fn.name, cpy, true);
       }
 
       variable_map = varmap ? *varmap : NULL;
@@ -5482,7 +5482,7 @@ struct ResolveResult resolve_stmt(struct VariableMap **varmap,
 
       uniq_name = mkuniq(stmt->as.let.name);
 
-      insert_var_into_varmap(varmap, stmt->as.let.name, uniq_name, true);
+      varmap_insert(varmap, stmt->as.let.name, uniq_name, true);
 
       free(stmt->as.let.name);
       stmt->as.let.name = strdup(uniq_name);
