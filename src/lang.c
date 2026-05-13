@@ -108,7 +108,7 @@ enum TokenKind {
   TOKEN_BANG_EQUAL,
   TOKEN_LET,
   TOKEN_EQUAL,
-  TOKEN_RETURN,
+  TOKEN_RET,
   TOKEN_NUMBER,
   TOKEN_PLUS,
   TOKEN_MINUS,
@@ -344,8 +344,8 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
         break;
       }
       case 'r': {
-        if (lookahead(tokenizer, 5, "eturn") == 0) {
-          vec_insert(&tokens, mktoken(tokenizer, TOKEN_RETURN, 6));
+        if (lookahead(tokenizer, 2, "et") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_RET, 3));
         } else {
           vec_insert(&tokens, identifier(tokenizer));
         }
@@ -477,8 +477,8 @@ void print_token(struct Token *token)
     case TOKEN_VOID:
       printf("void");
       break;
-    case TOKEN_RETURN:
-      printf("return");
+    case TOKEN_RET:
+      printf("ret");
       break;
     case TOKEN_IDENTIFIER:
       printf("ident(%.*s)", token->len, token->start);
@@ -1441,7 +1441,7 @@ struct ParseFnResult parse_ret_stmt(struct Parser *parser)
   result.is_ok = true;
   result.msg = NULL;
 
-  token_ret = consume(parser, TOKEN_RETURN);
+  token_ret = consume(parser, TOKEN_RET);
   if (!token_ret) {
     return (struct ParseFnResult){
         .is_ok = false, .as.stmt = {0}, .msg = "Expected token 'return'"};
@@ -1683,7 +1683,7 @@ struct ParseFnResult parse_stmt(struct Parser *parser)
       result.as.stmt = fn_res.as.stmt;
       break;
     }
-    case TOKEN_RETURN: {
+    case TOKEN_RET: {
       struct ParseFnResult ret_res = parse_ret_stmt(parser);
       if (!ret_res.is_ok) {
         return ret_res;
@@ -5175,10 +5175,10 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
                 .is_ok = false,
                 .msg = "Numeric literal overflow for the target type"};
           }
-        }
 
-        stmt->as.ret.val->type = stmt->as.ret.expected_retval;
-        stmt->as.ret.val->as.literal.type = stmt->as.ret.expected_retval;
+          stmt->as.ret.val->type = stmt->as.ret.expected_retval;
+          stmt->as.ret.val->as.literal.type = stmt->as.ret.expected_retval;
+        }
 
         if (stmt->as.ret.val->type.kind != stmt->as.ret.expected_retval.kind) {
           return (struct TypecheckResult){
@@ -5273,8 +5273,8 @@ struct VariableMap {
   struct Variable value;
 };
 
-void varmap_insert(struct VariableMap **varmap, char *name,
-                            char *uniq_name, bool current_scope)
+void varmap_insert(struct VariableMap **varmap, char *name, char *uniq_name,
+                   bool current_scope)
 {
   struct Variable v;
   struct VariableMap *node;
