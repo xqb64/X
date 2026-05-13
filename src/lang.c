@@ -3538,7 +3538,6 @@ void print_asm_operand(struct AsmOperand *op)
               assert(0);
           }
 
-          printf(")");
           break;
         }
         case DI: {
@@ -3749,6 +3748,9 @@ void print_asm_operand(struct AsmOperand *op)
           break;
         }
       }
+
+      printf(")");
+
       break;
     }
     case AsmOperand_STACK: {
@@ -3760,65 +3762,180 @@ void print_asm_operand(struct AsmOperand *op)
   }
 }
 
-void print_asm_instr(struct AsmInstr *instr)
+void print_asm_type(enum AsmType type)
 {
+  switch (type) {
+    case AsmType_BYTE:
+      printf("AsmType_BYTE");
+      break;
+    case AsmType_WORD:
+      printf("AsmType_WORD");
+      break;
+    case AsmType_LONGWORD:
+      printf("AsmType_LONGWORD");
+      break;
+    case AsmType_QUADWORD:
+      printf("AsmType_QUADWORD");
+      break;
+    default:
+      assert(0);
+  }
+}
+
+void print_condition_code(enum ConditionCode cc)
+{
+  switch (cc) {
+    case E:
+      printf("E");
+      break;
+    case NE:
+      printf("NE");
+      break;
+    case L:
+      printf("L");
+      break;
+    case LE:
+      printf("LE");
+      break;
+    case G:
+      printf("G");
+      break;
+    case GE:
+      printf("GE");
+      break;
+    case A:
+      printf("A");
+      break;
+    case AE:
+      printf("AE");
+      break;
+    case B:
+      printf("B");
+      break;
+    case BE:
+      printf("BE");
+      break;
+    default:
+      printf("???");
+      break;
+  }
+}
+
+void print_asm_instr(struct AsmInstr *instr, int spaces)
+{
+  print_indent(spaces);
+
   switch (instr->kind) {
     case AsmInstr_CMP: {
-      printf("AsmInstr_CMP(...)");
+      printf("AsmInstr_CMP(\n");
+      print_indent(spaces + 2);
+      printf("asm_type = ");
+      print_asm_type(instr->as.cmp.asm_type);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("lhs = ");
+      print_asm_operand(&instr->as.cmp.lhs);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("rhs = ");
+      print_asm_operand(&instr->as.cmp.rhs);
+      printf(",\n");
+      print_indent(spaces);
+      printf(",)\n");
       break;
     }
     case AsmInstr_JUMP: {
-      printf("AsmInstr_JUMP(target = %s)\n", instr->as.jmp.target);
+      printf("AsmInstr_JUMP(target = %s),\n", instr->as.jmp.target);
       break;
     }
     case AsmInstr_LABEL: {
-      printf("AsmInstr_LABEL(name = %s)\n", instr->as.lbl.name);
+      printf("AsmInstr_LABEL(name = %s),\n", instr->as.lbl.name);
       break;
     }
     case AsmInstr_SetCC: {
-      printf("AsmInstr_SetCC(...)\n");
+      printf("AsmInstr_SetCC(\n");
+      print_indent(spaces + 2);
+      printf("cc = ");
+      print_condition_code(instr->as.setcc.cc);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("op = ");
+      print_asm_operand(&instr->as.setcc.op);
+      printf(",\n");
+      print_indent(spaces);
+      printf("),\n");
       break;
     }
     case AsmInstr_JmpCC: {
-      printf("AsmInstr_JmpCC(...)");
+      printf("AsmInstr_JmpCC(\n");
+      print_indent(spaces + 2);
+      printf("cc = ");
+      print_condition_code(instr->as.jmpcc.cc);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("target = %s,\n", instr->as.jmpcc.target);
+      print_indent(spaces);
+      printf("),\n");
       break;
     }
     case AsmInstr_CALL: {
-      printf("AsmInstr_CALL(...)");
+      printf("AsmInstr_CALL(target = %s),\n", instr->as.call.target);
       break;
     }
     case AsmInstr_POP: {
-      printf("AsmInstr_POP(op = ");
+      printf("AsmInstr_POP(\n");
+      print_indent(spaces + 2);
+      printf("op = ");
       print_asm_operand(&instr->as.pop.op);
-      printf(")\n");
+      printf(",\n");
+      print_indent(spaces);
+      printf("),\n");
       break;
     }
     case AsmInstr_PUSH: {
-      printf("AsmInstr_PUSH(op = ");
+      printf("AsmInstr_PUSH(\n");
+      print_indent(spaces + 2);
+      printf("op = ");
       print_asm_operand(&instr->as.push.op);
-      printf(")\n");
+      printf(",\n");
+      print_indent(spaces);
+      printf("),\n");
       break;
     }
     case AsmInstr_MOV: {
-      printf("AsmInstr_MOV(src = ");
+      printf("AsmInstr_MOV(\n");
+      print_indent(spaces + 2);
+      printf("src = ");
       print_asm_operand(&instr->as.mov.src);
-      printf(", dst = ");
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("dst = ");
       print_asm_operand(&instr->as.mov.dst);
-      printf(")\n");
+      printf(",\n");
+      print_indent(spaces);
+      printf("),\n");
       break;
     }
     case AsmInstr_BINARY: {
-      printf("AsmInstr_BINARY(kind = ");
+      printf("AsmInstr_BINARY(\n");
+      print_indent(spaces + 2);
+      printf("kind = ");
       print_binary_op(instr->as.binary.kind);
-      printf(", lhs = ");
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("lhs = ");
       print_asm_operand(&instr->as.binary.lhs);
-      printf(", rhs = ");
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("rhs = ");
       print_asm_operand(&instr->as.binary.rhs);
-      printf(")\n");
+      printf(",\n");
+      print_indent(spaces);
+      printf("),\n");
       break;
     }
     case AsmInstr_RET: {
-      printf("AsmInstr_RET\n");
+      printf("AsmInstr_RET,\n");
       break;
     }
   }
@@ -3826,10 +3943,18 @@ void print_asm_instr(struct AsmInstr *instr)
 
 void print_asm_fn(struct AsmFunction *fn)
 {
-  printf("AsmFunction(name = %s, body: [\n", fn->name);
+  printf("AsmFunction(\n");
+  print_indent(2);
+  printf("name = %s,\n", fn->name);
+  print_indent(2);
+  printf("body: [\n");
+
   for (int i = 0; i < fn->body.len; i++) {
-    print_asm_instr(&fn->body.data[i]);
+    print_asm_instr(&fn->body.data[i], 4);
   }
+
+  print_indent(2);
+  printf("]\n)\n");
 }
 
 void print_asm(struct AsmProgram *prog)
