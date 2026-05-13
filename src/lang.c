@@ -1787,7 +1787,9 @@ void print_expr(struct Expr *expr, int spaces)
         print_indent(spaces + 2);
         printf("type: ");
         print_type(&expr->as.literal.type);
-        printf(")\n");
+        printf("\n");
+        print_indent(spaces);
+        printf(")");
       } else {
         printf("Literal(\"%s\")", expr->as.literal.as.str);
       }
@@ -1813,7 +1815,7 @@ void print_expr(struct Expr *expr, int spaces)
       print_indent(spaces + 2);
       printf("kind = ");
       print_binary_op(expr->as.binary.kind);
-      printf(",\n");
+      printf("\n");
 
       print_indent(spaces);
       printf(")");
@@ -1824,7 +1826,7 @@ void print_expr(struct Expr *expr, int spaces)
 
       print_indent(spaces + 2);
       printf("target = ");
-      print_expr(expr->as.call.target, 0);
+      print_expr(expr->as.call.target, spaces + 2);
       printf(",\n");
 
       print_indent(spaces + 2);
@@ -1832,12 +1834,12 @@ void print_expr(struct Expr *expr, int spaces)
 
       for (int i = 0; i < expr->as.call.arguments.len; i++) {
         print_indent(spaces + 4);
-        print_expr(&expr->as.call.arguments.data[i], 0);
+        print_expr(&expr->as.call.arguments.data[i], spaces + 4);
         printf(",\n");
       }
 
       print_indent(spaces + 2);
-      printf("],\n");
+      printf("]\n");
 
       print_indent(spaces);
       printf(")");
@@ -1850,30 +1852,30 @@ void print_stmt(struct Stmt *stmt, int spaces)
 {
   switch (stmt->kind) {
     case STMT_IF: {
-      printf("STMT_IF\n");
+      print_indent(spaces);
+      printf("STMT_IF(\n");
 
       print_indent(spaces + 2);
-      printf("cond =");
-      print_expr(&stmt->as.if_stmt.cond, 0);
+      printf("cond = ");
+      print_expr(&stmt->as.if_stmt.cond, spaces + 2);
       printf(",\n");
 
       print_indent(spaces + 2);
-      printf("then: ");
-      print_stmt(stmt->as.if_stmt.then_block, 0);
-
-      printf("\n");
-
-      print_indent(spaces + 2);
-      printf("else: ");
+      printf("then = \n");
+      print_stmt(stmt->as.if_stmt.then_block, spaces + 2);
 
       if (stmt->as.if_stmt.else_block) {
-        print_stmt(stmt->as.if_stmt.else_block, 0);
+        print_indent(spaces + 2);
+        printf("else = \n");
+        print_stmt(stmt->as.if_stmt.else_block, spaces + 4);
       }
-      printf("\n)");
 
+      print_indent(spaces);
+      printf(")\n");
       break;
     }
     case STMT_FN: {
+      print_indent(spaces);
       printf("STMT_FN(\n");
 
       print_indent(spaces + 2);
@@ -1891,13 +1893,14 @@ void print_stmt(struct Stmt *stmt, int spaces)
       print_indent(spaces + 2);
       printf("retval = ");
       print_type(&stmt->as.fn.retval);
-      printf(",\n");
+      printf("\n");
 
       print_indent(spaces);
       printf(")\n");
       break;
     }
     case STMT_BLOCK: {
+      print_indent(spaces);
       printf("STMT_BLOCK(\n");
 
       print_indent(spaces + 2);
@@ -1921,6 +1924,8 @@ void print_stmt(struct Stmt *stmt, int spaces)
       printf("val = ");
       if (stmt->as.ret.val) {
         print_expr(stmt->as.ret.val, spaces + 2);
+      } else {
+        printf("NULL");
       }
       printf("\n");
 
@@ -1941,9 +1946,9 @@ void print_stmt(struct Stmt *stmt, int spaces)
       printf(",\n");
 
       print_indent(spaces + 2);
-      printf("init: ");
+      printf("init = ");
       print_expr(stmt->as.let.init, spaces + 2);
-      printf(",\n");
+      printf("\n");
 
       print_indent(spaces);
       printf(")\n");
@@ -2645,17 +2650,19 @@ void print_ir_instr(struct IRInstr *instr, int spaces)
       break;
     }
     case IRInstr_JUMP_IF_ZERO: {
-      printf("IRInstr_JUMP_IF_ZERO(");
+      printf("IRInstr_JUMP_IF_ZERO(\n");
       print_indent(spaces + 2);
       printf("target = %s,\n", instr->as.jz.target);
       print_indent(spaces + 2);
       printf("cond: ");
-      print_ir_val(&instr->as.jz.cond, 0);
+      print_ir_val(&instr->as.jz.cond, spaces + 2);
+      printf(",\n");
+      print_indent(spaces);
       printf(")");
       break;
     }
     case IRInstr_LABEL: {
-      printf("IRInstr_LABEL(name = %s)\n", instr->as.label.name);
+      printf("IRInstr_LABEL(name = %s)", instr->as.label.name);
       break;
     }
     case IRInstr_COPY: {
