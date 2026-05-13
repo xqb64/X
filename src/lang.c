@@ -2194,8 +2194,7 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       r = malloc(sizeof(struct IRValue));
 
       r->kind = IRValue_VAR;
-      r->as.var = malloc(strlen(expr->as.var.name) + 1);
-      strcpy(r->as.var, expr->as.var.name);
+      r->as.var = strdup(expr->as.var.name);
       r->type = expr->type;
 
       return r;
@@ -2259,8 +2258,7 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       ret = malloc(sizeof(struct IRValue));
 
       ret->kind = IRValue_VAR;
-      ret->as.var = malloc(strlen(dst->as.var) + 1);
-      strcpy(ret->as.var, dst->as.var);
+      ret->as.var = strdup(dst->as.var);
       ret->type = expr->type;
 
       return ret;
@@ -2297,8 +2295,7 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
 
       struct IRValue *ret = malloc(sizeof(struct IRValue));
       ret->kind = IRValue_VAR;
-      ret->as.var = malloc(strlen(result->as.var) + 1);
-      strcpy(ret->as.var, result->as.var);
+      ret->as.var = strdup(result->as.var);
       ret->type = expr->type;
 
       return ret;
@@ -2407,10 +2404,7 @@ void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
 
       dst = malloc(sizeof(struct IRValue));
       dst->kind = IRValue_VAR;
-
-      dst->as.var = malloc(strlen(stmt->as.let.name) + 1);
-      strcpy(dst->as.var, stmt->as.let.name);
-
+      dst->as.var = strdup(stmt->as.let.name);
       dst->type = stmt->as.let.type;
 
       cpy.kind = IRInstr_COPY;
@@ -5158,8 +5152,7 @@ void insert_var_into_varmap(struct VariableMap **varmap, char *name,
 
   node = malloc(sizeof(struct VariableMap));
 
-  node->name = malloc(strlen(name) + 1);
-  strcpy(node->name, name);
+  node->name = strdup(name);
 
   node->value = v;
   node->next = *varmap;
@@ -5258,9 +5251,8 @@ struct ResolveResult resolve_param(struct VariableMap **varmap,
   insert_var_into_varmap(varmap, param->name, uniq_name, true);
 
   free(param->name);
-  char *new_name = malloc(strlen(uniq_name) + 1);
-  strcpy(new_name, uniq_name);
-  param->name = new_name;
+
+  param->name = strdup(uniq_name);
 
   return (struct ResolveResult){.is_ok = true, .msg = NULL, .as.param = param};
 }
@@ -5295,8 +5287,7 @@ struct ResolveResult resolve_stmt(struct VariableMap **varmap,
       struct VariableMap *variable_map, *outer_map;
       char *cpy;
 
-      cpy = malloc(strlen(stmt->as.fn.name) + 1);
-      strcpy(cpy, stmt->as.fn.name);
+      cpy = strdup(stmt->as.fn.name);
 
       if (varmap) {
         insert_var_into_varmap(varmap, stmt->as.fn.name, cpy, true);
@@ -5362,9 +5353,7 @@ struct ResolveResult resolve_stmt(struct VariableMap **varmap,
       insert_var_into_varmap(varmap, stmt->as.let.name, uniq_name, true);
 
       free(stmt->as.let.name);
-      char *new_name = malloc(strlen(uniq_name) + 1);
-      strcpy(new_name, uniq_name);
-      stmt->as.let.name = new_name;
+      stmt->as.let.name = strdup(uniq_name);
 
       break;
     }
