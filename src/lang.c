@@ -1999,6 +1999,23 @@ void print_expr(struct Expr *expr, int spaces)
       printf(")");
       break;
     }
+    case EXPR_ASSIGN: {
+      printf("Assign(\n");
+
+      print_indent(spaces + 2);
+      printf("lhs = ");
+      print_expr(expr->as.assign.lhs, spaces + 4);
+      printf(",\n");
+
+      print_indent(spaces + 2);
+      printf("rhs = ");
+      print_expr(expr->as.assign.rhs, spaces + 4);
+      printf(",\n");
+
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
     case EXPR_CALL: {
       printf("Call(\n");
 
@@ -2042,6 +2059,8 @@ void print_stmt(struct Stmt *stmt, int spaces)
       printf("body = \n");
       print_stmt(stmt->as.while_stmt.body, spaces + 2);
 
+      print_indent(spaces);
+      printf(")\n");
       break;
     }
     case STMT_IF: {
@@ -2154,6 +2173,7 @@ void print_stmt(struct Stmt *stmt, int spaces)
       print_indent(spaces + 2);
       printf("expr = ");
       print_expr(&stmt->as.expr_stmt.expr, spaces + 2);
+      printf("\n");
 
       print_indent(spaces);
       printf(")\n");
@@ -2936,7 +2956,7 @@ void print_ir_instr(struct IRInstr *instr, int spaces)
 
   switch (instr->kind) {
     case IRInstr_JMP: {
-      printf("IRInstr_JMP(target = %s)\n", instr->as.jmp.target);
+      printf("IRInstr_JMP(target = %s)", instr->as.jmp.target);
       break;
     }
     case IRInstr_JZ: {
@@ -4861,7 +4881,7 @@ void emit(struct AsmProgram *prog)
         case AsmInstr_SetCC: {
           char *suffix;
 
-          switch (instr->as.jmpcc.cc) {
+          switch (instr->as.setcc.cc) {
             case E:
               suffix = "e";
               break;
