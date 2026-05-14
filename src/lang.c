@@ -92,6 +92,7 @@ end:
 
 enum TokenKind {
   TOKEN_FN,
+  TOKEN_WHILE,
   TOKEN_IF,
   TOKEN_ELSE,
   TOKEN_IDENTIFIER,
@@ -293,6 +294,15 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
     }
 
     switch (*tokenizer->src) {
+      case 'w': {
+        if (lookahead(tokenizer, 4, "hile") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_WHILE, 5));
+        } else {
+          vec_insert(&tokens, identifier(tokenizer));
+        }
+
+        break;
+      }
       case 'f': {
         if (lookahead(tokenizer, 1, "n") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_FN, 2));
@@ -582,6 +592,9 @@ void print_token(struct Token *token)
     case TOKEN_ELSE:
       printf("else");
       break;
+    case TOKEN_WHILE:
+      printf("while");
+      break;
     default:
       assert(0);
   }
@@ -642,6 +655,7 @@ enum ExprKind {
   EXPR_LITERAL,
   EXPR_VARIABLE,
   EXPR_BINARY,
+  EXPR_ASSIGN,
   EXPR_CALL,
 };
 
@@ -660,6 +674,11 @@ enum ExprBinKind {
 
 struct ExprBin {
   enum ExprBinKind kind;
+  struct Expr *lhs;
+  struct Expr *rhs;
+};
+
+struct ExprAssign {
   struct Expr *lhs;
   struct Expr *rhs;
 };
@@ -737,6 +756,7 @@ struct Expr {
     struct ExprBin binary;
     struct ExprVar var;
     struct ExprCall call;
+    struct ExprAssign assign;
   } as;
   Type type;
 };
@@ -758,9 +778,20 @@ struct StmtBlock {
   VecStmt stmts;
 };
 
+struct StmtWhile {
+  struct Expr cond;
+  struct Stmt *body;
+};
+
+struct StmtExpr {
+  struct Expr expr;
+};
+
 enum StmtKind {
   STMT_LET,
   STMT_IF,
+  STMT_WHILE,
+  STMT_EXPR,
   STMT_FN,
   STMT_BLOCK,
   STMT_RET,
@@ -789,6 +820,8 @@ struct Stmt {
     struct StmtFn fn;
     struct StmtBlock block;
     struct StmtIf if_stmt;
+    struct StmtWhile while_stmt;
+    struct StmtExpr expr_stmt;
   } as;
 };
 
@@ -1412,6 +1445,36 @@ struct ParseFnResult comparison(struct Parser *parser)
   return left_res;
 }
 
+struct ParseFnResult assignment(struct Parser *parser)
+{
+  struct ParseFnResult expr_result, right_result;
+  struct Expr expr, right;
+
+  expr_result = comparison(parser);
+  if (!expr_result.is_ok) {
+    return expr_result;
+  }
+
+  expr = expr_result.as.expr;
+
+  if (match(parser, 1, TOKEN_EQUAL)) {
+    char *op = parser->prev->start;
+
+    right_result = assignment(parser);
+    if (!right_result.is_ok) {
+      free_expr(&expr);
+      return right_result;
+    }
+
+    right = right_result.as.expr;
+
+    struct ExprAssign assignexp = {.lhs = ALLOC(expr), .rhs = ALLOC(right)};
+    expr = (struct Expr){.kind = EXPR_ASSIGN, .as.assign = assignexp};
+  }
+
+  return (struct ParseFnResult){.as.expr = expr, .is_ok = true, .msg = NULL};
+}
+
 struct ParseFnResult parse_expr(struct Parser *parser)
 {
   struct ParseFnResult res;
@@ -1420,7 +1483,7 @@ struct ParseFnResult parse_expr(struct Parser *parser)
   res.is_ok = false;
   res.msg = NULL;
 
-  res = comparison(parser);
+  res = assignment(parser);
   if (!res.is_ok) {
     return res;
   }
@@ -1667,6 +1730,107 @@ struct ParseFnResult parse_if_stmt(struct Parser *parser)
   return result;
 }
 
+struct ParseFnResult parse_while_stmt(struct Parser *parser)
+{
+  struct ParseFnResult result, cond_result, body_result;
+  struct Token *token_while, *token_lparen, *token_rparen, *token_lbrace,
+      *token_rbrace;
+  struct Expr cond;
+  struct Stmt body;
+
+  result.is_ok = true;
+  result.msg = NULL;
+
+  token_while = consume(parser, TOKEN_WHILE);
+  if (!token_while) {
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Expected 'while'", .as.stmt = {0}};
+  }
+
+  token_lparen = consume(parser, TOKEN_LPAREN);
+  if (!token_lparen) {
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Expected '(' after while", .as.stmt = {0}};
+  }
+
+  cond_result = parse_expr(parser);
+  if (!cond_result.is_ok) {
+    return cond_result;
+  }
+
+  cond = cond_result.as.expr;
+
+  token_rparen = consume(parser, TOKEN_RPAREN);
+  if (!token_rparen) {
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Expected '(' after while cond", .as.stmt = {0}};
+  }
+
+  token_lbrace = consume(parser, TOKEN_LBRACE);
+  if (!token_lbrace) {
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Expected '{' after while cond", .as.stmt = {0}};
+  }
+
+  body_result = parse_stmt(parser);
+  if (!body_result.is_ok) {
+    return body_result;
+  }
+
+  body = body_result.as.stmt;
+
+  token_rbrace = consume(parser, TOKEN_RBRACE);
+  if (!token_rbrace) {
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Expected '}' after while body", .as.stmt = {0}};
+  }
+
+  struct StmtWhile while_stmt;
+  while_stmt.cond = cond;
+  while_stmt.body = ALLOC(body);
+
+  struct Stmt s;
+  s.kind = STMT_WHILE;
+  s.as.while_stmt = while_stmt;
+
+  result.as.stmt = s;
+
+  return result;
+}
+
+struct ParseFnResult parse_expr_stmt(struct Parser *parser)
+{
+  struct ParseFnResult result, expr_res;
+  struct Token *token_semicolon;
+  struct Expr expr;
+
+  result.is_ok = true;
+  result.msg = NULL;
+
+  expr_res = parse_expr(parser);
+  if (!expr_res.is_ok) {
+    return expr_res;
+  }
+
+  token_semicolon = consume(parser, TOKEN_SEMICOLON);
+  if (!token_semicolon) {
+    return (struct ParseFnResult){.is_ok = false,
+                                  .msg = "Expected ';' at the end of expr stmt",
+                                  .as.stmt = {0}};
+  }
+
+  struct StmtExpr expr_stmt;
+  expr_stmt.expr = expr_res.as.expr;
+
+  struct Stmt s;
+  s.kind = STMT_EXPR;
+  s.as.expr_stmt = expr_stmt;
+
+  result.as.stmt = s;
+
+  return result;
+}
+
 struct ParseFnResult parse_stmt(struct Parser *parser)
 {
   struct ParseFnResult result;
@@ -1707,8 +1871,22 @@ struct ParseFnResult parse_stmt(struct Parser *parser)
       result.as.stmt = if_res.as.stmt;
       break;
     }
-    default:
-      assert(0);
+    case TOKEN_WHILE: {
+      struct ParseFnResult while_res = parse_while_stmt(parser);
+      if (!while_res.is_ok) {
+        return while_res;
+      }
+      result.as.stmt = while_res.as.stmt;
+      break;
+    }
+    default: {
+      struct ParseFnResult expr_stmt_res = parse_expr_stmt(parser);
+      if (!expr_stmt_res.is_ok) {
+        return expr_stmt_res;
+      }
+      result.as.stmt = expr_stmt_res.as.stmt;
+      break;
+    }
   }
 
   return result;
@@ -1851,6 +2029,21 @@ void print_expr(struct Expr *expr, int spaces)
 void print_stmt(struct Stmt *stmt, int spaces)
 {
   switch (stmt->kind) {
+    case STMT_WHILE: {
+      print_indent(spaces);
+      printf("STMT_WHILE(\n");
+
+      print_indent(spaces + 2);
+      printf("cond = ");
+      print_expr(&stmt->as.while_stmt.cond, spaces + 2);
+      printf(",\n");
+
+      print_indent(spaces + 2);
+      printf("body = \n");
+      print_stmt(stmt->as.while_stmt.body, spaces + 2);
+
+      break;
+    }
     case STMT_IF: {
       print_indent(spaces);
       printf("STMT_IF(\n");
@@ -1954,6 +2147,19 @@ void print_stmt(struct Stmt *stmt, int spaces)
       printf(")\n");
       break;
     }
+    case STMT_EXPR: {
+      print_indent(spaces);
+      printf("STMT_EXPR(\n");
+
+      print_indent(spaces + 2);
+      printf("expr = ");
+      print_expr(&stmt->as.expr_stmt.expr, spaces + 2);
+
+      print_indent(spaces);
+      printf(")\n");
+
+      break;
+    }
     default:
       assert(0);
   }
@@ -1969,6 +2175,13 @@ void print_ast(struct AST *ast)
 void free_expr(struct Expr *expr)
 {
   switch (expr->kind) {
+    case EXPR_ASSIGN: {
+      free_expr(expr->as.assign.lhs);
+      free_expr(expr->as.assign.rhs);
+      free(expr->as.assign.lhs);
+      free(expr->as.assign.rhs);
+      break;
+    }
     case EXPR_CALL: {
       free_expr(expr->as.call.target);
       free(expr->as.call.target);
@@ -2008,6 +2221,12 @@ void free_stmt(struct Stmt *stmt)
       free(stmt->as.let.init);
       break;
     }
+    case STMT_WHILE: {
+      free_expr(&stmt->as.while_stmt.cond);
+      free_stmt(stmt->as.while_stmt.body);
+      free(stmt->as.while_stmt.body);
+      break;
+    }
     case STMT_IF: {
       free_expr(&stmt->as.if_stmt.cond);
       free_stmt(stmt->as.if_stmt.then_block);
@@ -2042,6 +2261,10 @@ void free_stmt(struct Stmt *stmt)
         free_expr(stmt->as.ret.val);
         free(stmt->as.ret.val);
       }
+      break;
+    }
+    case STMT_EXPR: {
+      free_expr(&stmt->as.expr_stmt.expr);
       break;
     }
   }
@@ -2305,6 +2528,28 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
 
       return ret;
     }
+    case EXPR_ASSIGN: {
+      struct IRValue *src, *dst, *ret;
+
+      src = irfy_expr(instrs, expr->as.assign.rhs);
+
+      dst = irfy_expr(instrs, expr->as.assign.lhs);
+
+      struct IRInstr_Copy cpy_instr = {.src = src, .dst = dst};
+      struct IRInstr instr;
+
+      instr.kind = IRInstr_CPY;
+      instr.as.copy = cpy_instr;
+
+      vec_insert(instrs, instr);
+
+      ret = malloc(sizeof(struct IRValue));
+      ret->kind = IRValue_VAR;
+      ret->as.var = strdup(dst->as.var);
+      ret->type = dst->type;
+
+      return ret;
+    }
     default:
       assert(0);
   }
@@ -2343,6 +2588,51 @@ void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
   switch (stmt->kind) {
     case STMT_FN:
       assert(0);
+    case STMT_EXPR: {
+      struct IRValue *v;
+
+      v = irfy_expr(instrs, &stmt->as.expr_stmt.expr);
+      if (v) {
+        free_ir_val(v);
+      }
+
+      break;
+    }
+    case STMT_WHILE: {
+      int tmp;
+      struct IRValue *cond;
+      struct IRInstr i1 = {0}, i2 = {0}, i3 = {0}, i4 = {0};
+
+      tmp = mktmp();
+
+      i4.kind = IRInstr_LBL;
+      i4.as.label.name = mklbl("While", tmp);
+
+      vec_insert(instrs, i4);
+
+      cond = irfy_expr(instrs, &stmt->as.while_stmt.cond);
+
+      i1.kind = IRInstr_JZ;
+      i1.as.jz.cond = *cond;
+      i1.as.jz.target = mklbl("End", tmp);
+
+      free(cond);
+
+      vec_insert(instrs, i1);
+
+      irfy_stmt(instrs, stmt->as.while_stmt.body);
+
+      i3.kind = IRInstr_JMP;
+      i3.as.jmp.target = mklbl("While", tmp);
+
+      vec_insert(instrs, i3);
+
+      i2.kind = IRInstr_LBL;
+      i2.as.label.name = mklbl("End", tmp);
+
+      vec_insert(instrs, i2);
+      break;
+    }
     case STMT_IF: {
       int tmp;
       struct IRValue *cond;
@@ -5010,6 +5300,53 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
 
       break;
     }
+    case EXPR_ASSIGN: {
+      struct TypecheckResult lhs_res =
+          typecheck_expr(expr->as.assign.lhs, sym_table);
+      if (!lhs_res.is_ok) {
+        return lhs_res;
+      }
+
+      struct TypecheckResult rhs_res =
+          typecheck_expr(expr->as.assign.rhs, sym_table);
+      if (!rhs_res.is_ok) {
+        return rhs_res;
+      }
+
+      if (expr->as.assign.lhs->kind != EXPR_VARIABLE) {
+        return (struct TypecheckResult){
+            .is_ok = false,
+            .msg = "Invalid assignment target: left side must be a variable",
+            .ast = NULL};
+      }
+
+      if (expr->as.assign.rhs->kind == EXPR_LITERAL &&
+          expr->as.assign.rhs->as.literal.kind == LITERAL_NUM) {
+        long long val = expr->as.assign.rhs->as.literal.as.num;
+
+        if (!value_fits_in_type(val, expr->as.assign.lhs->type)) {
+          return (struct TypecheckResult){
+              .is_ok = false,
+              .msg =
+                  "Numeric literal overflow for the target type in assignment",
+              .ast = NULL};
+        }
+
+        expr->as.assign.rhs->type = expr->as.assign.lhs->type;
+        expr->as.assign.rhs->as.literal.type = expr->as.assign.lhs->type;
+      }
+
+      if (!types_equal(expr->as.assign.lhs->type, expr->as.assign.rhs->type)) {
+        return (struct TypecheckResult){
+            .is_ok = false,
+            .msg = "Type mismatch in assignment expression",
+            .ast = NULL};
+      }
+
+      expr->type = expr->as.assign.lhs->type;
+
+      break;
+    }
     case EXPR_CALL: {
       struct Symbol *callee_sym =
           lookup_symbol(sym_table, expr->as.call.target->as.var.name);
@@ -5217,6 +5554,31 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
 
       break;
     }
+    case STMT_EXPR: {
+      struct TypecheckResult r;
+
+      r = typecheck_expr(&stmt->as.expr_stmt.expr, *sym_table);
+      if (!r.is_ok) {
+        return r;
+      }
+
+      break;
+    }
+    case STMT_WHILE: {
+      struct TypecheckResult cond_res, body_res;
+
+      cond_res = typecheck_expr(&stmt->as.while_stmt.cond, *sym_table);
+      if (!cond_res.is_ok) {
+        return cond_res;
+      }
+
+      body_res = typecheck_stmt(stmt->as.while_stmt.body, sym_table);
+      if (!body_res.is_ok) {
+        return body_res;
+      }
+
+      break;
+    }
     default:
       assert(0);
   }
@@ -5350,6 +5712,21 @@ struct ResolveResult resolve_expr(struct VariableMap **varmap,
       }
       break;
     }
+    case EXPR_ASSIGN: {
+      struct ResolveResult rlhs, rrhs;
+
+      rlhs = resolve_expr(varmap, expr->as.assign.lhs);
+      if (!rlhs.is_ok) {
+        return rlhs;
+      }
+
+      rrhs = resolve_expr(varmap, expr->as.assign.rhs);
+      if (!rrhs.is_ok) {
+        return rrhs;
+      }
+
+      break;
+    }
     default:
       assert(0);
   }
@@ -5392,6 +5769,30 @@ struct ResolveResult resolve_stmt(struct VariableMap **varmap,
                                   struct Stmt *stmt)
 {
   switch (stmt->kind) {
+    case STMT_EXPR: {
+      struct ResolveResult r;
+
+      r = resolve_expr(varmap, &stmt->as.expr_stmt.expr);
+      if (!r.is_ok) {
+        return r;
+      }
+      break;
+    }
+    case STMT_WHILE: {
+      struct ResolveResult cond_res, body_res;
+
+      cond_res = resolve_expr(varmap, &stmt->as.while_stmt.cond);
+      if (!cond_res.is_ok) {
+        return cond_res;
+      }
+
+      body_res = resolve_stmt(varmap, stmt->as.while_stmt.body);
+      if (!body_res.is_ok) {
+        return body_res;
+      }
+
+      break;
+    }
     case STMT_IF: {
       struct ResolveResult cond_res, then_res, else_res;
 
