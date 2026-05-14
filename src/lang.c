@@ -2048,13 +2048,13 @@ void free_stmt(struct Stmt *stmt)
 }
 
 enum IRInstrKind {
-  IRInstr_BINARY,
+  IRInstr_BIN,
   IRInstr_RET,
-  IRInstr_COPY,
+  IRInstr_CPY,
   IRInstr_CALL,
-  IRInstr_JUMP,
-  IRInstr_JUMP_IF_ZERO,
-  IRInstr_LABEL,
+  IRInstr_JMP,
+  IRInstr_JZ,
+  IRInstr_LBL,
 };
 
 enum IRInstrBinaryKind {
@@ -2062,12 +2062,12 @@ enum IRInstrBinaryKind {
   IRInstrBinary_SUB,
   IRInstrBinary_MUL,
   IRInstrBinary_DIV,
-  IRInstrBinary_LESS,
-  IRInstrBinary_LESS_EQUAL,
-  IRInstrBinary_GREATER,
-  IRInstrBinary_GREATER_EQUAL,
-  IRInstrBinary_EQUAL_EQUAL,
-  IRInstrBinary_BANG_EQUAL,
+  IRInstrBinary_L,
+  IRInstrBinary_LE,
+  IRInstrBinary_G,
+  IRInstrBinary_GE,
+  IRInstrBinary_E,
+  IRInstrBinary_NE,
 };
 
 enum IRValueKind {
@@ -2228,22 +2228,22 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
           kind = IRInstrBinary_DIV;
           break;
         case EXPR_BIN_LESS:
-          kind = IRInstrBinary_LESS;
+          kind = IRInstrBinary_L;
           break;
         case EXPR_BIN_LESS_EQUAL:
-          kind = IRInstrBinary_LESS_EQUAL;
+          kind = IRInstrBinary_LE;
           break;
         case EXPR_BIN_GREATER:
-          kind = IRInstrBinary_GREATER;
+          kind = IRInstrBinary_G;
           break;
         case EXPR_BIN_GREATER_EQUAL:
-          kind = IRInstrBinary_GREATER_EQUAL;
+          kind = IRInstrBinary_GE;
           break;
         case EXPR_BIN_EQUAL_EQUAL:
-          kind = IRInstrBinary_EQUAL_EQUAL;
+          kind = IRInstrBinary_E;
           break;
         case EXPR_BIN_BANG_EQUAL:
-          kind = IRInstrBinary_BANG_EQUAL;
+          kind = IRInstrBinary_NE;
           break;
         default:
           assert(0);
@@ -2253,7 +2253,7 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
           .lhs = lhs, .rhs = rhs, .dst = dst, .kind = kind};
       struct IRInstr instr;
 
-      instr.kind = IRInstr_BINARY;
+      instr.kind = IRInstr_BIN;
       instr.as.binary = bininstr;
 
       vec_insert(instrs, instr);
@@ -2358,7 +2358,7 @@ void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
         ijz.cond = *cond;
         ijz.target = mklbl("End", tmp);
 
-        i1.kind = IRInstr_JUMP_IF_ZERO;
+        i1.kind = IRInstr_JZ;
         i1.as.jz = ijz;
 
         vec_insert(instrs, i1);
@@ -2367,13 +2367,13 @@ void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
 
         ilbl.name = mklbl("End", tmp);
 
-        i2.kind = IRInstr_LABEL;
+        i2.kind = IRInstr_LBL;
         i2.as.label = ilbl;
 
         vec_insert(instrs, i2);
       } else {
         struct IRInstr jz_instr = {0};
-        jz_instr.kind = IRInstr_JUMP_IF_ZERO;
+        jz_instr.kind = IRInstr_JZ;
         jz_instr.as.jz.cond = *cond;
         jz_instr.as.jz.target = mklbl("Else", tmp);
         vec_insert(instrs, jz_instr);
@@ -2381,19 +2381,19 @@ void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
         irfy_stmt(instrs, stmt->as.if_stmt.then_block);
 
         struct IRInstr jmp_end = {0};
-        jmp_end.kind = IRInstr_JUMP;
+        jmp_end.kind = IRInstr_JMP;
         jmp_end.as.jmp.target = mklbl("End", tmp);
         vec_insert(instrs, jmp_end);
 
         struct IRInstr label_else = {0};
-        label_else.kind = IRInstr_LABEL;
+        label_else.kind = IRInstr_LBL;
         label_else.as.label.name = mklbl("Else", tmp);
         vec_insert(instrs, label_else);
 
         irfy_stmt(instrs, stmt->as.if_stmt.else_block);
 
         struct IRInstr label_end = {0};
-        label_end.kind = IRInstr_LABEL;
+        label_end.kind = IRInstr_LBL;
         label_end.as.label.name = mklbl("End", tmp);
         vec_insert(instrs, label_end);
       }
@@ -2412,7 +2412,7 @@ void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
       dst->as.var = strdup(stmt->as.let.name);
       dst->type = stmt->as.let.type;
 
-      cpy.kind = IRInstr_COPY;
+      cpy.kind = IRInstr_CPY;
       cpy.as.copy = (struct IRInstr_Copy){.src = res, .dst = dst};
 
       vec_insert(instrs, cpy);
@@ -2504,7 +2504,7 @@ void free_ast(struct AST *ast)
 void free_ir_instr(struct IRInstr *instr)
 {
   switch (instr->kind) {
-    case IRInstr_BINARY: {
+    case IRInstr_BIN: {
       free_ir_val(instr->as.binary.lhs);
       free_ir_val(instr->as.binary.rhs);
       free_ir_val(instr->as.binary.dst);
@@ -2516,7 +2516,7 @@ void free_ir_instr(struct IRInstr *instr)
       }
       break;
     }
-    case IRInstr_COPY: {
+    case IRInstr_CPY: {
       free_ir_val(instr->as.copy.src);
       free_ir_val(instr->as.copy.dst);
       break;
@@ -2532,18 +2532,18 @@ void free_ir_instr(struct IRInstr *instr)
       }
       break;
     }
-    case IRInstr_JUMP: {
+    case IRInstr_JMP: {
       free(instr->as.jmp.target);
       break;
     }
-    case IRInstr_JUMP_IF_ZERO: {
+    case IRInstr_JZ: {
       free(instr->as.jz.target);
       if (instr->as.jz.cond.kind == IRValue_VAR) {
         free(instr->as.jz.cond.as.var);
       }
       break;
     }
-    case IRInstr_LABEL: {
+    case IRInstr_LBL: {
       free(instr->as.label.name);
       break;
     }
@@ -2584,22 +2584,22 @@ void print_ir_binary_op(int kind)
     case IRInstrBinary_DIV:
       printf("DIV");
       break;
-    case IRInstrBinary_LESS:
+    case IRInstrBinary_L:
       printf("LESS");
       break;
-    case IRInstrBinary_LESS_EQUAL:
+    case IRInstrBinary_LE:
       printf("LESS EQUAL");
       break;
-    case IRInstrBinary_GREATER:
+    case IRInstrBinary_G:
       printf("GREATER");
       break;
-    case IRInstrBinary_GREATER_EQUAL:
+    case IRInstrBinary_GE:
       printf("GREATER EQUAL");
       break;
-    case IRInstrBinary_EQUAL_EQUAL:
+    case IRInstrBinary_E:
       printf("EQUAL EQUAL");
       break;
-    case IRInstrBinary_BANG_EQUAL:
+    case IRInstrBinary_NE:
       printf("BANG EQUAL");
       break;
     default:
@@ -2645,12 +2645,12 @@ void print_ir_instr(struct IRInstr *instr, int spaces)
   print_indent(spaces);
 
   switch (instr->kind) {
-    case IRInstr_JUMP: {
-      printf("IRInstr_JUMP(target = %s)\n", instr->as.jmp.target);
+    case IRInstr_JMP: {
+      printf("IRInstr_JMP(target = %s)\n", instr->as.jmp.target);
       break;
     }
-    case IRInstr_JUMP_IF_ZERO: {
-      printf("IRInstr_JUMP_IF_ZERO(\n");
+    case IRInstr_JZ: {
+      printf("IRInstr_JZ(\n");
       print_indent(spaces + 2);
       printf("target = %s,\n", instr->as.jz.target);
       print_indent(spaces + 2);
@@ -2661,12 +2661,12 @@ void print_ir_instr(struct IRInstr *instr, int spaces)
       printf(")");
       break;
     }
-    case IRInstr_LABEL: {
-      printf("IRInstr_LABEL(name = %s)", instr->as.label.name);
+    case IRInstr_LBL: {
+      printf("IRInstr_LBL(name = %s)", instr->as.label.name);
       break;
     }
-    case IRInstr_COPY: {
-      printf("IRInstr_COPY(\n");
+    case IRInstr_CPY: {
+      printf("IRInstr_CPY(\n");
 
       print_indent(spaces + 2);
       printf("src = ");
@@ -2682,8 +2682,8 @@ void print_ir_instr(struct IRInstr *instr, int spaces)
       printf(")");
       break;
     }
-    case IRInstr_BINARY: {
-      printf("IRInstr_BINARY(\n");
+    case IRInstr_BIN: {
+      printf("IRInstr_BIN(\n");
 
       print_indent(spaces + 2);
       printf("type = ");
@@ -2793,11 +2793,11 @@ enum AsmInstrKind {
   AsmInstr_PUSH,
   AsmInstr_POP,
   AsmInstr_MOV,
-  AsmInstr_BINARY,
+  AsmInstr_BIN,
   AsmInstr_RET,
   AsmInstr_CALL,
-  AsmInstr_JUMP,
-  AsmInstr_LABEL,
+  AsmInstr_JMP,
+  AsmInstr_LBL,
   AsmInstr_CMP,
   AsmInstr_JmpCC,
   AsmInstr_SetCC,
@@ -3055,28 +3055,27 @@ struct AsmOperand codegen_irvalue(struct IRValue *val)
 
 bool is_comparison(enum IRInstrBinaryKind kind)
 {
-  return kind == IRInstrBinary_LESS || kind == IRInstrBinary_GREATER ||
-         kind == IRInstrBinary_LESS_EQUAL ||
-         kind == IRInstrBinary_GREATER_EQUAL ||
-         kind == IRInstrBinary_EQUAL_EQUAL || kind == IRInstrBinary_BANG_EQUAL;
+  return kind == IRInstrBinary_L || kind == IRInstrBinary_G ||
+         kind == IRInstrBinary_LE || kind == IRInstrBinary_GE ||
+         kind == IRInstrBinary_E || kind == IRInstrBinary_NE;
 }
 
 void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
 {
   switch (ir_instr->kind) {
-    case IRInstr_JUMP: {
+    case IRInstr_JMP: {
       struct AsmInstr i = {0};
       struct AsmInstrJmp jmp;
 
       jmp.target = ir_instr->as.jmp.target;
 
-      i.kind = AsmInstr_JUMP;
+      i.kind = AsmInstr_JMP;
       i.as.jmp = jmp;
 
       vec_insert(instrs, i);
       break;
     }
-    case IRInstr_JUMP_IF_ZERO: {
+    case IRInstr_JZ: {
       struct AsmInstr i1 = {0}, i2 = {0};
       struct AsmInstrCmp cmp;
       struct AsmOperand cond;
@@ -3097,12 +3096,12 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       vec_insert(instrs, i2);
       break;
     }
-    case IRInstr_LABEL: {
+    case IRInstr_LBL: {
       struct AsmInstr i = {0};
       struct AsmInstrLabel lbl;
 
       lbl.name = ir_instr->as.label.name;
-      i.kind = AsmInstr_LABEL;
+      i.kind = AsmInstr_LBL;
       i.as.lbl = lbl;
 
       vec_insert(instrs, i);
@@ -3130,7 +3129,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       if (stack_padding != 0) {
         struct AsmInstr padding_instr = {0};
 
-        padding_instr.kind = AsmInstr_BINARY;
+        padding_instr.kind = AsmInstr_BIN;
         padding_instr.asm_type = AsmType_QUADWORD;
 
         padding_instr.as.binary.kind = AsmInstrBinary_SUB;
@@ -3179,7 +3178,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       int bytes_to_remove = (num_stack_args * 8) + stack_padding;
       if (bytes_to_remove != 0) {
         struct AsmInstr cleanup_instr = {0};
-        cleanup_instr.kind = AsmInstr_BINARY;
+        cleanup_instr.kind = AsmInstr_BIN;
         cleanup_instr.asm_type = AsmType_QUADWORD;
 
         cleanup_instr.as.binary.kind = AsmInstrBinary_ADD;
@@ -3205,7 +3204,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
 
       break;
     }
-    case IRInstr_COPY: {
+    case IRInstr_CPY: {
       struct AsmOperand src, dst;
 
       src = codegen_irvalue(ir_instr->as.copy.src);
@@ -3224,7 +3223,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       vec_insert(instrs, i);
       break;
     }
-    case IRInstr_BINARY: {
+    case IRInstr_BIN: {
       if (is_comparison(ir_instr->as.binary.kind)) {
         Type common = ir_instr->as.binary.dst->type;
         bool is_signed = !is_unsigned(common.kind);
@@ -3233,22 +3232,22 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
 
         if (is_signed) {
           switch (ir_instr->as.binary.kind) {
-            case IRInstrBinary_LESS:
+            case IRInstrBinary_L:
               cc = L;
               break;
-            case IRInstrBinary_GREATER:
+            case IRInstrBinary_G:
               cc = G;
               break;
-            case IRInstrBinary_LESS_EQUAL:
+            case IRInstrBinary_LE:
               cc = LE;
               break;
-            case IRInstrBinary_GREATER_EQUAL:
+            case IRInstrBinary_GE:
               cc = GE;
               break;
-            case IRInstrBinary_EQUAL_EQUAL:
+            case IRInstrBinary_E:
               cc = E;
               break;
-            case IRInstrBinary_BANG_EQUAL:
+            case IRInstrBinary_NE:
               cc = NE;
               break;
             default:
@@ -3256,22 +3255,22 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
           }
         } else {
           switch (ir_instr->as.binary.kind) {
-            case IRInstrBinary_LESS:
+            case IRInstrBinary_L:
               cc = B;
               break;
-            case IRInstrBinary_GREATER:
+            case IRInstrBinary_G:
               cc = A;
               break;
-            case IRInstrBinary_LESS_EQUAL:
+            case IRInstrBinary_LE:
               cc = BE;
               break;
-            case IRInstrBinary_GREATER_EQUAL:
+            case IRInstrBinary_GE:
               cc = AE;
               break;
-            case IRInstrBinary_EQUAL_EQUAL:
+            case IRInstrBinary_E:
               cc = E;
               break;
-            case IRInstrBinary_BANG_EQUAL:
+            case IRInstrBinary_NE:
               cc = NE;
               break;
             default:
@@ -3339,7 +3338,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       i1.as.mov.dst = dst;
       i1.asm_type = dst.asm_type;
 
-      i2.kind = AsmInstr_BINARY;
+      i2.kind = AsmInstr_BIN;
       i2.as.binary.kind = kind;
       i2.as.binary.lhs = rhs;
       i2.as.binary.rhs = dst;
@@ -3432,7 +3431,7 @@ struct AsmFunction codegen_fn(struct IRFunction *ir_func)
   sub.rhs = (struct AsmOperand){
       .kind = AsmOperand_REG, .as.reg = SP, .asm_type = AsmType_QUADWORD};
 
-  p3.kind = AsmInstr_BINARY;
+  p3.kind = AsmInstr_BIN;
   p3.as.binary = sub;
   p3.asm_type = AsmType_QUADWORD;
 
@@ -3851,12 +3850,12 @@ void print_asm_instr(struct AsmInstr *instr, int spaces)
       printf(",)\n");
       break;
     }
-    case AsmInstr_JUMP: {
-      printf("AsmInstr_JUMP(target = %s),\n", instr->as.jmp.target);
+    case AsmInstr_JMP: {
+      printf("AsmInstr_JMP(target = %s),\n", instr->as.jmp.target);
       break;
     }
-    case AsmInstr_LABEL: {
-      printf("AsmInstr_LABEL(name = %s),\n", instr->as.lbl.name);
+    case AsmInstr_LBL: {
+      printf("AsmInstr_LBL(name = %s),\n", instr->as.lbl.name);
       break;
     }
     case AsmInstr_SetCC: {
@@ -3923,8 +3922,8 @@ void print_asm_instr(struct AsmInstr *instr, int spaces)
       printf("),\n");
       break;
     }
-    case AsmInstr_BINARY: {
-      printf("AsmInstr_BINARY(\n");
+    case AsmInstr_BIN: {
+      printf("AsmInstr_BIN(\n");
       print_indent(spaces + 2);
       printf("kind = ");
       print_binary_op(instr->as.binary.kind);
@@ -4071,7 +4070,7 @@ struct AsmProgram *replace_pseudo(struct AsmProgram *asmcode)
 
           break;
         }
-        case AsmInstr_BINARY: {
+        case AsmInstr_BIN: {
           if (asminstr->as.binary.lhs.kind == AsmOperand_PSEUDO) {
             asminstr->as.binary.lhs.kind = AsmOperand_STACK;
             asminstr->as.binary.lhs.as.stack_offset =
@@ -4166,7 +4165,7 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
 
           break;
         }
-        case AsmInstr_BINARY: {
+        case AsmInstr_BIN: {
           /* imul cannot use mem as dst */
           if (asminstr->as.binary.kind == AsmInstrBinary_MUL &&
               asminstr->as.binary.rhs.kind == AsmOperand_STACK) {
@@ -4184,7 +4183,7 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
             i1.as.mov = mov1;
             i1.asm_type = asminstr->asm_type;
 
-            i2.kind = AsmInstr_BINARY;
+            i2.kind = AsmInstr_BIN;
             bin.kind = AsmInstrBinary_MUL;
             bin.lhs = asminstr->as.binary.lhs;
             bin.rhs = scratch_op;
@@ -4225,7 +4224,7 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
             i1.as.mov = mov;
             i1.asm_type = asminstr->asm_type;
 
-            i2.kind = AsmInstr_BINARY;
+            i2.kind = AsmInstr_BIN;
             bin.kind = asminstr->as.binary.kind;
             bin.lhs = scratch_op;
             bin.rhs = asminstr->as.binary.rhs;
@@ -4522,11 +4521,11 @@ void emit(struct AsmProgram *prog)
       struct AsmInstr *instr = &prog->funcs.data[i].body.data[j];
       fprintf(f, "\t");
       switch (instr->kind) {
-        case AsmInstr_JUMP: {
+        case AsmInstr_JMP: {
           fprintf(f, "jmp .L%s\n", instr->as.jmp.target);
           break;
         }
-        case AsmInstr_LABEL: {
+        case AsmInstr_LBL: {
           fprintf(f, ".L%s:\n", instr->as.lbl.name);
           break;
         }
@@ -4682,7 +4681,7 @@ void emit(struct AsmProgram *prog)
           fprintf(f, "\n");
           break;
         }
-        case AsmInstr_BINARY: {
+        case AsmInstr_BIN: {
           switch (instr->as.binary.kind) {
             case AsmInstrBinary_ADD: {
               fprintf(f, "add");
