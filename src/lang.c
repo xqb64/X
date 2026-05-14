@@ -93,6 +93,8 @@ end:
 enum TokenKind {
   TOKEN_FN,
   TOKEN_WHILE,
+  TOKEN_BREAK,
+  TOKEN_CONTINUE,
   TOKEN_IF,
   TOKEN_ELSE,
   TOKEN_IDENTIFIER,
@@ -303,6 +305,24 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
 
         break;
       }
+      case 'b': {
+        if (lookahead(tokenizer, 4, "reak") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_BREAK, 5));
+        } else {
+          vec_insert(&tokens, identifier(tokenizer));
+        }
+
+        break;
+      }
+      case 'c': {
+        if (lookahead(tokenizer, 7, "ontinue") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_CONTINUE, 8));
+        } else {
+          vec_insert(&tokens, identifier(tokenizer));
+        }
+
+        break;
+      }
       case 'f': {
         if (lookahead(tokenizer, 1, "n") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_FN, 2));
@@ -483,6 +503,12 @@ void print_token(struct Token *token)
   switch (token->kind) {
     case TOKEN_FN:
       printf("fn");
+      break;
+    case TOKEN_BREAK:
+      printf("break");
+      break;
+    case TOKEN_CONTINUE:
+      printf("continue");
       break;
     case TOKEN_VOID:
       printf("void");
@@ -781,6 +807,7 @@ struct StmtBlock {
 struct StmtWhile {
   struct Expr cond;
   struct Stmt *body;
+  char *label;
 };
 
 struct StmtExpr {
@@ -791,6 +818,8 @@ enum StmtKind {
   STMT_LET,
   STMT_IF,
   STMT_WHILE,
+  STMT_BREAK,
+  STMT_CONTINUE,
   STMT_EXPR,
   STMT_FN,
   STMT_BLOCK,
@@ -812,6 +841,14 @@ struct StmtIf {
   struct Stmt *else_block;
 };
 
+struct StmtBreak {
+  char *label;
+};
+
+struct StmtContinue {
+  char *label;
+};
+
 struct Stmt {
   enum StmtKind kind;
   union {
@@ -822,6 +859,8 @@ struct Stmt {
     struct StmtIf if_stmt;
     struct StmtWhile while_stmt;
     struct StmtExpr expr_stmt;
+    struct StmtBreak break_stmt;
+    struct StmtContinue continue_stmt;
   } as;
 };
 
@@ -1772,7 +1811,7 @@ struct ParseFnResult parse_while_stmt(struct Parser *parser)
         .is_ok = false, .msg = "Expected '{' after while cond", .as.stmt = {0}};
   }
 
-  body_result = parse_stmt(parser);
+  body_result = block(parser);
   if (!body_result.is_ok) {
     return body_result;
   }
@@ -1831,6 +1870,64 @@ struct ParseFnResult parse_expr_stmt(struct Parser *parser)
   return result;
 }
 
+struct ParseFnResult parse_break_stmt(struct Parser *parser)
+{
+  struct ParseFnResult result;
+  struct Token *token_break, *token_semicolon;
+
+  result.is_ok = true;
+  result.msg = NULL;
+
+  token_break = consume(parser, TOKEN_BREAK);
+  if (!token_break) {
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Expected 'break'", .as.stmt = {0}};
+  }
+
+  token_semicolon = consume(parser, TOKEN_SEMICOLON);
+  if (!token_semicolon) {
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Expected ';' after 'break'", .as.stmt = {0}};
+  }
+
+  struct StmtBreak break_stmt = {0};
+  break_stmt.label = "";
+
+  result.as.stmt =
+      (struct Stmt){.kind = STMT_BREAK, .as.break_stmt = break_stmt};
+
+  return result;
+}
+
+struct ParseFnResult parse_continue_stmt(struct Parser *parser)
+{
+  struct ParseFnResult result;
+  struct Token *token_continue, *token_semicolon;
+
+  result.is_ok = true;
+  result.msg = NULL;
+
+  token_continue = consume(parser, TOKEN_CONTINUE);
+  if (!token_continue) {
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Expected 'break'", .as.stmt = {0}};
+  }
+
+  token_semicolon = consume(parser, TOKEN_SEMICOLON);
+  if (!token_semicolon) {
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Expected ';' after 'continue'", .as.stmt = {0}};
+  }
+
+  struct StmtContinue continue_stmt = {0};
+  continue_stmt.label = "";
+
+  result.as.stmt =
+      (struct Stmt){.kind = STMT_CONTINUE, .as.continue_stmt = continue_stmt};
+
+  return result;
+}
+
 struct ParseFnResult parse_stmt(struct Parser *parser)
 {
   struct ParseFnResult result;
@@ -1845,6 +1942,22 @@ struct ParseFnResult parse_stmt(struct Parser *parser)
         return fn_res;
       }
       result.as.stmt = fn_res.as.stmt;
+      break;
+    }
+    case TOKEN_BREAK: {
+      struct ParseFnResult break_res = parse_break_stmt(parser);
+      if (!break_res.is_ok) {
+        return break_res;
+      }
+      result.as.stmt = break_res.as.stmt;
+      break;
+    }
+    case TOKEN_CONTINUE: {
+      struct ParseFnResult continue_res = parse_continue_stmt(parser);
+      if (!continue_res.is_ok) {
+        return continue_res;
+      }
+      result.as.stmt = continue_res.as.stmt;
       break;
     }
     case TOKEN_RET: {
@@ -2046,6 +2159,16 @@ void print_expr(struct Expr *expr, int spaces)
 void print_stmt(struct Stmt *stmt, int spaces)
 {
   switch (stmt->kind) {
+    case STMT_BREAK: {
+      print_indent(spaces);
+      printf("STMT_BREAK(...)\n");
+      break;
+    }
+    case STMT_CONTINUE: {
+      print_indent(spaces);
+      printf("STMT_CONTINUE(...)\n");
+      break;
+    }
     case STMT_WHILE: {
       print_indent(spaces);
       printf("STMT_WHILE(\n");
@@ -2235,6 +2358,9 @@ void free_expr(struct Expr *expr)
 void free_stmt(struct Stmt *stmt)
 {
   switch (stmt->kind) {
+    case STMT_BREAK:
+    case STMT_CONTINUE:
+      break;
     case STMT_LET: {
       free(stmt->as.let.name);
       free_expr(stmt->as.let.init);
@@ -2603,11 +2729,66 @@ char *mklbl(char *s, int d)
   return lbl;
 }
 
+int extract_label_number(const char *label)
+{
+  if (!label) {
+    return -1;
+  }
+
+  const char *dot = strrchr(label, '.');
+
+  if (!dot) {
+    return -1;  // No dot found
+  }
+
+  dot++;
+
+  int n = -1;
+  if (sscanf(dot, "%d", &n) == 1) {
+    return n;
+  }
+
+  return -1;
+}
+
 void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
 {
   switch (stmt->kind) {
     case STMT_FN:
       assert(0);
+    case STMT_BREAK: {
+      char *label, *new_label;
+      int n;
+
+      label = stmt->as.break_stmt.label;
+      n = extract_label_number(label);
+
+      new_label = mklbl("End", n);
+
+      struct IRInstr i;
+      i.kind = IRInstr_JMP;
+
+      struct IRInstr_Jump jmp;
+      jmp.target = new_label;
+
+      i.as.jmp = jmp;
+
+      vec_insert(instrs, i);
+
+      break;
+    }
+    case STMT_CONTINUE: {
+      char *label;
+
+      label = stmt->as.continue_stmt.label;
+
+      struct IRInstr i;
+      i.kind = IRInstr_JMP;
+      i.as.jmp.target = label;
+
+      vec_insert(instrs, i);
+      break;
+    }
     case STMT_EXPR: {
       struct IRValue *v;
 
@@ -2623,7 +2804,7 @@ void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
       struct IRValue *cond;
       struct IRInstr i1 = {0}, i2 = {0}, i3 = {0}, i4 = {0};
 
-      tmp = mktmp();
+      tmp = extract_label_number(stmt->as.while_stmt.label);
 
       i4.kind = IRInstr_LBL;
       i4.as.label.name = mklbl("While", tmp);
@@ -5599,6 +5780,9 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
 
       break;
     }
+    case STMT_BREAK:
+    case STMT_CONTINUE:
+      break;
     default:
       assert(0);
   }
@@ -5789,6 +5973,9 @@ struct ResolveResult resolve_stmt(struct VariableMap **varmap,
                                   struct Stmt *stmt)
 {
   switch (stmt->kind) {
+    case STMT_BREAK:
+    case STMT_CONTINUE:
+      break;
     case STMT_EXPR: {
       struct ResolveResult r;
 
@@ -6065,6 +6252,94 @@ struct CompilerOptions parse_args(int argc, char **argv)
   return opts;
 }
 
+struct LoopLabelResult {
+  bool is_ok;
+  char *msg;
+  struct AST *ast;
+};
+
+struct LoopLabelResult loop_label_stmt(struct Stmt *stmt, char *label)
+{
+  switch (stmt->kind) {
+    case STMT_WHILE: {
+      char *new_label;
+      int tmp;
+
+      tmp = mktmp();
+
+      new_label = mklbl("While", tmp);
+
+      stmt->as.while_stmt.label = new_label;
+
+      loop_label_stmt(stmt->as.while_stmt.body, new_label);
+      break;
+    }
+    case STMT_BREAK: {
+      stmt->as.break_stmt.label = label;
+      break;
+    }
+    case STMT_CONTINUE: {
+      stmt->as.continue_stmt.label = label;
+      break;
+    }
+    case STMT_FN: {
+      for (int i = 0; i < stmt->as.fn.body.len; i++) {
+        struct LoopLabelResult r;
+        r = loop_label_stmt(&stmt->as.fn.body.data[i], label);
+        if (!r.is_ok) {
+          return r;
+        }
+      }
+      break;
+    }
+    case STMT_IF: {
+      struct LoopLabelResult then_res, else_res;
+
+      then_res = loop_label_stmt(stmt->as.if_stmt.then_block, label);
+      if (!then_res.is_ok) {
+        return then_res;
+      }
+
+      if (stmt->as.if_stmt.else_block) {
+        else_res = loop_label_stmt(stmt->as.if_stmt.else_block, label);
+        if (!else_res.is_ok) {
+          return else_res;
+        }
+      }
+      break;
+    }
+    case STMT_BLOCK: {
+      for (int i = 0; i < stmt->as.block.stmts.len; i++) {
+        struct LoopLabelResult r;
+        r = loop_label_stmt(&stmt->as.block.stmts.data[i], label);
+        if (!r.is_ok) {
+          return r;
+        }
+      }
+      break;
+    }
+    case STMT_RET:
+    case STMT_EXPR:
+    case STMT_LET:
+      break;
+    default:
+      assert(0);
+  }
+  return (struct LoopLabelResult){.is_ok = true, .msg = NULL};
+}
+
+struct LoopLabelResult loop_label(struct AST *ast)
+{
+  for (int i = 0; i < ast->stmts.len; i++) {
+    struct LoopLabelResult r;
+    r = loop_label_stmt(&ast->stmts.data[i], NULL);
+    if (!r.is_ok) {
+      return r;
+    }
+  }
+  return (struct LoopLabelResult){.is_ok = true, .msg = NULL, .ast = ast};
+}
+
 int main(int argc, char **argv)
 {
   struct CompilerOptions opts;
@@ -6077,9 +6352,10 @@ int main(int argc, char **argv)
   VecToken tokens;
   struct Parser parser;
   struct ParseResult parse_result;
-  struct AST *ast, *resolved_ast, *typechecked_ast;
+  struct AST *ast, *resolved_ast, *typechecked_ast, *labeled_ast;
   struct ResolveResult resolve_result;
   struct TypecheckResult typecheck_result;
+  struct LoopLabelResult loop_label_result;
   struct IrfyResult irfy_result;
   struct IRProgram ir_prog;
   struct AsmResult asm_result;
@@ -6156,7 +6432,18 @@ int main(int argc, char **argv)
     goto free_up2_parse;
   }
 
-  irfy_result = irfy_ast(typechecked_ast);
+  loop_label_result = loop_label(typechecked_ast);
+  if (!loop_label_result.is_ok) {
+    fprintf(stderr, "err: %s\n", loop_label_result.msg);
+    goto free_up2_parse;
+  }
+
+  labeled_ast = loop_label_result.ast;
+
+  printf("labeled ast:\n");
+  print_ast(labeled_ast);
+
+  irfy_result = irfy_ast(labeled_ast);
   if (!irfy_result.is_ok) {
     fprintf(stderr, "err: %s\n", irfy_result.msg);
     goto free_up2_irfy;
