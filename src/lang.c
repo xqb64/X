@@ -1244,20 +1244,24 @@ struct ParseFnResult primary(struct Parser *parser)
     literal.kind = LITERAL_NUM;
     literal.as.num = val;
 
-    if (val >= -128 && val <= 127) {
+    if (val >= SCHAR_MIN && val <= SCHAR_MAX) {
       literal.type = (Type){.kind = I8_T};
-    } else if (val >= 0 && val <= 255) {
+    } else if (val >= 0 && val <= UCHAR_MAX) {
       literal.type = (Type){.kind = U8_T};
-    } else if (val >= -32768 && val <= 32767) {
+    } else if (val >= SHRT_MIN && val <= SHRT_MAX) {
       literal.type = (Type){.kind = I16_T};
-    } else if (val >= 0 && val <= 65535) {
+    } else if (val >= 0 && val <= USHRT_MAX) {
       literal.type = (Type){.kind = U16_T};
-    } else if (val >= -2147483648LL && val <= 2147483647LL) {
+    } else if (val >= INT_MIN && val <= INT_MAX) {
       literal.type = (Type){.kind = I32_T};
-    } else if (val >= 0 && val <= 4294967295LL) {
+    } else if (val >= 0 && val <= UINT_MAX) {
       literal.type = (Type){.kind = U32_T};
-    } else {
+    } else if (val >= LONG_MIN && val <= LONG_MAX) {
       literal.type = (Type){.kind = I64_T};
+    } else if (val >= 0 && val <= ULONG_MAX) {
+      literal.type = (Type){.kind = U64_T};
+    } else {
+      return (struct ParseFnResult){.is_ok = false, .msg = "Can't parse literal", .as.expr = {0}};
     }
 
     res.as.expr = (struct Expr){
