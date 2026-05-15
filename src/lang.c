@@ -5316,7 +5316,7 @@ struct Symbol {
   Type type;
 };
 
-void insert_symbol(struct Symbol **sym, char *name, Type type)
+void sym_insert(struct Symbol **sym, char *name, Type type)
 {
   struct Symbol *node;
 
@@ -5350,7 +5350,7 @@ void free_type(Type *t)
   }
 }
 
-struct Symbol *lookup_symbol(struct Symbol *sym, char *name)
+struct Symbol *sym_get(struct Symbol *sym, char *name)
 {
   while (sym) {
     if (strcmp(sym->name, name) == 0) {
@@ -5457,7 +5457,7 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
       break;
     }
     case EXPR_VARIABLE: {
-      struct Symbol *sym = lookup_symbol(sym_table, expr->as.var.name);
+      struct Symbol *sym = sym_get(sym_table, expr->as.var.name);
 
       if (!sym) {
         return (struct TypecheckResult){
@@ -5550,7 +5550,7 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
     }
     case EXPR_CALL: {
       struct Symbol *callee_sym =
-          lookup_symbol(sym_table, expr->as.call.target->as.var.name);
+          sym_get(sym_table, expr->as.call.target->as.var.name);
 
       if (!callee_sym) {
         return (struct TypecheckResult){
@@ -5633,15 +5633,15 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
         t.as.func.retval = &stmt->as.fn.retval;
         t.as.func.params = types;
 
-        insert_symbol(sym_table, stmt->as.fn.name, t);
+        sym_insert(sym_table, stmt->as.fn.name, t);
       }
 
       struct Symbol *fn_sym_table = sym_table ? *sym_table : NULL;
       struct Symbol *outer_sym = fn_sym_table;
 
       for (int i = 0; i < stmt->as.fn.params.len; i++) {
-        insert_symbol(&fn_sym_table, stmt->as.fn.params.data[i].name,
-                      stmt->as.fn.params.data[i].type);
+        sym_insert(&fn_sym_table, stmt->as.fn.params.data[i].name,
+                   stmt->as.fn.params.data[i].type);
       }
 
       for (int i = 0; i < stmt->as.fn.body.len; i++) {
@@ -5694,7 +5694,7 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
             .ast = NULL};
       }
 
-      insert_symbol(sym_table, stmt->as.let.name, stmt->as.let.type);
+      sym_insert(sym_table, stmt->as.let.name, stmt->as.let.type);
       break;
     }
     case STMT_RET: {
