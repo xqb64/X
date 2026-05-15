@@ -92,6 +92,7 @@ end:
 
 enum TokenKind {
   TOKEN_FN,
+  TOKEN_EXTERN,
   TOKEN_WHILE,
   TOKEN_BREAK,
   TOKEN_CONTINUE,
@@ -341,6 +342,17 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
 
         break;
       }
+      case 'e': {
+        if (lookahead(tokenizer, 3, "lse") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_ELSE, 4));
+        } else if (lookahead(tokenizer, 5, "xtern") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_EXTERN, 6));
+        } else {
+          vec_insert(&tokens, identifier(tokenizer));
+        }
+
+        break;
+      }
       case 'i': {
         if (lookahead(tokenizer, 1, "8") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_I8, 2));
@@ -501,6 +513,9 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
 void print_token(struct Token *token)
 {
   switch (token->kind) {
+    case TOKEN_EXTERN:
+      printf("extern");
+      break;
     case TOKEN_FN:
       printf("fn");
       break;
@@ -816,6 +831,7 @@ struct StmtExpr {
 
 enum StmtKind {
   STMT_LET,
+  STMT_EXTERN,
   STMT_IF,
   STMT_WHILE,
   STMT_BREAK,
@@ -827,6 +843,12 @@ enum StmtKind {
 };
 
 typedef Vector(struct Parameter) VecParam;
+
+struct StmtExtern {
+  char *name;
+  VecParam params;
+  Type retval;
+};
 
 struct StmtFn {
   char *name;
@@ -861,6 +883,7 @@ struct Stmt {
     struct StmtExpr expr_stmt;
     struct StmtBreak break_stmt;
     struct StmtContinue continue_stmt;
+    struct StmtExtern extern_stmt;
   } as;
 };
 
@@ -881,6 +904,14 @@ struct ParseResult {
   char *msg;
   struct AST *ast;
 };
+
+struct StaticConstant {
+  char *name;
+  char *value;
+};
+
+typedef Vector(struct StaticConstant) VecStaticConstant;
+VecStaticConstant global_constants = {0};
 
 struct Token *next_token(struct Parser *parser)
 {
@@ -1285,6 +1316,7 @@ struct ParseFnResult finish_call(struct Parser *parser, struct Expr callee)
         for (int i = 0; i < arguments.len; i++) {
           free_expr(&arguments.data[i]);
         }
+        free_expr(&callee);
         vec_free(&arguments);
         return r;
       }
@@ -1299,6 +1331,7 @@ struct ParseFnResult finish_call(struct Parser *parser, struct Expr callee)
     for (int i = 0; i < arguments.len; i++) {
       free_expr(&arguments.data[i]);
     }
+    free_expr(&callee);
     vec_free(&arguments);
     return (struct ParseFnResult){.is_ok = false,
                                   .as.expr = {0},
@@ -1928,6 +1961,144 @@ struct ParseFnResult parse_continue_stmt(struct Parser *parser)
   return result;
 }
 
+struct ParseFnResult parse_extern_stmt(struct Parser *parser)
+{
+  struct ParseFnResult result;
+  struct Token *token_extern, *token_fn, *token_identifier, *token_lparen,
+      *token_void, *token_rparen, *token_arrow, *token_retval, *token_semicolon;
+  VecParam parameters = {0};
+
+  result.is_ok = true;
+  result.msg = NULL;
+
+  token_extern = consume(parser, TOKEN_EXTERN);
+  if (!token_extern) {
+    return (struct ParseFnResult){
+        .is_ok = false, .as.stmt = {0}, .msg = "Expected 'extern'"};
+  }
+
+  token_fn = consume(parser, TOKEN_FN);
+  if (!token_fn) {
+    return (struct ParseFnResult){
+        .is_ok = false, .as.stmt = {0}, .msg = "Expected 'fn' after 'extern'"};
+  }
+
+  token_identifier = consume(parser, TOKEN_IDENTIFIER);
+  if (!token_identifier) {
+    return (struct ParseFnResult){
+        .is_ok = false,
+        .as.stmt = {0},
+        .msg = "Expected identifier after 'fn' in 'extern' stmt"};
+  }
+
+  token_lparen = consume(parser, TOKEN_LPAREN);
+  if (!token_lparen) {
+    return (struct ParseFnResult){
+        .is_ok = false,
+        .msg = "Expected '(' after identifier in extern stmt",
+        .as.stmt = {0}};
+  }
+
+  if (check(parser, TOKEN_VOID)) {
+    token_void = consume(parser, TOKEN_VOID);
+    if (!token_void) {
+      return (struct ParseFnResult){.is_ok = false,
+                                    .as.stmt = {0},
+                                    .msg = "Expected token 'void' after '('"};
+    }
+  } else {
+    while (!check(parser, TOKEN_RPAREN)) {
+      struct Token *name_token, *colon_token, *type_token;
+      char *name;
+      Type type;
+
+      name_token = consume(parser, TOKEN_IDENTIFIER);
+      if (!name_token) {
+        return (struct ParseFnResult){
+            .is_ok = false,
+            .as.stmt = {0},
+            .msg = "Expected `name: type` format for parameters"};
+      }
+
+      colon_token = consume(parser, TOKEN_COLON);
+      if (!colon_token) {
+        return (struct ParseFnResult){
+            .is_ok = false,
+            .as.stmt = {0},
+            .msg = "Expected `name: type` format for parameters"};
+      }
+
+      type_token =
+          consume_any(parser, 9, TOKEN_U8, TOKEN_U16, TOKEN_U32, TOKEN_U64,
+                      TOKEN_I8, TOKEN_I16, TOKEN_I32, TOKEN_I64, TOKEN_STR);
+      if (!type_token) {
+        return (struct ParseFnResult){
+            .is_ok = false,
+            .as.stmt = {0},
+            .msg = "Expected `name: type` format for paramters"};
+      }
+
+      name = own_string_n(name_token->start, name_token->len);
+      type = parse_type(type_token);
+
+      struct Parameter p;
+
+      p.name = name;
+      p.type = type;
+
+      vec_insert(&parameters, p);
+
+      if (check(parser, TOKEN_COMMA)) {
+        consume(parser, TOKEN_COMMA);
+      }
+    }
+  }
+
+  token_rparen = consume(parser, TOKEN_RPAREN);
+  if (!token_rparen) {
+    return (struct ParseFnResult){.is_ok = false,
+                                  .as.stmt = {0},
+                                  .msg = "Expected token ')' after 'void'"};
+  }
+
+  token_arrow = consume(parser, TOKEN_ARROW);
+  if (!token_arrow) {
+    return (struct ParseFnResult){
+        .is_ok = false, .as.stmt = {0}, .msg = "Expected token '->' after ')'"};
+  }
+
+  token_retval =
+      consume_any(parser, 9, TOKEN_U8, TOKEN_U16, TOKEN_U32, TOKEN_U64,
+                  TOKEN_I8, TOKEN_I16, TOKEN_I32, TOKEN_I64, TOKEN_STR);
+  if (!token_retval) {
+    return (struct ParseFnResult){.is_ok = false,
+                                  .as.stmt = {0},
+                                  .msg = "Expected token 'i64' after '->'"};
+  }
+
+  token_semicolon = consume(parser, TOKEN_SEMICOLON);
+  if (!token_semicolon) {
+    return (struct ParseFnResult){
+        .is_ok = false,
+        .msg = "Expected ';' at the end of extern stmt",
+        .as.stmt = {0}};
+  }
+
+  struct StmtExtern extern_stmt;
+  extern_stmt.name =
+      own_string_n(token_identifier->start, token_identifier->len);
+  extern_stmt.params = parameters;
+  extern_stmt.retval = parse_type(token_retval);
+
+  struct Stmt s;
+  s.kind = STMT_EXTERN;
+  s.as.extern_stmt = extern_stmt;
+
+  result.as.stmt = s;
+
+  return result;
+}
+
 struct ParseFnResult parse_stmt(struct Parser *parser)
 {
   struct ParseFnResult result;
@@ -1942,6 +2113,14 @@ struct ParseFnResult parse_stmt(struct Parser *parser)
         return fn_res;
       }
       result.as.stmt = fn_res.as.stmt;
+      break;
+    }
+    case TOKEN_EXTERN: {
+      struct ParseFnResult extern_res = parse_extern_stmt(parser);
+      if (!extern_res.is_ok) {
+        return extern_res;
+      }
+      result.as.stmt = extern_res.as.stmt;
       break;
     }
     case TOKEN_BREAK: {
@@ -2303,6 +2482,11 @@ void print_stmt(struct Stmt *stmt, int spaces)
 
       break;
     }
+    case STMT_EXTERN: {
+      print_indent(spaces);
+      printf("STMT_EXTERN(...)");
+      break;
+    }
     default:
       assert(0);
   }
@@ -2328,6 +2512,9 @@ void free_expr(struct Expr *expr)
     case EXPR_CALL: {
       free_expr(expr->as.call.target);
       free(expr->as.call.target);
+      for (int i = 0; i < expr->as.call.arguments.len; i++) {
+        free_expr(&expr->as.call.arguments.data[i]);
+      }
       vec_free(&expr->as.call.arguments);
       break;
     }
@@ -2358,6 +2545,14 @@ void free_expr(struct Expr *expr)
 void free_stmt(struct Stmt *stmt)
 {
   switch (stmt->kind) {
+    case STMT_EXTERN: {
+      free(stmt->as.extern_stmt.name);
+      for (int i = 0; i < stmt->as.extern_stmt.params.len; i++) {
+        free(stmt->as.extern_stmt.params.data[i].name);
+      }
+      vec_free(&stmt->as.extern_stmt.params);
+      break;
+    }
     case STMT_BREAK:
     case STMT_CONTINUE:
       break;
@@ -2371,6 +2566,9 @@ void free_stmt(struct Stmt *stmt)
       free_expr(&stmt->as.while_stmt.cond);
       free_stmt(stmt->as.while_stmt.body);
       free(stmt->as.while_stmt.body);
+      if (stmt->as.while_stmt.label) {
+        free(stmt->as.while_stmt.label);
+      }
       break;
     }
     case STMT_IF: {
@@ -2424,6 +2622,7 @@ enum IRInstrKind {
   IRInstr_JMP,
   IRInstr_JZ,
   IRInstr_LBL,
+  IRInstr_GETADDR,
 };
 
 enum IRInstrBinaryKind {
@@ -2458,6 +2657,11 @@ typedef Vector(struct IRValue *) VecIRValuePtr;
 struct IRInstr_Call {
   struct Expr target;
   VecIRValuePtr args;
+  struct IRValue *dst;
+};
+
+struct IRInstr_GetAddress {
+  struct IRValue *src;
   struct IRValue *dst;
 };
 
@@ -2500,6 +2704,7 @@ struct IRInstr {
     struct IRInstr_Jump jmp;
     struct IRInstr_JumpIfZero jz;
     struct IRInstr_Label label;
+    struct IRInstr_GetAddress getaddr;
   } as;
 };
 
@@ -2547,20 +2752,64 @@ struct IRValue *make_ir_var(void)
 
 void free_ir_val(struct IRValue *v);
 
+char *mklbl(char *s, int d)
+{
+  int digit_len, total_len;
+  char *lbl;
+
+  digit_len = snprintf(NULL, 0, "%d", d);
+  total_len = strlen(s) + strlen(".") + digit_len + 1;
+
+  lbl = malloc(total_len);
+  snprintf(lbl, total_len, "%s.%d", s, d);
+
+  return lbl;
+}
+
 struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
 {
   switch (expr->kind) {
     case EXPR_LITERAL: {
-      struct IRValue *ir_val;
+      if (expr->as.literal.kind == LITERAL_STR) {
+        char *name = mklbl("str", mktmp());
 
-      ir_val = malloc(sizeof(struct IRValue));
-      memset(ir_val, 0, sizeof(struct IRValue));
+        struct StaticConstant sc;
+        sc.name = strdup(name);
+        sc.value = strdup(expr->as.literal.as.str);
+        vec_insert(&global_constants, sc);
 
-      ir_val->kind = IRValue_CONST;
-      ir_val->as.konst = expr->as.literal.as.num;
-      ir_val->type = expr->type;
+        struct IRValue *src = malloc(sizeof(struct IRValue));
+        src->kind = IRValue_VAR;
+        src->as.var = strdup(name);
+        src->type = expr->type;
 
-      return ir_val;
+        struct IRValue *dst = make_ir_var();
+        dst->type = expr->type;
+
+        struct IRInstr instr;
+        instr.kind = IRInstr_GETADDR;
+        instr.as.getaddr.src = src;
+        instr.as.getaddr.dst = dst;
+        vec_insert(instrs, instr);
+
+        struct IRValue *ret = malloc(sizeof(struct IRValue));
+        ret->kind = IRValue_VAR;
+        ret->as.var = strdup(dst->as.var);
+        ret->type = dst->type;
+
+        free(name);
+        return ret;
+      } else {
+        struct IRValue *ir_val;
+
+        ir_val = malloc(sizeof(struct IRValue));
+
+        ir_val->kind = IRValue_CONST;
+        ir_val->as.konst = expr->as.literal.as.num;
+        ir_val->type = expr->type;
+
+        return ir_val;
+      }
     }
     case EXPR_VARIABLE: {
       struct IRValue *r;
@@ -2713,20 +2962,6 @@ void free_ir_val(struct IRValue *val)
     }
   }
   free(val);
-}
-
-char *mklbl(char *s, int d)
-{
-  int digit_len, total_len;
-  char *lbl;
-
-  digit_len = snprintf(NULL, 0, "%d", d);
-  total_len = strlen(s) + strlen(".") + digit_len + 1;
-
-  lbl = malloc(total_len);
-  snprintf(lbl, total_len, "%s.%d", s, d);
-
-  return lbl;
 }
 
 int extract_label_number(const char *label)
@@ -3038,6 +3273,11 @@ void free_ir_instr(struct IRInstr *instr)
       free(instr->as.label.name);
       break;
     }
+    case IRInstr_GETADDR: {
+      free_ir_val(instr->as.getaddr.src);
+      free_ir_val(instr->as.getaddr.dst);
+      break;
+    }
     default:
       assert(0 && "Unhandled IR instruction in free_ir_instr");
   }
@@ -3292,6 +3532,7 @@ enum AsmInstrKind {
   AsmInstr_CMP,
   AsmInstr_JmpCC,
   AsmInstr_SetCC,
+  AsmInstr_LEA,
 };
 
 enum AsmOperandKind {
@@ -3299,6 +3540,7 @@ enum AsmOperandKind {
   AsmOperand_PSEUDO,
   AsmOperand_REG,
   AsmOperand_STACK,
+  AsmOperand_DATA,
 };
 
 enum AsmRegister {
@@ -3349,6 +3591,7 @@ struct AsmOperand {
     char *pseudo;
     enum AsmRegister reg;
     int stack_offset;
+    char *data;
   } as;
 };
 
@@ -3385,6 +3628,11 @@ struct AsmInstrLabel {
 
 struct AsmInstrJmp {
   char *target;
+};
+
+struct AsmInstrLea {
+  struct AsmOperand src;
+  struct AsmOperand dst;
 };
 
 enum ConditionCode {
@@ -3434,6 +3682,7 @@ struct AsmInstr {
     struct AsmInstrSetCC setcc;
     struct AsmInstrCmp cmp;
     struct AsmInstrLabel lbl;
+    struct AsmInstrLea lea;
   } as;
 };
 
@@ -3554,6 +3803,25 @@ bool is_comparison(enum IRInstrBinaryKind kind)
 void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
 {
   switch (ir_instr->kind) {
+    case IRInstr_GETADDR: {
+      struct AsmInstr i = {0};
+      i.kind = AsmInstr_LEA;
+
+      struct AsmOperand src_op;
+      src_op.kind = AsmOperand_DATA;
+      src_op.as.data = strdup(ir_instr->as.getaddr.src->as.var);
+      src_op.asm_type = AsmType_QUADWORD;
+
+      struct AsmOperand dst_op = codegen_irvalue(ir_instr->as.getaddr.dst);
+
+      i.as.lea.src = src_op;
+      i.as.lea.dst = dst_op;
+      i.asm_type = AsmType_QUADWORD;
+
+      vec_insert(instrs, i);
+      break;
+    }
+
     case IRInstr_JMP: {
       struct AsmInstr i = {0};
       struct AsmInstrJmp jmp;
@@ -3601,7 +3869,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
     case IRInstr_CALL: {
       /* Since i64 is the only data type for now, we worry only about these
        * registers. The first six arguments to the callee are passed via these
-       * six registers. The rest are passed on the stack, in reverse order.  */
+       * six registers. The rest are passed on the stack, in reverse order. */
       enum AsmRegister arg_regs[] = {DI, SI, DX, CX, R8, R9};
 
       int num_args = ir_instr->as.call.args.len;
@@ -3612,9 +3880,9 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
        * before the call instruction.
        *
        * In case we pushed an odd number of stack arguments, the stack will be
-       * misaligned by 8 bytes, since each argument on the stack (`pushq arg7`)
-       * occupies 8 bytes.  The stack will NOT be misaligned if the number of
-       * pushed arguments is even.  */
+       * misaligned by 8 bytes, since each argument on the stack (`pushq
+       * arg7`) occupies 8 bytes.  The stack will NOT be misaligned if the
+       * number of pushed arguments is even.  */
       int stack_padding = (num_stack_args % 2 != 0) ? 8 : 0;
 
       if (stack_padding != 0) {
@@ -3664,8 +3932,8 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       vec_insert(instrs, call_instr);
 
       /* The caller is responsible for cleaning up the stack after the call
-       * instruction. Since the stack on x86 grows downward, we need to ADD (not
-       * SUB).  */
+       * instruction. Since the stack on x86 grows downward, we need to ADD
+       * (not SUB).  */
       int bytes_to_remove = (num_stack_args * 8) + stack_padding;
       if (bytes_to_remove != 0) {
         struct AsmInstr cleanup_instr = {0};
@@ -3680,8 +3948,9 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         vec_insert(instrs, cleanup_instr);
       }
 
-      /* The caller is responsible for moving the return value from AX to a safe
-       * destination if it wants to keep it, because AX is easily clobbered.  */
+      /* The caller is responsible for moving the return value from AX to a
+       * safe destination if it wants to keep it, because AX is easily
+       * clobbered.  */
       if (ir_instr->as.call.dst) {
         struct AsmOperand dst_op = codegen_irvalue(ir_instr->as.call.dst);
         struct AsmInstr mov_instr = {0};
@@ -3933,8 +4202,8 @@ struct AsmFunction codegen_fn(struct IRFunction *ir_func)
   enum AsmRegister arg_regs[] = {DI, SI, DX, CX, R8, R9};
   int num_params = ir_func->params.len;
 
-  /* Move the values from the registers and from the stack that we had received
-   * previously by the caller, into pseudo registers.  */
+  /* Move the values from the registers and from the stack that we had
+   * received previously by the caller, into pseudo registers.  */
   for (int i = 0; i < num_params; i++) {
     enum AsmType param_asm_type;
 
@@ -4463,8 +4732,14 @@ void print_asm(struct AsmProgram *prog)
 
 void free_asm_instr(struct AsmInstr *instr)
 {
-  (void) instr;
-  return;
+  if (instr->kind == AsmInstr_LEA) {
+    if (instr->as.lea.src.kind == AsmOperand_DATA) {
+      free(instr->as.lea.src.as.data);
+    }
+    if (instr->as.lea.dst.kind == AsmOperand_DATA) {
+      free(instr->as.lea.dst.as.data);
+    }
+  }
 }
 
 void free_asm_fn(struct AsmFunction *fn)
@@ -4538,6 +4813,14 @@ struct AsmProgram *replace_pseudo(struct AsmProgram *asmcode)
     for (int j = 0; j < asmcode->funcs.data[i].body.len; j++) {
       struct AsmInstr *asminstr = &asmcode->funcs.data[i].body.data[j];
       switch (asminstr->kind) {
+        case AsmInstr_LEA: {
+          if (asminstr->as.lea.dst.kind == AsmOperand_PSEUDO) {
+            asminstr->as.lea.dst.kind = AsmOperand_STACK;
+            asminstr->as.lea.dst.as.stack_offset =
+                get_offset(map, asminstr->as.lea.dst.as.pseudo, &offset);
+          }
+          break;
+        }
         case AsmInstr_SetCC: {
           if (asminstr->as.setcc.op.kind == AsmOperand_PSEUDO) {
             asminstr->as.setcc.op.kind = AsmOperand_STACK;
@@ -4622,6 +4905,30 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
     for (int j = 0; j < prog->funcs.data[i].body.len; j++) {
       struct AsmInstr *asminstr = &prog->funcs.data[i].body.data[j];
       switch (asminstr->kind) {
+        case AsmInstr_LEA: {
+          if (asminstr->as.lea.dst.kind == AsmOperand_STACK) {
+            struct AsmOperand scratch_op = {.kind = AsmOperand_REG,
+                                            .as.reg = R10,
+                                            .asm_type = AsmType_QUADWORD};
+            struct AsmInstr i1 = {0}, i2 = {0};
+
+            i1.kind = AsmInstr_LEA;
+            i1.as.lea.src = asminstr->as.lea.src;
+            i1.as.lea.dst = scratch_op;
+            i1.asm_type = AsmType_QUADWORD;
+
+            i2.kind = AsmInstr_MOV;
+            i2.as.mov.src = scratch_op;
+            i2.as.mov.dst = asminstr->as.lea.dst;
+            i2.asm_type = AsmType_QUADWORD;
+
+            vec_insert(&instrs, i1);
+            vec_insert(&instrs, i2);
+          } else {
+            vec_insert(&instrs, *asminstr);
+          }
+          break;
+        }
         case AsmInstr_MOV: {
           if (asminstr->as.mov.src.kind == AsmOperand_STACK &&
               asminstr->as.mov.dst.kind == AsmOperand_STACK) {
@@ -4748,6 +5055,10 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
 void emit_operand(FILE *f, struct AsmOperand *op)
 {
   switch (op->kind) {
+    case AsmOperand_DATA: {
+      fprintf(f, "%s(%%rip)", op->as.data);
+      break;
+    }
     case AsmOperand_IMM: {
       fprintf(f, "$%d", op->as.imm);
       break;
@@ -5004,7 +5315,16 @@ void emit(struct AsmProgram *prog)
   FILE *f;
 
   f = fopen("spam.s", "w");
+  if (global_constants.len > 0) {
+    fprintf(f, ".section .rodata\n");
+    for (int i = 0; i < global_constants.len; i++) {
+      fprintf(f, "%s:\n", global_constants.data[i].name);
+      fprintf(f, "\t.string \"%s\"\n", global_constants.data[i].value);
+    }
+    fprintf(f, "\n");
+  }
 
+  fprintf(f, ".section .text\n");
   for (int i = 0; i < prog->funcs.len; i++) {
     fprintf(f, ".global %s\n", prog->funcs.data[i].name);
     fprintf(f, "%s:\n", prog->funcs.data[i].name);
@@ -5012,6 +5332,14 @@ void emit(struct AsmProgram *prog)
       struct AsmInstr *instr = &prog->funcs.data[i].body.data[j];
       fprintf(f, "\t");
       switch (instr->kind) {
+        case AsmInstr_LEA: {
+          fprintf(f, "leaq ");
+          emit_operand(f, &instr->as.lea.src);
+          fprintf(f, ", ");
+          emit_operand(f, &instr->as.lea.dst);
+          fprintf(f, "\n");
+          break;
+        }
         case AsmInstr_JMP: {
           fprintf(f, "jmp .L%s\n", instr->as.jmp.target);
           break;
@@ -5526,11 +5854,11 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
         long long val = expr->as.assign.rhs->as.literal.as.num;
 
         if (!value_fits_in_type(val, expr->as.assign.lhs->type)) {
-          return (struct TypecheckResult){
-              .is_ok = false,
-              .msg =
-                  "Numeric literal overflow for the target type in assignment",
-              .ast = NULL};
+          return (struct TypecheckResult){.is_ok = false,
+                                          .msg =
+                                              "Numeric literal overflow for "
+                                              "the target type in assignment",
+                                          .ast = NULL};
         }
 
         expr->as.assign.rhs->type = expr->as.assign.lhs->type;
@@ -5620,6 +5948,20 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
   struct TypecheckResult res = {.is_ok = true, .msg = NULL, .ast = NULL};
 
   switch (stmt->kind) {
+    case STMT_EXTERN: {
+      Type t;
+      VecType param_types = {0};
+      for (int i = 0; i < stmt->as.extern_stmt.params.len; i++) {
+        vec_insert(&param_types, stmt->as.extern_stmt.params.data[i].type);
+      }
+
+      t.kind = FN_T;
+      t.as.func.retval = &stmt->as.extern_stmt.retval;
+      t.as.func.params = param_types;
+
+      sym_insert(sym_table, stmt->as.extern_stmt.name, t);
+      break;
+    }
     case STMT_FN: {
       if (sym_table) {
         Type t;
@@ -5973,6 +6315,13 @@ struct ResolveResult resolve_stmt(struct VariableMap **varmap,
                                   struct Stmt *stmt)
 {
   switch (stmt->kind) {
+    case STMT_EXTERN: {
+      char *cpy;
+
+      cpy = strdup(stmt->as.extern_stmt.name);
+      varmap_insert(varmap, stmt->as.extern_stmt.name, cpy, true);
+      break;
+    }
     case STMT_BREAK:
     case STMT_CONTINUE:
       break;
@@ -6321,6 +6670,7 @@ struct LoopLabelResult loop_label_stmt(struct Stmt *stmt, char *label)
     case STMT_RET:
     case STMT_EXPR:
     case STMT_LET:
+    case STMT_EXTERN:
       break;
     default:
       assert(0);
@@ -6510,5 +6860,12 @@ free_up2_tokenize:
 
 free_up2_fread:
   free(read_file_result.contents);
+
+  for (int i = 0; i < global_constants.len; i++) {
+    free(global_constants.data[i].name);
+    free(global_constants.data[i].value);
+  }
+  vec_free(&global_constants);
+
   return 0;
 }
