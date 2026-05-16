@@ -687,7 +687,14 @@ struct Literal {
   enum LiteralKind kind;
   union {
     char *str;
-    long long num;
+    unsigned char u8;
+    char i8;
+    unsigned short u16;
+    short i16;
+    unsigned int u32;
+    int i32;
+    unsigned long long u64;
+    long long i64;
   } as;
   Type type;
 };
@@ -698,6 +705,7 @@ enum ExprKind {
   EXPR_BINARY,
   EXPR_ASSIGN,
   EXPR_CALL,
+  EXPR_UNARY,
 };
 
 enum ExprBinKind {
@@ -711,6 +719,11 @@ enum ExprBinKind {
   EXPR_BIN_GREATER_EQUAL,
   EXPR_BIN_EQUAL_EQUAL,
   EXPR_BIN_BANG_EQUAL,
+};
+
+struct ExprUnary {
+  char *op;
+  struct Expr *expr;
 };
 
 struct ExprBin {
@@ -798,6 +811,7 @@ struct Expr {
     struct ExprVar var;
     struct ExprCall call;
     struct ExprAssign assign;
+    struct ExprUnary unary;
   } as;
   Type type;
 };
@@ -984,6 +998,12 @@ struct ParseFnResult parse_stmt(struct Parser *parser);
 bool check(struct Parser *parser, enum TokenKind kind)
 {
   return parser->curr->kind == kind;
+}
+
+bool check2(struct Parser *parser, enum TokenKind kind1, enum TokenKind kind2)
+{
+  return parser->curr->kind == kind1 &&
+         parser->tokens->data[parser->idx].kind == kind2;
 }
 
 struct ParseFnResult block(struct Parser *parser)
@@ -1205,7 +1225,7 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
   return result;
 }
 
-static bool match(struct Parser *parser, int size, ...)
+bool match(struct Parser *parser, int size, ...)
 {
   va_list ap;
   va_start(ap, size);
@@ -1228,7 +1248,47 @@ struct ParseFnResult primary(struct Parser *parser)
   res.is_ok = true;
   res.msg = NULL;
 
-  if (check(parser, TOKEN_NUMBER)) {
+  if (check2(parser, TOKEN_MINUS, TOKEN_NUMBER)) {
+    struct Literal literal;
+    struct Token *token_minus, *token_literal;
+    unsigned long long val;
+
+    token_minus = consume(parser, TOKEN_MINUS);
+    if (!token_minus) {
+      return (struct ParseFnResult){
+          .is_ok = false, .as.expr = {0}, .msg = "Expected minus"};
+    }
+
+    token_literal = consume(parser, TOKEN_NUMBER);
+    if (!token_literal) {
+      return (struct ParseFnResult){
+          .is_ok = false, .as.expr = {0}, .msg = "Expected number"};
+    }
+
+    val = strtoull(parser->prev->start, NULL, 10);
+
+    literal.kind = LITERAL_NUM;
+
+    if (val >= SCHAR_MIN && val <= SCHAR_MAX) {
+      literal.type = (Type){.kind = I8_T};
+      literal.as.i8 = val;
+    } else if (val >= SHRT_MIN && val <= SHRT_MAX) {
+      literal.type = (Type){.kind = I16_T};
+      literal.as.i16 = val;
+    } else if (val >= INT_MIN && val <= INT_MAX) {
+      literal.type = (Type){.kind = I32_T};
+      literal.as.i32 = val;
+    } else if (val >= LONG_MIN && val <= LONG_MAX) {
+      literal.type = (Type){.kind = I64_T};
+      literal.as.i64 = val;
+    } else {
+      return (struct ParseFnResult){
+          .is_ok = false, .msg = "Can't parse literal", .as.expr = {0}};
+    }
+
+    res.as.expr = (struct Expr){
+        .kind = EXPR_LITERAL, .as.literal = literal, .type = literal.type};
+  } else if (check(parser, TOKEN_NUMBER)) {
     struct Literal literal;
     struct Token *token_literal;
     long long val;
@@ -1242,26 +1302,22 @@ struct ParseFnResult primary(struct Parser *parser)
     val = strtoll(parser->prev->start, NULL, 10);
 
     literal.kind = LITERAL_NUM;
-    literal.as.num = val;
 
-    if (val >= SCHAR_MIN && val <= SCHAR_MAX) {
-      literal.type = (Type){.kind = I8_T};
-    } else if (val >= 0 && val <= UCHAR_MAX) {
+    if (val >= 0 && val <= UCHAR_MAX) {
       literal.type = (Type){.kind = U8_T};
-    } else if (val >= SHRT_MIN && val <= SHRT_MAX) {
-      literal.type = (Type){.kind = I16_T};
+      literal.as.u8 = val;
     } else if (val >= 0 && val <= USHRT_MAX) {
       literal.type = (Type){.kind = U16_T};
-    } else if (val >= INT_MIN && val <= INT_MAX) {
-      literal.type = (Type){.kind = I32_T};
+      literal.as.u16 = val;
     } else if (val >= 0 && val <= UINT_MAX) {
       literal.type = (Type){.kind = U32_T};
-    } else if (val >= LONG_MIN && val <= LONG_MAX) {
-      literal.type = (Type){.kind = I64_T};
+      literal.as.u32 = val;
     } else if (val >= 0 && val <= ULONG_MAX) {
       literal.type = (Type){.kind = U64_T};
+      literal.as.u64 = val;
     } else {
-      return (struct ParseFnResult){.is_ok = false, .msg = "Can't parse literal", .as.expr = {0}};
+      return (struct ParseFnResult){
+          .is_ok = false, .msg = "Can't parse literal", .as.expr = {0}};
     }
 
     res.as.expr = (struct Expr){
@@ -1383,12 +1439,40 @@ struct ParseFnResult call(struct Parser *parser)
   return (struct ParseFnResult){.as.expr = expr, .is_ok = true, .msg = NULL};
 }
 
+struct ParseFnResult unary(struct Parser *parser)
+{
+  if (match(parser, 1, TOKEN_MINUS)) {
+    char *op = own_string_n(parser->prev->start, parser->prev->len);
+
+    struct ParseFnResult right_result;
+
+    right_result = unary(parser);
+    if (!right_result.is_ok) {
+      free(op);
+      return right_result;
+    }
+
+    struct Expr right, e;
+
+    right = right_result.as.expr;
+
+    struct ExprUnary unary_expr = {.expr = ALLOC(right), .op = op};
+
+    e.kind = EXPR_UNARY;
+    e.as.unary = unary_expr;
+
+    return (struct ParseFnResult){.as.expr = e, .is_ok = true, .msg = NULL};
+  }
+
+  return call(parser);
+}
+
 struct ParseFnResult factor(struct Parser *parser)
 {
   struct ParseFnResult left_res, right_res;
   struct Expr left, right;
 
-  left_res = call(parser);
+  left_res = unary(parser);
   if (!left_res.is_ok) {
     return left_res;
   }
@@ -1397,7 +1481,7 @@ struct ParseFnResult factor(struct Parser *parser)
   while (match(parser, 2, TOKEN_STAR, TOKEN_SLASH)) {
     char *op = parser->prev->start;
 
-    right_res = call(parser);
+    right_res = unary(parser);
     if (!right_res.is_ok) {
       return right_res;
     }
@@ -2253,11 +2337,60 @@ void print_binary_op(int kind)
 void print_expr(struct Expr *expr, int spaces)
 {
   switch (expr->kind) {
+    case EXPR_UNARY: {
+      printf("Unary(\n");
+
+      print_indent(spaces + 2);
+      printf("expr = ");
+      print_expr(expr->as.unary.expr, spaces + 4);
+      printf(",\n");
+
+      print_indent(spaces);
+      printf(")");
+
+      break;
+    }
     case EXPR_LITERAL: {
       if (expr->as.literal.kind == LITERAL_NUM) {
         printf("Literal(\n");
         print_indent(spaces + 2);
-        printf("v: %lld,\n", expr->as.literal.as.num);
+
+        switch (expr->as.literal.type.kind) {
+          case I8_T: {
+            printf("v: %d,\n", expr->as.literal.as.i8);
+            break;
+          }
+          case U8_T: {
+            printf("v: %d,\n", expr->as.literal.as.u8);
+            break;
+          }
+          case I16_T: {
+            printf("v: %d,\n", expr->as.literal.as.i16);
+            break;
+          }
+          case U16_T: {
+            printf("v: %d,\n", expr->as.literal.as.u16);
+            break;
+          }
+          case I32_T: {
+            printf("v: %d,\n", expr->as.literal.as.i32);
+            break;
+          }
+          case U32_T: {
+            printf("v: %d,\n", expr->as.literal.as.u32);
+            break;
+          }
+          case I64_T: {
+            printf("v: %lld,\n", expr->as.literal.as.i64);
+            break;
+          }
+          case U64_T: {
+            printf("v: %llu,\n", expr->as.literal.as.u64);
+            break;
+          }
+          default:
+            assert(0);
+        }
         print_indent(spaces + 2);
         printf("type: ");
         print_type(&expr->as.literal.type);
@@ -2506,6 +2639,12 @@ void print_ast(struct AST *ast)
 void free_expr(struct Expr *expr)
 {
   switch (expr->kind) {
+    case EXPR_UNARY: {
+      free_expr(expr->as.unary.expr);
+      free(expr->as.unary.expr);
+      free(expr->as.unary.op);
+      break;
+    }
     case EXPR_ASSIGN: {
       free_expr(expr->as.assign.lhs);
       free_expr(expr->as.assign.rhs);
@@ -2627,6 +2766,7 @@ enum IRInstrKind {
   IRInstr_JZ,
   IRInstr_LBL,
   IRInstr_GETADDR,
+  IRInstr_UNARY,
 };
 
 enum IRInstrBinaryKind {
@@ -2652,7 +2792,7 @@ struct IRValue {
   Type type;
   union {
     char *var;
-    long long konst;
+    struct Literal konst;
   } as;
 };
 
@@ -2665,6 +2805,16 @@ struct IRInstr_Call {
 };
 
 struct IRInstr_GetAddress {
+  struct IRValue *src;
+  struct IRValue *dst;
+};
+
+enum IRInstrUnaryKind {
+  IRInstrUnary_NEG,
+};
+
+struct IRInstr_Unary {
+  enum IRInstrUnaryKind kind;
   struct IRValue *src;
   struct IRValue *dst;
 };
@@ -2709,6 +2859,7 @@ struct IRInstr {
     struct IRInstr_JumpIfZero jz;
     struct IRInstr_Label label;
     struct IRInstr_GetAddress getaddr;
+    struct IRInstr_Unary unary;
   } as;
 };
 
@@ -2809,7 +2960,7 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
         ir_val = malloc(sizeof(struct IRValue));
 
         ir_val->kind = IRValue_CONST;
-        ir_val->as.konst = expr->as.literal.as.num;
+        ir_val->as.konst = expr->as.literal;
         ir_val->type = expr->type;
 
         return ir_val;
@@ -2946,6 +3097,35 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       ret->kind = IRValue_VAR;
       ret->as.var = strdup(dst->as.var);
       ret->type = dst->type;
+
+      return ret;
+    }
+    case EXPR_UNARY: {
+      struct IRValue *src, *dst;
+      struct IRInstr_Unary iu;
+      enum IRInstrUnaryKind kind;
+      struct IRInstr i;
+
+      src = irfy_expr(instrs, expr->as.unary.expr);
+      dst = make_ir_var();
+      dst->type = expr->type;
+
+      kind = IRInstrUnary_NEG;
+
+      iu.kind = kind;
+      iu.src = src;
+      iu.dst = dst;
+
+      i.kind = IRInstr_UNARY;
+      i.as.unary = iu;
+
+      vec_insert(instrs, i);
+
+      struct IRValue *ret;
+      ret = malloc(sizeof(struct IRValue));
+      ret->kind = IRValue_VAR;
+      ret->as.var = strdup(dst->as.var);
+      ret->type = expr->type;
 
       return ret;
     }
@@ -3234,6 +3414,11 @@ void free_ast(struct AST *ast)
 void free_ir_instr(struct IRInstr *instr)
 {
   switch (instr->kind) {
+    case IRInstr_UNARY: {
+      free_ir_val(instr->as.unary.src);
+      free_ir_val(instr->as.unary.dst);
+      break;
+    }
     case IRInstr_BIN: {
       free_ir_val(instr->as.binary.lhs);
       free_ir_val(instr->as.binary.rhs);
@@ -3353,7 +3538,43 @@ void print_ir_val(struct IRValue *ir_val, int spaces)
       printf("type = CONST,\n");
 
       print_indent(spaces + 2);
-      printf("value = %lld,\n", ir_val->as.konst);
+
+      switch (ir_val->type.kind) {
+        case I8_T: {
+          printf("v: %d,\n", ir_val->as.konst.as.i8);
+          break;
+        }
+        case U8_T: {
+          printf("v: %d,\n", ir_val->as.konst.as.u8);
+          break;
+        }
+        case I16_T: {
+          printf("v: %d,\n", ir_val->as.konst.as.i16);
+          break;
+        }
+        case U16_T: {
+          printf("v: %d,\n", ir_val->as.konst.as.u16);
+          break;
+        }
+        case I32_T: {
+          printf("v: %d,\n", ir_val->as.konst.as.i32);
+          break;
+        }
+        case U32_T: {
+          printf("v: %d,\n", ir_val->as.konst.as.u32);
+          break;
+        }
+        case I64_T: {
+          printf("v: %lld,\n", ir_val->as.konst.as.i64);
+          break;
+        }
+        case U64_T: {
+          printf("v: %llu,\n", ir_val->as.konst.as.u64);
+          break;
+        }
+        default:
+          assert(0);
+      }
 
       print_indent(spaces);
       printf(")");
@@ -3380,6 +3601,22 @@ void print_ir_instr(struct IRInstr *instr, int spaces)
   print_indent(spaces);
 
   switch (instr->kind) {
+    case IRInstr_UNARY: {
+      printf("IRInstr_UNARY(\n");
+      print_indent(spaces + 2);
+      printf("kind = NEG,\n");
+      print_indent(spaces + 2);
+      printf("src = ");
+      print_ir_val(instr->as.unary.src, spaces + 2);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("dst = ");
+      print_ir_val(instr->as.unary.dst, spaces + 2);
+      printf("\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
     case IRInstr_JMP: {
       printf("IRInstr_JMP(target = %s)", instr->as.jmp.target);
       break;
@@ -3537,6 +3774,7 @@ enum AsmInstrKind {
   AsmInstr_JmpCC,
   AsmInstr_SetCC,
   AsmInstr_LEA,
+  AsmInstr_UNARY,
 };
 
 enum AsmOperandKind {
@@ -3605,6 +3843,15 @@ struct AsmInstrRet {
 
 struct AsmInstrCall {
   char *target;
+};
+
+enum AsmInstrUnaryKind {
+  AsmInstrUnary_NEG,
+};
+
+struct AsmInstrUnary {
+  enum AsmInstrUnaryKind kind;
+  struct AsmOperand op;
 };
 
 struct AsmInstrBinary {
@@ -3687,6 +3934,7 @@ struct AsmInstr {
     struct AsmInstrCmp cmp;
     struct AsmInstrLabel lbl;
     struct AsmInstrLea lea;
+    struct AsmInstrUnary unary;
   } as;
 };
 
@@ -3781,7 +4029,35 @@ struct AsmOperand codegen_irvalue(struct IRValue *val)
     case IRValue_CONST: {
       struct AsmOperand operand;
       operand.kind = AsmOperand_IMM;
-      operand.as.imm = val->as.konst;
+      switch (val->type.kind) {
+        case I8_T:
+          operand.as.imm = val->as.konst.as.i8;
+          break;
+        case U8_T:
+          operand.as.imm = val->as.konst.as.u8;
+          break;
+        case I16_T:
+          operand.as.imm = val->as.konst.as.i16;
+          break;
+        case U16_T:
+          operand.as.imm = val->as.konst.as.u16;
+          break;
+        case I32_T:
+          operand.as.imm = val->as.konst.as.i32;
+          break;
+        case U32_T:
+          operand.as.imm = val->as.konst.as.u32;
+          break;
+        case I64_T:
+          operand.as.imm = val->as.konst.as.i64;
+          break;
+        case U64_T:
+          operand.as.imm = val->as.konst.as.u64;
+          break;
+        default:
+          operand.as.imm = val->as.konst.as.i64;
+          break;
+      }
       operand.asm_type = type_to_asm_type(val->type);
       return operand;
     }
@@ -3807,6 +4083,26 @@ bool is_comparison(enum IRInstrBinaryKind kind)
 void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
 {
   switch (ir_instr->kind) {
+    case IRInstr_UNARY: {
+      struct AsmOperand src, dst;
+      struct AsmInstr i1 = {0}, i2 = {0};
+
+      src = codegen_irvalue(ir_instr->as.unary.src);
+      dst = codegen_irvalue(ir_instr->as.unary.dst);
+
+      i1.kind = AsmInstr_MOV;
+      i1.as.mov.src = src;
+      i1.as.mov.dst = dst;
+      i1.asm_type = dst.asm_type;
+
+      i2.kind = AsmInstr_UNARY;
+      i2.as.unary.op = dst;
+      i2.asm_type = dst.asm_type;
+
+      vec_insert(instrs, i1);
+      vec_insert(instrs, i2);
+      break;
+    }
     case IRInstr_GETADDR: {
       struct AsmInstr i = {0};
       i.kind = AsmInstr_LEA;
@@ -4596,6 +4892,16 @@ void print_asm_instr(struct AsmInstr *instr, int spaces)
   print_indent(spaces);
 
   switch (instr->kind) {
+    case AsmInstr_UNARY: {
+      printf("AsmInstr_UNARY(\n");
+      print_indent(spaces + 2);
+      printf("op = ");
+      print_asm_operand(&instr->as.unary.op);
+      printf(",\n");
+      print_indent(spaces);
+      printf("),\n");
+      break;
+    }
     case AsmInstr_CMP: {
       printf("AsmInstr_CMP(\n");
       print_indent(spaces + 2);
@@ -4817,6 +5123,14 @@ struct AsmProgram *replace_pseudo(struct AsmProgram *asmcode)
     for (int j = 0; j < asmcode->funcs.data[i].body.len; j++) {
       struct AsmInstr *asminstr = &asmcode->funcs.data[i].body.data[j];
       switch (asminstr->kind) {
+        case AsmInstr_UNARY: {
+          if (asminstr->as.unary.op.kind == AsmOperand_PSEUDO) {
+            asminstr->as.unary.op.kind = AsmOperand_STACK;
+            asminstr->as.unary.op.as.stack_offset =
+                get_offset(map, asminstr->as.unary.op.as.pseudo, &offset);
+          }
+          break;
+        }
         case AsmInstr_LEA: {
           if (asminstr->as.lea.dst.kind == AsmOperand_PSEUDO) {
             asminstr->as.lea.dst.kind = AsmOperand_STACK;
@@ -5336,6 +5650,27 @@ void emit(struct AsmProgram *prog)
       struct AsmInstr *instr = &prog->funcs.data[i].body.data[j];
       fprintf(f, "\t");
       switch (instr->kind) {
+        case AsmInstr_UNARY: {
+          fprintf(f, "neg");
+          switch (instr->asm_type) {
+            case AsmType_BYTE:
+              fprintf(f, "b");
+              break;
+            case AsmType_WORD:
+              fprintf(f, "w");
+              break;
+            case AsmType_LONGWORD:
+              fprintf(f, "l");
+              break;
+            case AsmType_QUADWORD:
+              fprintf(f, "q");
+              break;
+          }
+          fprintf(f, " ");
+          emit_operand(f, &instr->as.unary.op);
+          fprintf(f, "\n");
+          break;
+        }
         case AsmInstr_LEA: {
           fprintf(f, "leaq ");
           emit_operand(f, &instr->as.lea.src);
@@ -5788,6 +6123,18 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
       }
       break;
     }
+    case EXPR_UNARY: {
+      struct TypecheckResult r;
+
+      r = typecheck_expr(expr->as.unary.expr, sym_table);
+      if (!r.is_ok) {
+        return r;
+      }
+
+      expr->type = expr->as.unary.expr->type;
+
+      break;
+    }
     case EXPR_VARIABLE: {
       struct Symbol *sym = sym_get(sym_table, expr->as.var.name);
 
@@ -5853,21 +6200,23 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
             .ast = NULL};
       }
 
-      if (expr->as.assign.rhs->kind == EXPR_LITERAL &&
-          expr->as.assign.rhs->as.literal.kind == LITERAL_NUM) {
-        long long val = expr->as.assign.rhs->as.literal.as.num;
+      // if (expr->as.assign.rhs->kind == EXPR_LITERAL &&
+      //     expr->as.assign.rhs->as.literal.kind == LITERAL_NUM) {
+      //   long long val = expr->as.assign.rhs->as.literal.as.num;
 
-        if (!value_fits_in_type(val, expr->as.assign.lhs->type)) {
-          return (struct TypecheckResult){.is_ok = false,
-                                          .msg =
-                                              "Numeric literal overflow for "
-                                              "the target type in assignment",
-                                          .ast = NULL};
-        }
+      //   if (!value_fits_in_type(val, expr->as.assign.lhs->type)) {
+      //     return (struct TypecheckResult){.is_ok = false,
+      //                                     .msg =
+      //                                         "Numeric literal overflow for "
+      //                                         "the target type in
+      //                                         assignment",
+      //                                     .ast = NULL};
+      //   }
 
-        expr->as.assign.rhs->type = expr->as.assign.lhs->type;
-        expr->as.assign.rhs->as.literal.type = expr->as.assign.lhs->type;
-      }
+      // }
+
+      expr->as.assign.rhs->type = expr->as.assign.lhs->type;
+      // expr->as.assign.rhs->as.literal.type = expr->as.assign.lhs->type;
 
       if (!types_equal(expr->as.assign.lhs->type, expr->as.assign.rhs->type)) {
         return (struct TypecheckResult){
@@ -5906,22 +6255,21 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
         struct Expr *arg = &expr->as.call.arguments.data[i];
         Type param_type = callee_sym->type.as.func.params.data[i];
 
-        if (arg->kind == EXPR_LITERAL && arg->as.literal.kind == LITERAL_NUM) {
-          long long val = arg->as.literal.as.num;
+        // if (arg->kind == EXPR_LITERAL && arg->as.literal.kind == LITERAL_NUM)
+        // {
+        //   long long val = arg->as.literal.as.num;
 
-          if (!value_fits_in_type(val, param_type)) {
-            return (struct TypecheckResult){
-                .is_ok = false,
-                .msg = "Numeric literal overflow for function parameter",
-                .ast = NULL};
-          }
+        //   if (!value_fits_in_type(val, param_type)) {
+        //     return (struct TypecheckResult){
+        //         .is_ok = false,
+        //         .msg = "Numeric literal overflow for function parameter",
+        //         .ast = NULL};
+        //   }
 
-          arg->type = param_type;
-          arg->as.literal.type = param_type;
-        }
+        // }
 
-        print_type(&arg->type);
-        print_type(&param_type);
+        arg->type = param_type;
+        arg->as.literal.type = param_type;
 
         if (!types_equal(arg->type, param_type)) {
           return (struct TypecheckResult){
@@ -6020,18 +6368,18 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
         return res;
       }
 
-      if (stmt->as.let.init->kind == EXPR_LITERAL &&
-          stmt->as.let.init->as.literal.kind == LITERAL_NUM) {
-        long long val = stmt->as.let.init->as.literal.as.num;
-        if (!value_fits_in_type(val, stmt->as.let.type)) {
-          return (struct TypecheckResult){
-              .is_ok = false,
-              .msg = "Numeric literal overflow for the target type"};
-        }
+      // if (stmt->as.let.init->kind == EXPR_LITERAL &&
+      //     stmt->as.let.init->as.literal.kind == LITERAL_NUM) {
+      //   long long val = stmt->as.let.init->as.literal.as.num;
+      //   if (!value_fits_in_type(val, stmt->as.let.type)) {
+      //     return (struct TypecheckResult){
+      //         .is_ok = false,
+      //         .msg = "Numeric literal overflow for the target type"};
+      //   }
 
-        stmt->as.let.init->type = stmt->as.let.type;
-        stmt->as.let.init->as.literal.type = stmt->as.let.type;
-      }
+      stmt->as.let.init->type = stmt->as.let.type;
+      stmt->as.let.init->as.literal.type = stmt->as.let.type;
+      // }
 
       if (stmt->as.let.type.kind != stmt->as.let.init->type.kind) {
         return (struct TypecheckResult){
@@ -6050,18 +6398,18 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
           return res;
         }
 
-        if (stmt->as.ret.val->kind == EXPR_LITERAL &&
-            stmt->as.ret.val->as.literal.kind == LITERAL_NUM) {
-          long long val = stmt->as.ret.val->as.literal.as.num;
-          if (!value_fits_in_type(val, stmt->as.ret.expected_retval)) {
-            return (struct TypecheckResult){
-                .is_ok = false,
-                .msg = "Numeric literal overflow for the target type"};
-          }
+        // if (stmt->as.ret.val->kind == EXPR_LITERAL &&
+        //     stmt->as.ret.val->as.literal.kind == LITERAL_NUM) {
+        //   long long val = stmt->as.ret.val->as.literal.as.num;
+        //   if (!value_fits_in_type(val, stmt->as.ret.expected_retval)) {
+        //     return (struct TypecheckResult){
+        //         .is_ok = false,
+        //         .msg = "Numeric literal overflow for the target type"};
+        //   }
 
-          stmt->as.ret.val->type = stmt->as.ret.expected_retval;
-          stmt->as.ret.val->as.literal.type = stmt->as.ret.expected_retval;
-        }
+        stmt->as.ret.val->type = stmt->as.ret.expected_retval;
+        stmt->as.ret.val->as.literal.type = stmt->as.ret.expected_retval;
+        // }
 
         if (stmt->as.ret.val->type.kind != stmt->as.ret.expected_retval.kind) {
           return (struct TypecheckResult){
@@ -6273,6 +6621,16 @@ struct ResolveResult resolve_expr(struct VariableMap **varmap,
       rrhs = resolve_expr(varmap, expr->as.assign.rhs);
       if (!rrhs.is_ok) {
         return rrhs;
+      }
+
+      break;
+    }
+    case EXPR_UNARY: {
+      struct ResolveResult r;
+
+      r = resolve_expr(varmap, expr->as.unary.expr);
+      if (!r.is_ok) {
+        return r;
       }
 
       break;
