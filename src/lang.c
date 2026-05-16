@@ -7333,9 +7333,13 @@ char *strip_ext(char *path)
   return new;
 }
 
-int main(int argc, char **argv)
+struct RunResult {
+  bool is_ok;
+  char *msg;
+};
+
+struct RunResult run(struct CompilerOptions *opts)
 {
-  struct CompilerOptions opts;
   enum TargetStage target_stage;
   char *path;
   struct ReadFileResult read_file_result;
@@ -7353,14 +7357,18 @@ int main(int argc, char **argv)
   struct IRProgram ir_prog;
   struct AsmResult asm_result;
   struct AsmProgram asm_prog;
+  struct RunResult r;
 
-  opts = parse_args(argc, argv);
-  target_stage = opts.target_stage;
-  path = opts.path;
+  r.is_ok = true;
+  r.msg = NULL;
+
+  target_stage = opts->target_stage;
+  path = opts->path;
 
   read_file_result = read_file(path);
   if (!read_file_result.is_ok) {
-    fprintf(stderr, "Couldn't read file: %s\n", path);
+    r.msg = "Couldn't read file";
+    r.is_ok = false;
     goto free_up2_fread;
   }
 
@@ -7370,7 +7378,8 @@ int main(int argc, char **argv)
   tokenize_result = tokenize(&tokenizer);
 
   if (!tokenize_result.is_ok) {
-    fprintf(stderr, "err: %s\n", tokenize_result.msg);
+    r.msg = tokenize_result.msg;
+    r.is_ok = false;
     goto free_up2_tokenize;
   }
 
@@ -7385,7 +7394,8 @@ int main(int argc, char **argv)
   parse_result = parse(&parser);
 
   if (!parse_result.is_ok) {
-    fprintf(stderr, "err: %s\n", parse_result.msg);
+    r.msg = parse_result.msg;
+    r.is_ok = false;
     goto free_up2_parse;
   }
 
@@ -7398,7 +7408,8 @@ int main(int argc, char **argv)
 
   resolve_result = resolve(ast);
   if (!resolve_result.is_ok) {
-    fprintf(stderr, "err: %s\n", resolve_result.msg);
+    r.msg = resolve_result.msg;
+    r.is_ok = false;
     goto free_up2_parse;
   }
 
@@ -7412,7 +7423,8 @@ int main(int argc, char **argv)
 
   typecheck_result = typecheck(resolved_ast);
   if (!typecheck_result.is_ok) {
-    fprintf(stderr, "err: %s\n", typecheck_result.msg);
+    r.msg = typecheck_result.msg;
+    r.is_ok = false;
     goto free_up2_parse;
   }
 
@@ -7427,7 +7439,8 @@ int main(int argc, char **argv)
 
   loop_label_result = loop_label(typechecked_ast);
   if (!loop_label_result.is_ok) {
-    fprintf(stderr, "err: %s\n", loop_label_result.msg);
+    r.msg = loop_label_result.msg;
+    r.is_ok = false;
     goto free_up2_parse;
   }
 
@@ -7438,7 +7451,8 @@ int main(int argc, char **argv)
 
   irfy_result = irfy_ast(labeled_ast);
   if (!irfy_result.is_ok) {
-    fprintf(stderr, "err: %s\n", irfy_result.msg);
+    r.msg = irfy_result.msg;
+    r.is_ok = false;
     goto free_up2_irfy;
   }
 
@@ -7451,7 +7465,8 @@ int main(int argc, char **argv)
 
   asm_result = codegen(&ir_prog);
   if (!asm_result.is_ok) {
-    fprintf(stderr, "err: %s\n", asm_result.msg);
+    r.msg = asm_result.msg;
+    r.is_ok = false;
     goto free_up2_asm;
   }
 
@@ -7519,6 +7534,21 @@ free_up2_fread:
     free(global_constants.data[i].value);
   }
   vec_free(&global_constants);
+
+  return r;
+}
+
+int main(int argc, char **argv)
+{
+  struct CompilerOptions opts;
+  struct RunResult r;
+
+  opts = parse_args(argc, argv);
+  r = run(&opts);
+  if (!r.is_ok) {
+    fprintf(stderr, "err: %s\n", r.msg);
+    return 1;
+  }
 
   return 0;
 }
