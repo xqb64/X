@@ -24,8 +24,9 @@ struct ReadFileResult read_file(const char *path)
   size_t bytes_read;
   char *buf;
 
-  result =
-      (struct ReadFileResult){.is_ok = true, .msg = NULL, .contents = NULL};
+  result.is_ok = true;
+  result.msg = NULL;
+  result.contents = NULL;
 
   f = fopen(path, "r");
   if (!f) {
