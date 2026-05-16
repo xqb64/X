@@ -1002,8 +1002,7 @@ bool check(struct Parser *parser, enum TokenKind kind)
 
 bool check2(struct Parser *parser, enum TokenKind kind1, enum TokenKind kind2)
 {
-  return parser->curr->kind == kind1 &&
-         parser->tokens->data[parser->idx].kind == kind2;
+  return parser->prev->kind == kind1 && parser->curr->kind == kind2;
 }
 
 struct ParseFnResult block(struct Parser *parser)
@@ -1251,13 +1250,7 @@ struct ParseFnResult primary(struct Parser *parser)
   if (check2(parser, TOKEN_MINUS, TOKEN_NUMBER)) {
     struct Literal literal;
     struct Token *token_minus, *token_literal;
-    unsigned long long val;
-
-    token_minus = consume(parser, TOKEN_MINUS);
-    if (!token_minus) {
-      return (struct ParseFnResult){
-          .is_ok = false, .as.expr = {0}, .msg = "Expected minus"};
-    }
+    long long val;
 
     token_literal = consume(parser, TOKEN_NUMBER);
     if (!token_literal) {
@@ -1265,7 +1258,7 @@ struct ParseFnResult primary(struct Parser *parser)
           .is_ok = false, .as.expr = {0}, .msg = "Expected number"};
     }
 
-    val = strtoull(parser->prev->start, NULL, 10);
+    val = strtoll(parser->prev->start, NULL, 10);
 
     literal.kind = LITERAL_NUM;
 
@@ -1291,7 +1284,7 @@ struct ParseFnResult primary(struct Parser *parser)
   } else if (check(parser, TOKEN_NUMBER)) {
     struct Literal literal;
     struct Token *token_literal;
-    long long val;
+    unsigned long long val;
 
     token_literal = consume(parser, TOKEN_NUMBER);
     if (!token_literal) {
@@ -1299,7 +1292,7 @@ struct ParseFnResult primary(struct Parser *parser)
           .is_ok = false, .as.expr = {0}, .msg = "Expected number"};
     }
 
-    val = strtoll(parser->prev->start, NULL, 10);
+    val = strtoull(parser->prev->start, NULL, 10);
 
     literal.kind = LITERAL_NUM;
 
@@ -1312,7 +1305,7 @@ struct ParseFnResult primary(struct Parser *parser)
     } else if (val >= 0 && val <= UINT_MAX) {
       literal.type = (Type){.kind = U32_T};
       literal.as.u32 = val;
-    } else if (val >= 0 && val <= ULONG_MAX) {
+    } else if (val >= 0 && val <= ULLONG_MAX) {
       literal.type = (Type){.kind = U64_T};
       literal.as.u64 = val;
     } else {
@@ -3157,7 +3150,7 @@ int extract_label_number(const char *label)
   const char *dot = strrchr(label, '.');
 
   if (!dot) {
-    return -1;  // No dot found
+    return -1;
   }
 
   dot++;
@@ -6087,6 +6080,173 @@ void print_symbol(struct Symbol *sym)
 
 #define IN_RANGE(val, min, max) ((val) >= (min) && (val) <= (max))
 
+bool promote_literal(struct Expr *expr, Type target_type)
+{
+  if (expr->kind != EXPR_LITERAL || expr->as.literal.kind != LITERAL_NUM) {
+    return false;
+  }
+
+  bool src_is_unsigned = is_unsigned(expr->as.literal.type.kind);
+  bool tgt_is_unsigned = is_unsigned(target_type.kind);
+
+  unsigned long long uval = 0;
+  long long sval = 0;
+
+  if (src_is_unsigned) {
+    switch (expr->as.literal.type.kind) {
+      case U8_T:
+        uval = expr->as.literal.as.u8;
+        break;
+      case U16_T:
+        uval = expr->as.literal.as.u16;
+        break;
+      case U32_T:
+        uval = expr->as.literal.as.u32;
+        break;
+      case U64_T:
+        uval = expr->as.literal.as.u64;
+        break;
+      default:
+        break;
+    }
+  } else {
+    switch (expr->as.literal.type.kind) {
+      case I8_T:
+        sval = expr->as.literal.as.i8;
+        break;
+      case I16_T:
+        sval = expr->as.literal.as.i16;
+        break;
+      case I32_T:
+        sval = expr->as.literal.as.i32;
+        break;
+      case I64_T:
+        sval = expr->as.literal.as.i64;
+        break;
+      default:
+        break;
+    }
+  }
+
+  bool fits = false;
+
+  if (src_is_unsigned && tgt_is_unsigned) {
+    switch (target_type.kind) {
+      case U8_T:
+        fits = (uval <= UCHAR_MAX);
+        break;
+      case U16_T:
+        fits = (uval <= USHRT_MAX);
+        break;
+      case U32_T:
+        fits = (uval <= UINT_MAX);
+        break;
+      case U64_T:
+        fits = (uval <= ULLONG_MAX);
+        break;
+      default:
+        break;
+    }
+  } else if (!src_is_unsigned && !tgt_is_unsigned) {
+    switch (target_type.kind) {
+      case I8_T:
+        fits = IN_RANGE(sval, SCHAR_MIN, SCHAR_MAX);
+        break;
+      case I16_T:
+        fits = IN_RANGE(sval, SHRT_MIN, SHRT_MAX);
+        break;
+      case I32_T:
+        fits = IN_RANGE(sval, INT_MIN, INT_MAX);
+        break;
+      case I64_T:
+        fits = IN_RANGE(sval, LLONG_MIN, LLONG_MAX);
+        break;
+      default:
+        break;
+    }
+  } else if (!src_is_unsigned && tgt_is_unsigned) {
+    if (sval < 0) {
+      return false;
+    }
+
+    unsigned long long casted = (unsigned long long) sval;
+    switch (target_type.kind) {
+      case U8_T:
+        fits = (casted <= UCHAR_MAX);
+        break;
+      case U16_T:
+        fits = (casted <= USHRT_MAX);
+        break;
+      case U32_T:
+        fits = (casted <= UINT_MAX);
+        break;
+      case U64_T:
+        fits = (casted <= ULLONG_MAX);
+        break;
+      default:
+        break;
+    }
+  } else if (src_is_unsigned && !tgt_is_unsigned) {
+    switch (target_type.kind) {
+      case I8_T:
+        fits = (uval <= SCHAR_MAX);
+        break;
+      case I16_T:
+        fits = (uval <= SHRT_MAX);
+        break;
+      case I32_T:
+        fits = (uval <= INT_MAX);
+        break;
+      case I64_T:
+        fits = (uval <= LLONG_MAX);
+        break;
+      default:
+        break;
+    }
+  }
+
+  if (fits) {
+    expr->type = target_type;
+    expr->as.literal.type = target_type;
+
+    unsigned long long final_uval =
+        src_is_unsigned ? uval : (unsigned long long) sval;
+    long long final_sval = src_is_unsigned ? (long long) uval : sval;
+
+    switch (target_type.kind) {
+      case I8_T:
+        expr->as.literal.as.i8 = (char) final_sval;
+        break;
+      case U8_T:
+        expr->as.literal.as.u8 = (unsigned char) final_uval;
+        break;
+      case I16_T:
+        expr->as.literal.as.i16 = (short) final_sval;
+        break;
+      case U16_T:
+        expr->as.literal.as.u16 = (unsigned short) final_uval;
+        break;
+      case I32_T:
+        expr->as.literal.as.i32 = (int) final_sval;
+        break;
+      case U32_T:
+        expr->as.literal.as.u32 = (unsigned int) final_uval;
+        break;
+      case I64_T:
+        expr->as.literal.as.i64 = (long long) final_sval;
+        break;
+      case U64_T:
+        expr->as.literal.as.u64 = final_uval;
+        break;
+      default:
+        break;
+    }
+    return true;
+  }
+
+  return false;
+}
+
 bool value_fits_in_type(long long val, Type type)
 {
   switch (type.kind) {
@@ -6097,7 +6257,7 @@ bool value_fits_in_type(long long val, Type type)
     case U32_T:
       return IN_RANGE(val, 0, UINT_MAX);
     case U64_T:
-      return (val >= 0) && ((unsigned long long) val <= ULONG_MAX);
+      return (val >= 0) && ((unsigned long long) val <= ULLONG_MAX);
     case I8_T:
       return IN_RANGE(val, SCHAR_MIN, SCHAR_MAX);
     case I16_T:
@@ -6200,29 +6360,28 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
             .ast = NULL};
       }
 
-      // if (expr->as.assign.rhs->kind == EXPR_LITERAL &&
-      //     expr->as.assign.rhs->as.literal.kind == LITERAL_NUM) {
-      //   long long val = expr->as.assign.rhs->as.literal.as.num;
+      Type actual_type = expr->as.assign.rhs->type;
+      Type expected_type = expr->as.assign.lhs->type;
 
-      //   if (!value_fits_in_type(val, expr->as.assign.lhs->type)) {
-      //     return (struct TypecheckResult){.is_ok = false,
-      //                                     .msg =
-      //                                         "Numeric literal overflow for "
-      //                                         "the target type in
-      //                                         assignment",
-      //                                     .ast = NULL};
-      //   }
-
-      // }
-
-      expr->as.assign.rhs->type = expr->as.assign.lhs->type;
-      // expr->as.assign.rhs->as.literal.type = expr->as.assign.lhs->type;
-
-      if (!types_equal(expr->as.assign.lhs->type, expr->as.assign.rhs->type)) {
-        return (struct TypecheckResult){
-            .is_ok = false,
-            .msg = "Type mismatch in assignment expression",
-            .ast = NULL};
+      if (!types_equal(actual_type, expected_type)) {
+        if (expr->as.assign.rhs->kind == EXPR_LITERAL &&
+            expr->as.assign.rhs->as.literal.kind == LITERAL_NUM) {
+          if (!promote_literal(expr->as.assign.rhs, expected_type)) {
+            return (struct TypecheckResult){
+                .is_ok = false,
+                .msg =
+                    "Type error: assignment does not fit in the expected type",
+                .ast = NULL,
+            };
+          }
+        } else {
+          return (struct TypecheckResult){
+              .is_ok = false,
+              .msg =
+                  "Type error: assignment does not match the expected "
+                  "return type",
+              .ast = NULL};
+        }
       }
 
       expr->type = expr->as.assign.lhs->type;
@@ -6252,30 +6411,30 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
           return arg_res;
         }
 
-        struct Expr *arg = &expr->as.call.arguments.data[i];
-        Type param_type = callee_sym->type.as.func.params.data[i];
+        Type actual_type = expr->as.call.arguments.data[i].type;
+        Type expected_type = callee_sym->type.as.func.params.data[i];
 
-        // if (arg->kind == EXPR_LITERAL && arg->as.literal.kind == LITERAL_NUM)
-        // {
-        //   long long val = arg->as.literal.as.num;
-
-        //   if (!value_fits_in_type(val, param_type)) {
-        //     return (struct TypecheckResult){
-        //         .is_ok = false,
-        //         .msg = "Numeric literal overflow for function parameter",
-        //         .ast = NULL};
-        //   }
-
-        // }
-
-        arg->type = param_type;
-        arg->as.literal.type = param_type;
-
-        if (!types_equal(arg->type, param_type)) {
-          return (struct TypecheckResult){
-              .is_ok = false,
-              .msg = "Called with an arg of wrong type",
-              .ast = NULL};
+        if (!types_equal(actual_type, expected_type)) {
+          if (expr->as.call.arguments.data[i].kind == EXPR_LITERAL &&
+              expr->as.call.arguments.data[i].as.literal.kind == LITERAL_NUM) {
+            if (!promote_literal(&expr->as.call.arguments.data[i],
+                                 expected_type)) {
+              return (struct TypecheckResult){
+                  .is_ok = false,
+                  .msg =
+                      "Type error: assignment does not fit in the expected "
+                      "type",
+                  .ast = NULL,
+              };
+            }
+          } else {
+            return (struct TypecheckResult){
+                .is_ok = false,
+                .msg =
+                    "Type error: assignment does not match the expected "
+                    "return type",
+                .ast = NULL};
+          }
         }
       }
 
@@ -6368,24 +6527,27 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
         return res;
       }
 
-      // if (stmt->as.let.init->kind == EXPR_LITERAL &&
-      //     stmt->as.let.init->as.literal.kind == LITERAL_NUM) {
-      //   long long val = stmt->as.let.init->as.literal.as.num;
-      //   if (!value_fits_in_type(val, stmt->as.let.type)) {
-      //     return (struct TypecheckResult){
-      //         .is_ok = false,
-      //         .msg = "Numeric literal overflow for the target type"};
-      //   }
+      Type actual_type = stmt->as.let.init->type;
+      Type expected_type = stmt->as.let.type;
 
-      stmt->as.let.init->type = stmt->as.let.type;
-      stmt->as.let.init->as.literal.type = stmt->as.let.type;
-      // }
-
-      if (stmt->as.let.type.kind != stmt->as.let.init->type.kind) {
-        return (struct TypecheckResult){
-            .is_ok = false,
-            .msg = "Type mismatch in let statement assignment",
-            .ast = NULL};
+      if (!types_equal(actual_type, expected_type)) {
+        if (stmt->as.let.init->kind == EXPR_LITERAL &&
+            stmt->as.let.init->as.literal.kind == LITERAL_NUM) {
+          if (!promote_literal(stmt->as.let.init, expected_type)) {
+            return (struct TypecheckResult){
+                .is_ok = false,
+                .msg = "Type error: let init does not fit in the expected type",
+                .ast = NULL,
+            };
+          }
+        } else {
+          return (struct TypecheckResult){
+              .is_ok = false,
+              .msg =
+                  "Type error: returned value does not match the function's "
+                  "expected return type",
+              .ast = NULL};
+        }
       }
 
       sym_insert(sym_table, stmt->as.let.name, stmt->as.let.type);
@@ -6398,33 +6560,32 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
           return res;
         }
 
-        // if (stmt->as.ret.val->kind == EXPR_LITERAL &&
-        //     stmt->as.ret.val->as.literal.kind == LITERAL_NUM) {
-        //   long long val = stmt->as.ret.val->as.literal.as.num;
-        //   if (!value_fits_in_type(val, stmt->as.ret.expected_retval)) {
-        //     return (struct TypecheckResult){
-        //         .is_ok = false,
-        //         .msg = "Numeric literal overflow for the target type"};
-        //   }
+        Type actual_type = stmt->as.ret.val->type;
+        Type expected_type = stmt->as.ret.expected_retval;
 
-        stmt->as.ret.val->type = stmt->as.ret.expected_retval;
-        stmt->as.ret.val->as.literal.type = stmt->as.ret.expected_retval;
-        // }
-
-        if (stmt->as.ret.val->type.kind != stmt->as.ret.expected_retval.kind) {
-          return (struct TypecheckResult){
-              .is_ok = false,
-              .msg = "Return value type does not match function signature",
-              .ast = NULL};
-        }
-      } else {
-        if (stmt->as.ret.expected_retval.kind != UNKNOWN_T) {
-          return (struct TypecheckResult){
-              .is_ok = false,
-              .msg = "Missing return value in non-void function",
-              .ast = NULL};
+        if (!types_equal(actual_type, expected_type)) {
+          if (stmt->as.ret.val->kind == EXPR_LITERAL &&
+              stmt->as.ret.val->as.literal.kind == LITERAL_NUM) {
+            if (!promote_literal(stmt->as.ret.val, expected_type)) {
+              return (struct TypecheckResult){
+                  .is_ok = false,
+                  .msg =
+                      "Type error: returned literal value does not fit in the "
+                      "expected return type",
+                  .ast = NULL,
+              };
+            }
+          } else {
+            return (struct TypecheckResult){
+                .is_ok = false,
+                .msg =
+                    "Type error: returned value does not match the function's "
+                    "expected return type",
+                .ast = NULL};
+          }
         }
       }
+
       break;
     }
     case STMT_IF: {

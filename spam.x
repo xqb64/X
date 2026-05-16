@@ -1,10 +1,7 @@
-extern fn puts(s: str) -> i32;
+fn f(x: i32) -> i32 {
+  ret x;
+}
 
 fn main(void) -> i32 {
-  let f: i32 = -10;
-  while (f <= 0) {
-    puts("Hello, world!");
-    f = f+1;
-  }
-  ret 0;
+  ret f(0);
 }
