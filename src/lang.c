@@ -6355,6 +6355,25 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
 
       expr->type = expr->as.unary.expr->type;
 
+      if (expr->as.unary.op[0] == '-') {
+        switch (expr->type.kind) {
+          case U8_T:
+            expr->type.kind = I8_T;
+            break;
+          case U16_T:
+            expr->type.kind = I16_T;
+            break;
+          case U32_T:
+            expr->type.kind = I32_T;
+            break;
+          case U64_T:
+            expr->type.kind = I64_T;
+            break;
+          default:
+            break;
+        }
+      }
+
       break;
     }
     case EXPR_VARIABLE: {
