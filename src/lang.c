@@ -5683,11 +5683,11 @@ void emit_operand(FILE *f, struct AsmOperand *op)
   }
 }
 
-void emit(struct AsmProgram *prog)
+void emit(struct AsmProgram *prog, char *path)
 {
   FILE *f;
 
-  f = fopen("spam.s", "w");
+  f = fopen(path, "w");
   if (global_constants.len > 0) {
     fprintf(f, ".section .rodata\n");
     for (int i = 0; i < global_constants.len; i++) {
@@ -7114,14 +7114,13 @@ enum TargetStage {
 
 struct CompilerOptions {
   enum TargetStage target_stage;
-  const char *path;
+  char *path;
 };
 
 struct CompilerOptions parse_args(int argc, char **argv)
 {
   struct CompilerOptions opts;
   opts.target_stage = STAGE_FULL;
-  opts.path = "spam.x";
 
   static struct option long_options[] = {
       {"tokenize", no_argument, 0, 't'},
@@ -7294,11 +7293,49 @@ struct LoopLabelResult loop_label(struct AST *ast)
   return (struct LoopLabelResult){.is_ok = true, .msg = NULL, .ast = ast};
 }
 
+char *replace_ext(char *path, char *ext)
+{
+  int a, b, total;
+  char *replaced, *dot;
+
+  a = strlen(path);
+  b = strlen(ext);
+
+  total = a + b + 1;
+
+  replaced = malloc(total);
+
+  dot = strrchr(path, '.') + 1;
+
+  strncpy(replaced, path, dot - path);
+  replaced[dot - path] = '\0';
+
+  strcat(replaced, ext);
+
+  return replaced;
+}
+
+char *strip_ext(char *path)
+{
+  int a, total;
+  char *dot, *new;
+
+  a = strlen(path);
+  total = a + 1;
+
+  dot = strrchr(path, '.');
+  new = malloc(total);
+
+  strncpy(new, path, dot - path - 1);
+
+  return new;
+}
+
 int main(int argc, char **argv)
 {
   struct CompilerOptions opts;
   enum TargetStage target_stage;
-  const char *path;
+  char *path;
   struct ReadFileResult read_file_result;
   char *src;
   struct Tokenizer tokenizer;
@@ -7439,19 +7476,29 @@ int main(int argc, char **argv)
     goto free_up2_asm;
   }
 
-  emit(&asm_prog);
+  char *asm_path;
+  asm_path = replace_ext(path, "s");
+
+  emit(&asm_prog, asm_path);
   if (target_stage == STAGE_EMIT) {
     goto free_up2_asm;
   }
 
+  char *o_path, *exe_path;
+  o_path = replace_ext(path, "o");
+  exe_path = strip_ext(path);
+
   if (target_stage == STAGE_ASM) {
-    assemble_and_link("spam.s", "spam.o", true);
+    assemble_and_link(asm_path, o_path, true);
   } else if (target_stage == STAGE_LINK || target_stage == STAGE_FULL) {
-    assemble_and_link("spam.s", "spam", false);
+    assemble_and_link(asm_path, exe_path, false);
   }
 
 free_up2_asm:
   free_asm(&asm_result.prog);
+  free(asm_path);
+  free(o_path);
+  free(exe_path);
 
 free_up2_irfy:
   free_ir_prog(&irfy_result.prog);
