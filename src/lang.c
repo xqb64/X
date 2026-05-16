@@ -6827,30 +6827,6 @@ bool promote_literal(struct Expr *expr, Type target_type)
   return false;
 }
 
-bool value_fits_in_type(long long val, Type type)
-{
-  switch (type.kind) {
-    case U8_T:
-      return IN_RANGE(val, 0, UCHAR_MAX);
-    case U16_T:
-      return IN_RANGE(val, 0, USHRT_MAX);
-    case U32_T:
-      return IN_RANGE(val, 0, UINT_MAX);
-    case U64_T:
-      return (val >= 0) && ((unsigned long long) val <= ULLONG_MAX);
-    case I8_T:
-      return IN_RANGE(val, SCHAR_MIN, SCHAR_MAX);
-    case I16_T:
-      return IN_RANGE(val, SHRT_MIN, SHRT_MAX);
-    case I32_T:
-      return IN_RANGE(val, INT_MIN, INT_MAX);
-    case I64_T:
-      return true;
-    default:
-      return false;
-  }
-}
-
 struct TypecheckResult typecheck_expr(struct Expr *expr,
                                       struct Symbol *sym_table)
 {
