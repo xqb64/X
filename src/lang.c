@@ -968,8 +968,11 @@ struct Token *consume(struct Parser *parser, enum TokenKind kind)
   if (parser->curr && parser->curr->kind == kind) {
     return advance_parser(parser);
   }
-  printf("Encountered wrong token:");
+  printf("Encountered wrong token.  Prev is: ");
   print_token(parser->prev);
+  printf("\n");
+  printf("Encountered wrong token.  Curr is: ");
+  print_token(parser->curr);
   printf("\n");
   return NULL;
 }
@@ -1009,9 +1012,16 @@ struct ParseFnResult block(struct Parser *parser)
 {
   VecStmt stmts = {0};
   struct ParseFnResult result;
+  struct Token *token_lbrace, *token_rbrace;
 
   result.is_ok = true;
   result.msg = NULL;
+
+  token_lbrace = consume(parser, TOKEN_LBRACE);
+  if (!token_lbrace) {
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Expected '{'", .as.stmt = {0}};
+  }
 
   while (!check(parser, TOKEN_RBRACE)) {
     struct ParseFnResult r;
@@ -1022,6 +1032,12 @@ struct ParseFnResult block(struct Parser *parser)
     }
 
     vec_insert(&stmts, r.as.stmt);
+  }
+
+  token_rbrace = consume(parser, TOKEN_RBRACE);
+  if (!token_rbrace) {
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Expected '}'", .as.stmt = {0}};
   }
 
   struct Stmt block_stmt;
@@ -1180,13 +1196,6 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
                                   .msg = "Expected token 'i64' after '->'"};
   }
 
-  token_lbrace = consume(parser, TOKEN_LBRACE);
-  if (!token_lbrace) {
-    return (struct ParseFnResult){.is_ok = false,
-                                  .as.stmt = {0},
-                                  .msg = "Expected token 'void' after '('"};
-  }
-
   struct StmtFn stmt_fn;
   stmt_fn.name = own_string_n(token_id->start, token_id->len);
   stmt_fn.params = parameters;
@@ -1204,13 +1213,6 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
   }
 
   struct Stmt body = block_result.as.stmt;
-
-  token_rbrace = consume(parser, TOKEN_RBRACE);
-  if (!token_rbrace) {
-    return (struct ParseFnResult){.is_ok = false,
-                                  .as.stmt = {0},
-                                  .msg = "Expected token '}' after fn body"};
-  }
 
   stmt_fn.body = body.as.block.stmts;
   stmt_fn.retval = parse_type(token_retval);
@@ -1883,21 +1885,9 @@ struct ParseFnResult parse_if_stmt(struct Parser *parser)
         .is_ok = false, .msg = "Expected ')' after 'if' cond", .as.stmt = {0}};
   }
 
-  token_lbrace = consume(parser, TOKEN_LBRACE);
-  if (!token_lbrace) {
-    return (struct ParseFnResult){
-        .is_ok = false, .msg = "Expected '{' after 'if' cond", .as.stmt = {0}};
-  }
-
   then_res = block(parser);
   if (!then_res.is_ok) {
     return then_res;
-  }
-
-  token_rbrace = consume(parser, TOKEN_RBRACE);
-  if (!token_rbrace) {
-    return (struct ParseFnResult){
-        .is_ok = false, .msg = "Expected '}' after 'if' block", .as.stmt = {0}};
   }
 
   then_block = ALLOC(then_res.as.stmt);
@@ -1910,22 +1900,9 @@ struct ParseFnResult parse_if_stmt(struct Parser *parser)
           .is_ok = false, .msg = "Expected 'else'", .as.stmt = {0}};
     }
 
-    token_lbrace = consume(parser, TOKEN_LBRACE);
-    if (!token_lbrace) {
-      return (struct ParseFnResult){
-          .is_ok = false, .msg = "Expected '{' after else", .as.stmt = {0}};
-    }
-
     else_res = block(parser);
     if (!else_res.is_ok) {
       return else_res;
-    }
-
-    token_rbrace = consume(parser, TOKEN_RBRACE);
-    if (!token_rbrace) {
-      return (struct ParseFnResult){.is_ok = false,
-                                    .msg = "Expected '}' after 'else' block",
-                                    .as.stmt = {0}};
     }
 
     else_block = ALLOC(else_res.as.stmt);
@@ -1981,24 +1958,12 @@ struct ParseFnResult parse_while_stmt(struct Parser *parser)
         .is_ok = false, .msg = "Expected '(' after while cond", .as.stmt = {0}};
   }
 
-  token_lbrace = consume(parser, TOKEN_LBRACE);
-  if (!token_lbrace) {
-    return (struct ParseFnResult){
-        .is_ok = false, .msg = "Expected '{' after while cond", .as.stmt = {0}};
-  }
-
   body_result = block(parser);
   if (!body_result.is_ok) {
     return body_result;
   }
 
   body = body_result.as.stmt;
-
-  token_rbrace = consume(parser, TOKEN_RBRACE);
-  if (!token_rbrace) {
-    return (struct ParseFnResult){
-        .is_ok = false, .msg = "Expected '}' after while body", .as.stmt = {0}};
-  }
 
   struct StmtWhile while_stmt;
   while_stmt.cond = cond;
@@ -2250,6 +2215,14 @@ struct ParseFnResult parse_stmt(struct Parser *parser)
   result.msg = NULL;
 
   switch (parser->curr->kind) {
+    case TOKEN_LBRACE: {
+      struct ParseFnResult block_res = block(parser);
+      if (!block_res.is_ok) {
+        return block_res;
+      }
+      result.as.stmt = block_res.as.stmt;
+      break;
+    }
     case TOKEN_FN: {
       struct ParseFnResult fn_res = parse_fn_stmt(parser);
       if (!fn_res.is_ok) {
@@ -3230,6 +3203,8 @@ void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
   switch (stmt->kind) {
     case STMT_FN:
       assert(0);
+    case STMT_EXTERN:
+      break;
     case STMT_BREAK: {
       char *label, *new_label;
       int n;
@@ -4878,6 +4853,10 @@ void print_asm_operand(struct AsmOperand *op)
       printf("AsmOperand_STACK(offset = %d)", op->as.stack_offset);
       break;
     }
+    case AsmOperand_DATA: {
+      printf("AsmOperand_DATA(name = %s)", op->as.data);
+      break;
+    }
     default:
       assert(0);
   }
@@ -4947,6 +4926,20 @@ void print_asm_instr(struct AsmInstr *instr, int spaces)
   print_indent(spaces);
 
   switch (instr->kind) {
+    case AsmInstr_LEA: {
+      printf("AsmInstr_LEA(\n");
+      print_indent(spaces + 2);
+      printf("src = ");
+      print_asm_operand(&instr->as.lea.src);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("dst = ");
+      print_asm_operand(&instr->as.lea.dst);
+      printf(",\n");
+      print_indent(spaces);
+      printf("),\n");
+      break;
+    }
     case AsmInstr_UNARY: {
       printf("AsmInstr_UNARY(\n");
       print_indent(spaces + 2);
@@ -6765,7 +6758,6 @@ struct ResolveResult {
 
 struct Variable {
   char *uniq_name;
-  bool current_scope;
 };
 
 struct VariableMap {
@@ -6774,14 +6766,12 @@ struct VariableMap {
   struct Variable value;
 };
 
-void varmap_insert(struct VariableMap **varmap, char *name, char *uniq_name,
-                   bool current_scope)
+void varmap_insert(struct VariableMap **varmap, char *name, char *uniq_name)
 {
   struct Variable v;
   struct VariableMap *node;
 
   v.uniq_name = uniq_name;
-  v.current_scope = current_scope;
 
   node = malloc(sizeof(struct VariableMap));
 
@@ -6906,7 +6896,7 @@ struct ResolveResult resolve_param(struct VariableMap **varmap,
 
   uniq_name = mkuniq(param->name);
 
-  varmap_insert(varmap, param->name, uniq_name, true);
+  varmap_insert(varmap, param->name, uniq_name);
 
   free(param->name);
 
@@ -6923,7 +6913,7 @@ struct ResolveResult resolve_stmt(struct VariableMap **varmap,
       char *cpy;
 
       cpy = strdup(stmt->as.extern_stmt.name);
-      varmap_insert(varmap, stmt->as.extern_stmt.name, cpy, true);
+      varmap_insert(varmap, stmt->as.extern_stmt.name, cpy);
       break;
     }
     case STMT_BREAK:
@@ -6982,7 +6972,7 @@ struct ResolveResult resolve_stmt(struct VariableMap **varmap,
       cpy = strdup(stmt->as.fn.name);
 
       if (varmap) {
-        varmap_insert(varmap, stmt->as.fn.name, cpy, true);
+        varmap_insert(varmap, stmt->as.fn.name, cpy);
       }
 
       variable_map = varmap ? *varmap : NULL;
@@ -7020,6 +7010,8 @@ struct ResolveResult resolve_stmt(struct VariableMap **varmap,
       break;
     }
     case STMT_BLOCK: {
+      struct VariableMap *outer_map = *varmap;
+
       for (int i = 0; i < stmt->as.block.stmts.len; i++) {
         struct ResolveResult r;
 
@@ -7027,6 +7019,15 @@ struct ResolveResult resolve_stmt(struct VariableMap **varmap,
         if (!r.is_ok) {
           return r;
         }
+      }
+
+      while (*varmap != outer_map) {
+        struct VariableMap *tmp = *varmap;
+        *varmap = tmp->next;
+
+        free(tmp->name);
+        free(tmp->value.uniq_name);
+        free(tmp);
       }
       break;
     }
@@ -7042,7 +7043,7 @@ struct ResolveResult resolve_stmt(struct VariableMap **varmap,
 
       uniq_name = mkuniq(stmt->as.let.name);
 
-      varmap_insert(varmap, stmt->as.let.name, uniq_name, true);
+      varmap_insert(varmap, stmt->as.let.name, uniq_name);
 
       free(stmt->as.let.name);
       stmt->as.let.name = strdup(uniq_name);
