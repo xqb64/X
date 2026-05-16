@@ -7326,7 +7326,8 @@ char *strip_ext(char *path)
   dot = strrchr(path, '.');
   new = malloc(total);
 
-  strncpy(new, path, dot - path - 1);
+  strncpy(new, path, dot - path);
+  new[dot - path] = '\0';
 
   return new;
 }
