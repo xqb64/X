@@ -1194,7 +1194,7 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
   if (!token_retval) {
     return (struct ParseFnResult){.is_ok = false,
                                   .as.stmt = {0},
-                                  .msg = "Expected token 'i64' after '->'"};
+                                  .msg = "Expected retval after '->'"};
   }
 
   struct StmtFn stmt_fn;
@@ -2182,7 +2182,7 @@ struct ParseFnResult parse_extern_stmt(struct Parser *parser)
   if (!token_retval) {
     return (struct ParseFnResult){.is_ok = false,
                                   .as.stmt = {0},
-                                  .msg = "Expected token 'i64' after '->'"};
+                                  .msg = "Expected retval after '->'"};
   }
 
   token_semicolon = consume(parser, TOKEN_SEMICOLON);
@@ -4086,8 +4086,7 @@ struct AsmOperand codegen_irvalue(struct IRValue *val)
           operand.as.imm = val->as.konst.as.u64;
           break;
         default:
-          operand.as.imm = val->as.konst.as.i64;
-          break;
+	  assert(0);
       }
       operand.asm_type = type_to_asm_type(val->type);
       return operand;
@@ -7311,7 +7310,6 @@ char *replace_ext(char *path, char *ext)
 
   strncpy(replaced, path, dot - path);
   replaced[dot - path] = '\0';
-
   strcat(replaced, ext);
 
   return replaced;
