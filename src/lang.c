@@ -94,6 +94,7 @@ end:
 enum TokenKind {
   TOKEN_FN,
   TOKEN_EXTERN,
+  TOKEN_ELLIPSIS,
   TOKEN_WHILE,
   TOKEN_BREAK,
   TOKEN_CONTINUE,
@@ -115,6 +116,7 @@ enum TokenKind {
   TOKEN_EQUAL,
   TOKEN_RET,
   TOKEN_NUMBER,
+  TOKEN_FP_NUMBER,
   TOKEN_PLUS,
   TOKEN_MINUS,
   TOKEN_STAR,
@@ -131,6 +133,8 @@ enum TokenKind {
   TOKEN_U16,
   TOKEN_U32,
   TOKEN_U64,
+  TOKEN_F32,
+  TOKEN_F64,
   TOKEN_STR,
   TOKEN_RBRACE,
   TOKEN_STRING,
@@ -227,16 +231,32 @@ struct Token number(struct Tokenizer *tokenizer)
 {
   int len;
   char *start;
+  bool is_float;
 
   len = 0;
   start = tokenizer->src;
+  is_float = false;
 
   while (is_digit(*tokenizer->src)) {
     len++;
     advance(tokenizer);
   }
 
-  return (struct Token){.kind = TOKEN_NUMBER, .len = len, .start = start};
+  if (*tokenizer->src == '.' && is_digit(*(tokenizer->src + 1))) {
+    is_float = true;
+
+    len++;
+    advance(tokenizer);
+
+    while (is_digit(*tokenizer->src)) {
+      len++;
+      advance(tokenizer);
+    }
+  }
+
+  return (struct Token){.kind = is_float ? TOKEN_FP_NUMBER : TOKEN_NUMBER,
+                        .len = len,
+                        .start = start};
 }
 
 struct Token identifier(struct Tokenizer *tokenizer)
@@ -298,6 +318,16 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
     }
 
     switch (*tokenizer->src) {
+      case '.': {
+        if (lookahead(tokenizer, 2, "..") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_ELLIPSIS, 3));
+        } else {
+          /* we do not have structs yet, so error for now */
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_ERROR, 1));
+        }
+
+        break;
+      }
       case 'w': {
         if (lookahead(tokenizer, 4, "hile") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_WHILE, 5));
@@ -326,7 +356,11 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
         break;
       }
       case 'f': {
-        if (lookahead(tokenizer, 1, "n") == 0) {
+        if (lookahead(tokenizer, 2, "32") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_F32, 3));
+        } else if (lookahead(tokenizer, 2, "64") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_F64, 3));
+        } else if (lookahead(tokenizer, 1, "n") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_FN, 2));
         } else {
           vec_insert(&tokens, identifier(tokenizer));
@@ -536,6 +570,7 @@ void print_token(struct Token *token)
       printf("ident(%.*s)", token->len, token->start);
       break;
     case TOKEN_NUMBER:
+    case TOKEN_FP_NUMBER:
       printf("%.*s", token->len, token->start);
       break;
     case TOKEN_LET:
@@ -598,6 +633,12 @@ void print_token(struct Token *token)
     case TOKEN_I64:
       printf("i64");
       break;
+    case TOKEN_F32:
+      printf("f32");
+      break;
+    case TOKEN_F64:
+      printf("f64");
+      break;
     case TOKEN_STR:
       printf("str");
       break;
@@ -637,6 +678,9 @@ void print_token(struct Token *token)
     case TOKEN_WHILE:
       printf("while");
       break;
+    case TOKEN_ELLIPSIS:
+      printf("ellipsis");
+      break;
     default:
       assert(0);
   }
@@ -665,6 +709,8 @@ enum TypeKind {
   U16_T,
   U32_T,
   U64_T,
+  F32_T,
+  F64_T,
   STR_T,
   FN_T,
   UNKNOWN_T,
@@ -680,6 +726,7 @@ struct Type {
     struct {
       VecType params;
       Type *retval;
+      bool is_variadic;
     } func;
   } as;
 };
@@ -696,6 +743,8 @@ struct Literal {
     int i32;
     unsigned long long u64;
     long long i64;
+    float f32;
+    double f64;
   } as;
   Type type;
 };
@@ -707,6 +756,7 @@ enum ExprKind {
   EXPR_ASSIGN,
   EXPR_CALL,
   EXPR_UNARY,
+  EXPR_CAST,
 };
 
 enum ExprBinKind {
@@ -720,6 +770,10 @@ enum ExprBinKind {
   EXPR_BIN_GREATER_EQUAL,
   EXPR_BIN_EQUAL_EQUAL,
   EXPR_BIN_BANG_EQUAL,
+};
+
+struct ExprCast {
+  struct Expr *expr;
 };
 
 struct ExprUnary {
@@ -778,6 +832,8 @@ bool types_equal(Type a, Type b)
     case U16_T:
     case U32_T:
     case U64_T:
+    case F32_T:
+    case F64_T:
     case STR_T:
     case UNKNOWN_T:
       return true;
@@ -813,6 +869,7 @@ struct Expr {
     struct ExprCall call;
     struct ExprAssign assign;
     struct ExprUnary unary;
+    struct ExprCast cast;
   } as;
   Type type;
 };
@@ -863,6 +920,7 @@ struct StmtExtern {
   char *name;
   VecParam params;
   Type retval;
+  bool is_variadic;
 };
 
 struct StmtFn {
@@ -1083,6 +1141,10 @@ Type parse_type(struct Token *token)
     return (Type){.kind = U32_T};
   } else if (strncmp(token->start, "u64", token->len) == 0) {
     return (Type){.kind = U64_T};
+  } else if (strncmp(token->start, "f32", token->len) == 0) {
+    return (Type){.kind = F32_T};
+  } else if (strncmp(token->start, "f64", token->len) == 0) {
+    return (Type){.kind = F64_T};
   } else if (strncmp(token->start, "str", token->len) == 0) {
     return (Type){.kind = STR_T};
   } else {
@@ -1149,9 +1211,9 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
             .msg = "Expected `name: type` format for parameters"};
       }
 
-      type_token =
-          consume_any(parser, 9, TOKEN_U8, TOKEN_U16, TOKEN_U32, TOKEN_U64,
-                      TOKEN_I8, TOKEN_I16, TOKEN_I32, TOKEN_I64, TOKEN_STR);
+      type_token = consume_any(parser, 11, TOKEN_U8, TOKEN_U16, TOKEN_U32,
+                               TOKEN_U64, TOKEN_I8, TOKEN_I16, TOKEN_I32,
+                               TOKEN_I64, TOKEN_F32, TOKEN_F64, TOKEN_STR);
       if (!type_token) {
         return (struct ParseFnResult){
             .is_ok = false,
@@ -1188,13 +1250,12 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
         .is_ok = false, .as.stmt = {0}, .msg = "Expected token '->' after ')'"};
   }
 
-  token_retval =
-      consume_any(parser, 9, TOKEN_U8, TOKEN_U16, TOKEN_U32, TOKEN_U64,
-                  TOKEN_I8, TOKEN_I16, TOKEN_I32, TOKEN_I64, TOKEN_STR);
+  token_retval = consume_any(parser, 11, TOKEN_U8, TOKEN_U16, TOKEN_U32,
+                             TOKEN_U64, TOKEN_I8, TOKEN_I16, TOKEN_I32,
+                             TOKEN_I64, TOKEN_F32, TOKEN_F64, TOKEN_STR);
   if (!token_retval) {
-    return (struct ParseFnResult){.is_ok = false,
-                                  .as.stmt = {0},
-                                  .msg = "Expected retval after '->'"};
+    return (struct ParseFnResult){
+        .is_ok = false, .as.stmt = {0}, .msg = "Expected retval after '->'"};
   }
 
   struct StmtFn stmt_fn;
@@ -1250,72 +1311,49 @@ struct ParseFnResult primary(struct Parser *parser)
   res.is_ok = true;
   res.msg = NULL;
 
-  if (check2(parser, TOKEN_MINUS, TOKEN_NUMBER)) {
-    struct Literal literal;
-    struct Token *token_minus, *token_literal;
-    long long val;
-
-    token_literal = consume(parser, TOKEN_NUMBER);
-    if (!token_literal) {
-      return (struct ParseFnResult){
-          .is_ok = false, .as.expr = {0}, .msg = "Expected number"};
-    }
-
-    val = strtoll(parser->prev->start, NULL, 10);
-
-    literal.kind = LITERAL_NUM;
-
-    if (val >= SCHAR_MIN && val <= SCHAR_MAX) {
-      literal.type = (Type){.kind = I8_T};
-      literal.as.i8 = val;
-    } else if (val >= SHRT_MIN && val <= SHRT_MAX) {
-      literal.type = (Type){.kind = I16_T};
-      literal.as.i16 = val;
-    } else if (val >= INT_MIN && val <= INT_MAX) {
-      literal.type = (Type){.kind = I32_T};
-      literal.as.i32 = val;
-    } else if (val >= LONG_MIN && val <= LONG_MAX) {
-      literal.type = (Type){.kind = I64_T};
-      literal.as.i64 = val;
-    } else {
-      return (struct ParseFnResult){
-          .is_ok = false, .msg = "Can't parse literal", .as.expr = {0}};
-    }
-
-    res.as.expr = (struct Expr){
-        .kind = EXPR_LITERAL, .as.literal = literal, .type = literal.type};
-  } else if (check(parser, TOKEN_NUMBER)) {
+  if (check(parser, TOKEN_NUMBER) || check(parser, TOKEN_FP_NUMBER)) {
     struct Literal literal;
     struct Token *token_literal;
     unsigned long long val;
+    bool is_float;
 
-    token_literal = consume(parser, TOKEN_NUMBER);
+    is_float = check(parser, TOKEN_FP_NUMBER);
+
+    token_literal = consume(parser, is_float ? TOKEN_FP_NUMBER : TOKEN_NUMBER);
     if (!token_literal) {
       return (struct ParseFnResult){
           .is_ok = false, .as.expr = {0}, .msg = "Expected number"};
     }
 
-    val = strtoull(parser->prev->start, NULL, 10);
-
     literal.kind = LITERAL_NUM;
 
-    if (val >= 0 && val <= UCHAR_MAX) {
-      literal.type = (Type){.kind = U8_T};
-      literal.as.u8 = val;
-    } else if (val >= 0 && val <= USHRT_MAX) {
-      literal.type = (Type){.kind = U16_T};
-      literal.as.u16 = val;
-    } else if (val >= 0 && val <= UINT_MAX) {
-      literal.type = (Type){.kind = U32_T};
-      literal.as.u32 = val;
-    } else if (val >= 0 && val <= ULLONG_MAX) {
-      literal.type = (Type){.kind = U64_T};
-      literal.as.u64 = val;
-    } else {
-      return (struct ParseFnResult){
-          .is_ok = false, .msg = "Can't parse literal", .as.expr = {0}};
-    }
+    if (!is_float) {
+      val = strtoull(parser->prev->start, NULL, 10);
 
+      if (val >= 0 && val <= UCHAR_MAX) {
+        literal.type = (Type){.kind = U8_T};
+        literal.as.u8 = val;
+      } else if (val >= 0 && val <= USHRT_MAX) {
+        literal.type = (Type){.kind = U16_T};
+        literal.as.u16 = val;
+      } else if (val >= 0 && val <= UINT_MAX) {
+        literal.type = (Type){.kind = U32_T};
+        literal.as.u32 = val;
+      } else if (val >= 0 && val <= ULLONG_MAX) {
+        literal.type = (Type){.kind = U64_T};
+        literal.as.u64 = val;
+      } else {
+        return (struct ParseFnResult){
+            .is_ok = false, .msg = "Can't parse literal", .as.expr = {0}};
+      }
+    } else {
+      double fval;
+
+      fval = strtod(parser->prev->start, NULL);
+
+      literal.type = (Type){.kind = F64_T};
+      literal.as.f64 = fval;
+    }
     res.as.expr = (struct Expr){
         .kind = EXPR_LITERAL, .as.literal = literal, .type = literal.type};
   } else if (check(parser, TOKEN_STRING)) {
@@ -1452,6 +1490,17 @@ struct ParseFnResult unary(struct Parser *parser)
     if (right_result.as.expr.kind == EXPR_LITERAL &&
         right_result.as.expr.as.literal.kind == LITERAL_NUM) {
       struct Literal lit = right_result.as.expr.as.literal;
+
+      if (lit.type.kind == F32_T || lit.type.kind == F64_T) {
+        if (lit.type.kind == F32_T) {
+          right_result.as.expr.as.literal.as.f32 = -lit.as.f32;
+        } else {
+          right_result.as.expr.as.literal.as.f64 = -lit.as.f64;
+        }
+        free(op);
+        return right_result;
+      }
+
       bool is_unsigned = (lit.type.kind == U8_T || lit.type.kind == U16_T ||
                           lit.type.kind == U32_T || lit.type.kind == U64_T);
       long long val = 0;
@@ -1798,9 +1847,9 @@ struct ParseFnResult parse_let_stmt(struct Parser *parser)
         .msg = "Expected token ':' after identifier in let stmt"};
   }
 
-  token_type =
-      consume_any(parser, 9, TOKEN_U8, TOKEN_U16, TOKEN_U32, TOKEN_U64,
-                  TOKEN_I8, TOKEN_I16, TOKEN_I32, TOKEN_I64, TOKEN_STR);
+  token_type = consume_any(parser, 11, TOKEN_U8, TOKEN_U16, TOKEN_U32,
+                           TOKEN_U64, TOKEN_I8, TOKEN_I16, TOKEN_I32, TOKEN_I64,
+                           TOKEN_F32, TOKEN_F64, TOKEN_STR);
   if (!token_type) {
     free(name);
     return (struct ParseFnResult){.is_ok = false,
@@ -2076,6 +2125,9 @@ struct ParseFnResult parse_extern_stmt(struct Parser *parser)
   struct Token *token_extern, *token_fn, *token_identifier, *token_lparen,
       *token_void, *token_rparen, *token_arrow, *token_retval, *token_semicolon;
   VecParam parameters = {0};
+  bool is_variadic;
+
+  is_variadic = false;
 
   result.is_ok = true;
   result.msg = NULL;
@@ -2117,6 +2169,12 @@ struct ParseFnResult parse_extern_stmt(struct Parser *parser)
     }
   } else {
     while (!check(parser, TOKEN_RPAREN)) {
+      if (check(parser, TOKEN_ELLIPSIS)) {
+        consume(parser, TOKEN_ELLIPSIS);
+        is_variadic = true;
+        break;
+      }
+
       struct Token *name_token, *colon_token, *type_token;
       char *name;
       Type type;
@@ -2137,9 +2195,9 @@ struct ParseFnResult parse_extern_stmt(struct Parser *parser)
             .msg = "Expected `name: type` format for parameters"};
       }
 
-      type_token =
-          consume_any(parser, 9, TOKEN_U8, TOKEN_U16, TOKEN_U32, TOKEN_U64,
-                      TOKEN_I8, TOKEN_I16, TOKEN_I32, TOKEN_I64, TOKEN_STR);
+      type_token = consume_any(parser, 11, TOKEN_U8, TOKEN_U16, TOKEN_U32,
+                               TOKEN_U64, TOKEN_I8, TOKEN_I16, TOKEN_I32,
+                               TOKEN_I64, TOKEN_F32, TOKEN_F64, TOKEN_STR);
       if (!type_token) {
         return (struct ParseFnResult){
             .is_ok = false,
@@ -2180,9 +2238,8 @@ struct ParseFnResult parse_extern_stmt(struct Parser *parser)
       consume_any(parser, 9, TOKEN_U8, TOKEN_U16, TOKEN_U32, TOKEN_U64,
                   TOKEN_I8, TOKEN_I16, TOKEN_I32, TOKEN_I64, TOKEN_STR);
   if (!token_retval) {
-    return (struct ParseFnResult){.is_ok = false,
-                                  .as.stmt = {0},
-                                  .msg = "Expected retval after '->'"};
+    return (struct ParseFnResult){
+        .is_ok = false, .as.stmt = {0}, .msg = "Expected retval after '->'"};
   }
 
   token_semicolon = consume(parser, TOKEN_SEMICOLON);
@@ -2198,6 +2255,7 @@ struct ParseFnResult parse_extern_stmt(struct Parser *parser)
       own_string_n(token_identifier->start, token_identifier->len);
   extern_stmt.params = parameters;
   extern_stmt.retval = parse_type(token_retval);
+  extern_stmt.is_variadic = is_variadic;
 
   struct Stmt s;
   s.kind = STMT_EXTERN;
@@ -2366,6 +2424,15 @@ void print_binary_op(int kind)
 void print_expr(struct Expr *expr, int spaces)
 {
   switch (expr->kind) {
+    case EXPR_CAST: {
+      printf("Cast(\n");
+      print_indent(spaces + 2);
+      print_expr(expr->as.cast.expr, spaces + 2);
+      printf("\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
     case EXPR_UNARY: {
       printf("Unary(\n");
 
@@ -2415,6 +2482,14 @@ void print_expr(struct Expr *expr, int spaces)
           }
           case U64_T: {
             printf("v: %llu,\n", expr->as.literal.as.u64);
+            break;
+          }
+          case F32_T: {
+            printf("v: %f,\n", expr->as.literal.as.f32);
+            break;
+          }
+          case F64_T: {
+            printf("v: %f,\n", expr->as.literal.as.f64);
             break;
           }
           default:
@@ -2668,6 +2743,11 @@ void print_ast(struct AST *ast)
 void free_expr(struct Expr *expr)
 {
   switch (expr->kind) {
+    case EXPR_CAST: {
+      free_expr(expr->as.cast.expr);
+      free(expr->as.cast.expr);
+      break;
+    }
     case EXPR_UNARY: {
       free_expr(expr->as.unary.expr);
       free(expr->as.unary.expr);
@@ -2796,6 +2876,7 @@ enum IRInstrKind {
   IRInstr_LBL,
   IRInstr_GETADDR,
   IRInstr_UNARY,
+  IRInstr_CAST,
 };
 
 enum IRInstrBinaryKind {
@@ -2830,6 +2911,11 @@ typedef Vector(struct IRValue *) VecIRValuePtr;
 struct IRInstr_Call {
   struct Expr target;
   VecIRValuePtr args;
+  struct IRValue *dst;
+};
+
+struct IRInstr_Cast {
+  struct IRValue *src;
   struct IRValue *dst;
 };
 
@@ -2889,6 +2975,7 @@ struct IRInstr {
     struct IRInstr_Label label;
     struct IRInstr_GetAddress getaddr;
     struct IRInstr_Unary unary;
+    struct IRInstr_Cast cast;
   } as;
 };
 
@@ -2953,6 +3040,24 @@ char *mklbl(char *s, int d)
 struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
 {
   switch (expr->kind) {
+    case EXPR_CAST: {
+      struct IRValue *src = irfy_expr(instrs, expr->as.cast.expr);
+      struct IRValue *dst = make_ir_var();
+      dst->type = expr->type;
+
+      struct IRInstr i;
+      i.kind = IRInstr_CAST;
+      i.as.cast.src = src;
+      i.as.cast.dst = dst;
+      vec_insert(instrs, i);
+
+      struct IRValue *ret = malloc(sizeof(struct IRValue));
+      ret->kind = IRValue_VAR;
+      ret->as.var = strdup(dst->as.var);
+      ret->type = dst->type;
+
+      return ret;
+    }
     case EXPR_LITERAL: {
       if (expr->as.literal.kind == LITERAL_STR) {
         char *name = mklbl("str", mktmp());
@@ -3498,6 +3603,11 @@ void free_ir_instr(struct IRInstr *instr)
       free_ir_val(instr->as.getaddr.dst);
       break;
     }
+    case IRInstr_CAST: {
+      free_ir_val(instr->as.cast.src);
+      free_ir_val(instr->as.cast.dst);
+      break;
+    }
     default:
       assert(0 && "Unhandled IR instruction in free_ir_instr");
   }
@@ -3603,6 +3713,14 @@ void print_ir_val(struct IRValue *ir_val, int spaces)
           printf("v: %llu,\n", ir_val->as.konst.as.u64);
           break;
         }
+        case F32_T: {
+          printf("v: %f,\n", ir_val->as.konst.as.f32);
+          break;
+        }
+        case F64_T: {
+          printf("v: %f,\n", ir_val->as.konst.as.f64);
+          break;
+        }
         default:
           assert(0);
       }
@@ -3632,6 +3750,20 @@ void print_ir_instr(struct IRInstr *instr, int spaces)
   print_indent(spaces);
 
   switch (instr->kind) {
+    case IRInstr_CAST: {
+      printf("IRInstr_CAST(\n");
+      print_indent(spaces + 2);
+      printf("src = ");
+      print_ir_val(instr->as.cast.src, spaces + 2);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("dst = ");
+      print_ir_val(instr->as.cast.dst, spaces + 2);
+      printf("\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
     case IRInstr_UNARY: {
       printf("IRInstr_UNARY(\n");
       print_indent(spaces + 2);
@@ -3806,6 +3938,7 @@ enum AsmInstrKind {
   AsmInstr_SetCC,
   AsmInstr_LEA,
   AsmInstr_UNARY,
+  AsmInstr_CVT,
 };
 
 enum AsmOperandKind {
@@ -3827,13 +3960,31 @@ enum AsmRegister {
   R10,
   BP,
   SP,
+  XMM0,
+  XMM1,
+  XMM2,
+  XMM3,
+  XMM4,
+  XMM5,
+  XMM6,
+  XMM7,
+  XMM8,
+  XMM9,
+  XMM10,
+  XMM11,
+  XMM12,
+  XMM13,
+  XMM14,
+  XMM15,
 };
 
 enum AsmType {
-  AsmType_BYTE = 1,
-  AsmType_WORD = 2,
-  AsmType_LONGWORD = 4,
-  AsmType_QUADWORD = 8,
+  AsmType_BYTE,
+  AsmType_WORD,
+  AsmType_LONGWORD,
+  AsmType_QUADWORD,
+  AsmType_FLOAT,
+  AsmType_DOUBLE,
 };
 
 enum AsmType type_to_asm_type(Type type)
@@ -3851,6 +4002,10 @@ enum AsmType type_to_asm_type(Type type)
     case U64_T:
     case I64_T:
       return AsmType_QUADWORD;
+    case F32_T:
+      return AsmType_FLOAT;
+    case F64_T:
+      return AsmType_DOUBLE;
     default:
       return AsmType_QUADWORD;
   }
@@ -3860,12 +4015,17 @@ struct AsmOperand {
   enum AsmOperandKind kind;
   enum AsmType asm_type;
   union {
-    int imm;
+    long long imm;
     char *pseudo;
     enum AsmRegister reg;
     int stack_offset;
     char *data;
   } as;
+};
+
+struct AsmInstrCvt {
+  struct AsmOperand src;
+  struct AsmOperand dst;
 };
 
 struct AsmInstrRet {
@@ -3966,6 +4126,7 @@ struct AsmInstr {
     struct AsmInstrLabel lbl;
     struct AsmInstrLea lea;
     struct AsmInstrUnary unary;
+    struct AsmInstrCvt cvt;
   } as;
 };
 
@@ -4085,8 +4246,33 @@ struct AsmOperand codegen_irvalue(struct IRValue *val)
         case U64_T:
           operand.as.imm = val->as.konst.as.u64;
           break;
+        case F32_T:
+        case F64_T: {
+          char *lbl = mklbl("LC", mktmp());
+          struct StaticConstant sc;
+          sc.name = strdup(lbl);
+
+          char buf[64];
+          if (val->type.kind == F32_T) {
+            unsigned int bits;
+            memcpy(&bits, &val->as.konst.as.f32, sizeof(float));
+            snprintf(buf, sizeof(buf), ".long %u", bits);
+          } else {
+            unsigned long long bits;
+            memcpy(&bits, &val->as.konst.as.f64, sizeof(double));
+            snprintf(buf, sizeof(buf), ".quad %llu", bits);
+          }
+
+          sc.value = strdup(buf);
+          vec_insert(&global_constants, sc);
+
+          operand.kind = AsmOperand_DATA;
+          operand.as.data = strdup(lbl);
+          break;
+        }
+
         default:
-	  assert(0);
+          assert(0);
       }
       operand.asm_type = type_to_asm_type(val->type);
       return operand;
@@ -4113,6 +4299,19 @@ bool is_comparison(enum IRInstrBinaryKind kind)
 void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
 {
   switch (ir_instr->kind) {
+    case IRInstr_CAST: {
+      struct AsmOperand src = codegen_irvalue(ir_instr->as.cast.src);
+      struct AsmOperand dst = codegen_irvalue(ir_instr->as.cast.dst);
+
+      struct AsmInstr i = {0};
+      i.kind = AsmInstr_CVT;
+      i.as.cvt.src = src;
+      i.as.cvt.dst = dst;
+      i.asm_type = src.asm_type;
+
+      vec_insert(instrs, i);
+      break;
+    }
     case IRInstr_UNARY: {
       struct AsmOperand src, dst;
       struct AsmInstr i1 = {0}, i2 = {0};
@@ -4197,14 +4396,43 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       break;
     }
     case IRInstr_CALL: {
-      /* Since i64 is the only data type for now, we worry only about these
-       * registers. The first six arguments to the callee are passed via these
-       * six registers. The rest are passed on the stack, in reverse order. */
-      enum AsmRegister arg_regs[] = {DI, SI, DX, CX, R8, R9};
+      enum AsmRegister int_arg_regs[] = {DI, SI, DX, CX, R8, R9};
+      enum AsmRegister xmm_arg_regs[] = {XMM0, XMM1, XMM2, XMM3,
+                                         XMM4, XMM5, XMM6, XMM7};
 
       int num_args = ir_instr->as.call.args.len;
-      int num_reg_args = num_args > 6 ? 6 : num_args;
-      int num_stack_args = num_args > 6 ? num_args - 6 : 0;
+      int int_reg_idx = 0;
+      int xmm_reg_idx = 0;
+      int num_stack_args = 0;
+
+      struct AsmOperand *arg_dsts =
+          malloc(sizeof(struct AsmOperand) * num_args);
+
+      for (int i = 0; i < num_args; i++) {
+        struct IRValue *arg_val = ir_instr->as.call.args.data[i];
+        bool is_float =
+            (arg_val->type.kind == F32_T || arg_val->type.kind == F64_T);
+
+        if (is_float) {
+          if (xmm_reg_idx < 8) {
+            arg_dsts[i].kind = AsmOperand_REG;
+            arg_dsts[i].as.reg = xmm_arg_regs[xmm_reg_idx++];
+            arg_dsts[i].asm_type = type_to_asm_type(arg_val->type);
+          } else {
+            arg_dsts[i].kind = AsmOperand_STACK;
+            num_stack_args++;
+          }
+        } else {
+          if (int_reg_idx < 6) {
+            arg_dsts[i].kind = AsmOperand_REG;
+            arg_dsts[i].as.reg = int_arg_regs[int_reg_idx++];
+            arg_dsts[i].asm_type = type_to_asm_type(arg_val->type);
+          } else {
+            arg_dsts[i].kind = AsmOperand_STACK;
+            num_stack_args++;
+          }
+        }
+      }
 
       /* System V AMD64 ABI requires that the stack be aligned to 16 bytes
        * before the call instruction.
@@ -4230,19 +4458,19 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         vec_insert(instrs, padding_instr);
       }
 
-      /* Move the argument IRValues into corresponding regs.  */
-      for (int i = 0; i < num_reg_args; i++) {
-        struct AsmOperand arg_op =
-            codegen_irvalue(ir_instr->as.call.args.data[i]);
-        struct AsmInstr mov_instr = {0};
-        mov_instr.kind = AsmInstr_MOV;
-        mov_instr.as.mov.src = arg_op;
-        mov_instr.as.mov.dst = (struct AsmOperand){.kind = AsmOperand_REG,
-                                                   .as.reg = arg_regs[i],
-                                                   .asm_type = arg_op.asm_type};
-        mov_instr.asm_type = arg_op.asm_type;
+      /* Move the register arguments */
+      for (int i = 0; i < num_args; i++) {
+        if (arg_dsts[i].kind == AsmOperand_REG) {
+          struct AsmOperand arg_op =
+              codegen_irvalue(ir_instr->as.call.args.data[i]);
+          struct AsmInstr mov_instr = {0};
+          mov_instr.kind = AsmInstr_MOV;
+          mov_instr.as.mov.src = arg_op;
+          mov_instr.as.mov.dst = arg_dsts[i];
+          mov_instr.asm_type = arg_op.asm_type;
 
-        vec_insert(instrs, mov_instr);
+          vec_insert(instrs, mov_instr);
+        }
       }
 
       /* ...the rest of the arguments goes on the stack, in reverse order. */
@@ -4254,6 +4482,17 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         push_instr.as.push.op = arg_op;
         vec_insert(instrs, push_instr);
       }
+
+      /* Set %eax to the number of XMM registers used (needed for variadic
+       * functions) */
+      struct AsmInstr eax_instr = {0};
+      eax_instr.kind = AsmInstr_MOV;
+      eax_instr.asm_type = AsmType_LONGWORD;
+      eax_instr.as.mov.src =
+          (struct AsmOperand){.kind = AsmOperand_IMM, .as.imm = xmm_reg_idx};
+      eax_instr.as.mov.dst = (struct AsmOperand){
+          .kind = AsmOperand_REG, .as.reg = AX, .asm_type = AsmType_LONGWORD};
+      vec_insert(instrs, eax_instr);
 
       struct AsmInstr call_instr = {0};
       call_instr.kind = AsmInstr_CALL;
@@ -4284,14 +4523,21 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       if (ir_instr->as.call.dst) {
         struct AsmOperand dst_op = codegen_irvalue(ir_instr->as.call.dst);
         struct AsmInstr mov_instr = {0};
+
+        bool is_dst_float = (dst_op.asm_type == AsmType_FLOAT ||
+                             dst_op.asm_type == AsmType_DOUBLE);
+
         mov_instr.kind = AsmInstr_MOV;
-        mov_instr.as.mov.src = (struct AsmOperand){
-            .kind = AsmOperand_REG, .as.reg = AX, .asm_type = dst_op.asm_type};
+        mov_instr.as.mov.src =
+            (struct AsmOperand){.kind = AsmOperand_REG,
+                                .as.reg = is_dst_float ? XMM0 : AX,
+                                .asm_type = dst_op.asm_type};
         mov_instr.as.mov.dst = dst_op;
         mov_instr.asm_type = dst_op.asm_type;
         vec_insert(instrs, mov_instr);
       }
 
+      free(arg_dsts);
       break;
     }
     case IRInstr_CPY: {
@@ -4454,11 +4700,15 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         retval = (struct AsmOperand){.kind = AsmOperand_IMM, .as.imm = 0};
       }
 
+      bool is_ret_float = (retval.asm_type == AsmType_FLOAT ||
+                           retval.asm_type == AsmType_DOUBLE);
+
       i1.kind = AsmInstr_MOV;
       i1.asm_type = retval.asm_type;
       i1.as.mov.src = retval;
-      i1.as.mov.dst = (struct AsmOperand){
-          .kind = AsmOperand_REG, .as.reg = AX, .asm_type = retval.asm_type};
+      i1.as.mov.dst = (struct AsmOperand){.kind = AsmOperand_REG,
+                                          .as.reg = is_ret_float ? XMM0 : AX,
+                                          .asm_type = retval.asm_type};
 
       mov.src = (struct AsmOperand){
           .kind = AsmOperand_REG, .as.reg = BP, .asm_type = AsmType_QUADWORD};
@@ -4529,15 +4779,22 @@ struct AsmFunction codegen_fn(struct IRFunction *ir_func)
   vec_insert(&func.body, p2);
   vec_insert(&func.body, p3);
 
-  enum AsmRegister arg_regs[] = {DI, SI, DX, CX, R8, R9};
+  enum AsmRegister int_arg_regs[] = {DI, SI, DX, CX, R8, R9};
+  enum AsmRegister xmm_arg_regs[] = {XMM0, XMM1, XMM2, XMM3,
+                                     XMM4, XMM5, XMM6, XMM7};
+
   int num_params = ir_func->params.len;
+  int int_reg_idx = 0;
+  int xmm_reg_idx = 0;
+  int stack_offset = 16;
 
   /* Move the values from the registers and from the stack that we had
    * received previously by the caller, into pseudo registers.  */
   for (int i = 0; i < num_params; i++) {
-    enum AsmType param_asm_type;
-
-    param_asm_type = type_to_asm_type(ir_func->params.data[i].type);
+    enum AsmType param_asm_type =
+        type_to_asm_type(ir_func->params.data[i].type);
+    bool is_float = (ir_func->params.data[i].type.kind == F32_T ||
+                     ir_func->params.data[i].type.kind == F64_T);
 
     struct AsmOperand dst;
     dst.kind = AsmOperand_PSEUDO;
@@ -4545,23 +4802,28 @@ struct AsmFunction codegen_fn(struct IRFunction *ir_func)
     dst.asm_type = param_asm_type;
 
     struct AsmOperand src;
-    if (i < 6) {
-      src.kind = AsmOperand_REG;
-      src.as.reg = arg_regs[i];
-      src.asm_type = param_asm_type;
+    if (is_float) {
+      if (xmm_reg_idx < 8) {
+        src.kind = AsmOperand_REG;
+        src.as.reg = xmm_arg_regs[xmm_reg_idx++];
+        src.asm_type = param_asm_type;
+      } else {
+        src.kind = AsmOperand_STACK;
+        src.as.stack_offset = stack_offset;
+        stack_offset += 8;
+        src.asm_type = param_asm_type;
+      }
     } else {
-      src.kind = AsmOperand_STACK;
-      /* Upon executing the call instruction by the caller.
-       * the CPU will push the return address on the stack,
-       * and therefore subtract 8 from %rsp.  Then the next
-       * thing the callee does is `push %rbp`, which subtracts yet 8`.
-       * This is 16 totaled up.
-       * Now, the callee executes `movq %rsp, %rbp`.
-       * This means that the return address is at 8(%rbp), and first
-       * stack argument is at 16(%rbp) (more backward in time).
-       * The local variables are at -8(%rbp).  */
-      src.as.stack_offset = 16 + ((i - 6) * 8);
-      src.asm_type = param_asm_type;
+      if (int_reg_idx < 6) {
+        src.kind = AsmOperand_REG;
+        src.as.reg = int_arg_regs[int_reg_idx++];
+        src.asm_type = param_asm_type;
+      } else {
+        src.kind = AsmOperand_STACK;
+        src.as.stack_offset = stack_offset;
+        stack_offset += 8;
+        src.asm_type = param_asm_type;
+      }
     }
 
     struct AsmInstr param_mov;
@@ -4601,7 +4863,7 @@ void print_asm_operand(struct AsmOperand *op)
 {
   switch (op->kind) {
     case AsmOperand_IMM: {
-      printf("AsmOperand_IMM(%d)", op->as.imm);
+      printf("AsmOperand_IMM(%lld)", op->as.imm);
       break;
     }
     case AsmOperand_PSEUDO: {
@@ -4612,6 +4874,70 @@ void print_asm_operand(struct AsmOperand *op)
       printf("AsmOperand_REG(");
 
       switch (op->as.reg) {
+        case XMM0: {
+          printf("%%xmm0");
+          break;
+        }
+        case XMM1: {
+          printf("%%xmm1");
+          break;
+        }
+        case XMM2: {
+          printf("%%xmm2");
+          break;
+        }
+        case XMM3: {
+          printf("%%xmm3");
+          break;
+        }
+        case XMM4: {
+          printf("%%xmm4");
+          break;
+        }
+        case XMM5: {
+          printf("%%xmm5");
+          break;
+        }
+        case XMM6: {
+          printf("%%xmm6");
+          break;
+        }
+        case XMM7: {
+          printf("%%xmm7");
+          break;
+        }
+        case XMM8: {
+          printf("%%xmm8");
+          break;
+        }
+        case XMM9: {
+          printf("%%xmm9");
+          break;
+        }
+        case XMM10: {
+          printf("%%xmm10");
+          break;
+        }
+        case XMM11: {
+          printf("%%xmm11");
+          break;
+        }
+        case XMM12: {
+          printf("%%xmm12");
+          break;
+        }
+        case XMM13: {
+          printf("%%xmm13");
+          break;
+        }
+        case XMM14: {
+          printf("%%xmm14");
+          break;
+        }
+        case XMM15: {
+          printf("%%xmm15");
+          break;
+        }
         case AX: {
           switch (op->asm_type) {
             case AsmType_BYTE: {
@@ -4926,6 +5252,20 @@ void print_asm_instr(struct AsmInstr *instr, int spaces)
   print_indent(spaces);
 
   switch (instr->kind) {
+    case AsmInstr_CVT: {
+      printf("AsmInstr_CVT(\n");
+      print_indent(spaces + 2);
+      printf("src = ");
+      print_asm_operand(&instr->as.cvt.src);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("dst = ");
+      print_asm_operand(&instr->as.cvt.dst);
+      printf(",\n");
+      print_indent(spaces);
+      printf("),\n");
+      break;
+    }
     case AsmInstr_LEA: {
       printf("AsmInstr_LEA(\n");
       print_indent(spaces + 2);
@@ -5171,6 +5511,19 @@ struct AsmProgram *replace_pseudo(struct AsmProgram *asmcode)
     for (int j = 0; j < asmcode->funcs.data[i].body.len; j++) {
       struct AsmInstr *asminstr = &asmcode->funcs.data[i].body.data[j];
       switch (asminstr->kind) {
+        case AsmInstr_CVT: {
+          if (asminstr->as.cvt.src.kind == AsmOperand_PSEUDO) {
+            asminstr->as.cvt.src.kind = AsmOperand_STACK;
+            asminstr->as.cvt.src.as.stack_offset =
+                get_offset(map, asminstr->as.cvt.src.as.pseudo, &offset);
+          }
+          if (asminstr->as.cvt.dst.kind == AsmOperand_PSEUDO) {
+            asminstr->as.cvt.dst.kind = AsmOperand_STACK;
+            asminstr->as.cvt.dst.as.stack_offset =
+                get_offset(map, asminstr->as.cvt.dst.as.pseudo, &offset);
+          }
+          break;
+        }
         case AsmInstr_UNARY: {
           if (asminstr->as.unary.op.kind == AsmOperand_PSEUDO) {
             asminstr->as.unary.op.kind = AsmOperand_STACK;
@@ -5271,6 +5624,30 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
     for (int j = 0; j < prog->funcs.data[i].body.len; j++) {
       struct AsmInstr *asminstr = &prog->funcs.data[i].body.data[j];
       switch (asminstr->kind) {
+        case AsmInstr_CVT: {
+          if (asminstr->as.cvt.dst.kind == AsmOperand_STACK) {
+            struct AsmOperand scratch_op = {.kind = AsmOperand_REG,
+                                            .as.reg = XMM8,
+                                            .asm_type = AsmType_DOUBLE};
+            struct AsmInstr i1 = {0}, i2 = {0};
+
+            i1.kind = AsmInstr_CVT;
+            i1.as.cvt.src = asminstr->as.cvt.src;
+            i1.as.cvt.dst = scratch_op;
+            i1.asm_type = asminstr->asm_type;
+
+            i2.kind = AsmInstr_MOV;
+            i2.as.mov.src = scratch_op;
+            i2.as.mov.dst = asminstr->as.cvt.dst;
+            i2.asm_type = AsmType_DOUBLE;
+
+            vec_insert(&instrs, i1);
+            vec_insert(&instrs, i2);
+          } else {
+            vec_insert(&instrs, *asminstr);
+          }
+          break;
+        }
         case AsmInstr_LEA: {
           if (asminstr->as.lea.dst.kind == AsmOperand_STACK) {
             struct AsmOperand scratch_op = {.kind = AsmOperand_REG,
@@ -5297,14 +5674,19 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
         }
         case AsmInstr_MOV: {
           if (asminstr->as.mov.src.kind == AsmOperand_STACK &&
-              asminstr->as.mov.dst.kind == AsmOperand_STACK) {
+                  asminstr->as.mov.dst.kind == AsmOperand_STACK ||
+              ((asminstr->asm_type == AsmType_FLOAT ||
+                asminstr->asm_type == AsmType_DOUBLE) &&
+               asminstr->as.mov.dst.kind == AsmOperand_STACK)) {
             enum AsmRegister scratch_reg;
             struct AsmOperand scratch_op;
             struct AsmInstrMov mov1, mov2;
             struct AsmInstr i1 = {0}, i2 = {0};
 
-            scratch_reg = R10;
-
+            scratch_reg = (asminstr->asm_type == AsmType_FLOAT ||
+                           asminstr->asm_type == AsmType_DOUBLE)
+                              ? XMM8
+                              : R10;
             scratch_op.kind = AsmOperand_REG;
             scratch_op.as.reg = scratch_reg;
             scratch_op.asm_type = asminstr->asm_type;
@@ -5330,10 +5712,13 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
           break;
         }
         case AsmInstr_BIN: {
-          /* imul cannot use mem as dst */
-          if (asminstr->as.binary.kind == AsmInstrBinary_MUL &&
+          bool is_float = (asminstr->asm_type == AsmType_FLOAT ||
+                           asminstr->asm_type == AsmType_DOUBLE);
+
+          /* imul and float ops cannot use mem as dst */
+          if ((asminstr->as.binary.kind == AsmInstrBinary_MUL || is_float) &&
               asminstr->as.binary.rhs.kind == AsmOperand_STACK) {
-            enum AsmRegister scratch_reg = R10;
+            enum AsmRegister scratch_reg = is_float ? XMM8 : R10;
             struct AsmOperand scratch_op = {.kind = AsmOperand_REG,
                                             .as.reg = scratch_reg,
                                             .asm_type = asminstr->asm_type};
@@ -5348,7 +5733,7 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
             i1.asm_type = asminstr->asm_type;
 
             i2.kind = AsmInstr_BIN;
-            bin.kind = AsmInstrBinary_MUL;
+            bin.kind = asminstr->as.binary.kind;
             bin.lhs = asminstr->as.binary.lhs;
             bin.rhs = scratch_op;
             i2.as.binary = bin;
@@ -5367,16 +5752,14 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
             break;
           }
 
-          /* binary ops cannot use mem as both operands */
+          /* integer binary ops cannot use mem as both operands */
           if (asminstr->as.binary.lhs.kind == AsmOperand_STACK &&
               asminstr->as.binary.rhs.kind == AsmOperand_STACK) {
-            enum AsmRegister scratch_reg;
+            enum AsmRegister scratch_reg = R10;
             struct AsmOperand scratch_op;
             struct AsmInstrMov mov;
             struct AsmInstrBinary bin;
             struct AsmInstr i1 = {0}, i2 = {0};
-
-            scratch_reg = R10;
 
             scratch_op.kind = AsmOperand_REG;
             scratch_op.as.reg = scratch_reg;
@@ -5426,7 +5809,7 @@ void emit_operand(FILE *f, struct AsmOperand *op)
       break;
     }
     case AsmOperand_IMM: {
-      fprintf(f, "$%d", op->as.imm);
+      fprintf(f, "$%lld", op->as.imm);
       break;
     }
     case AsmOperand_PSEUDO: {
@@ -5435,6 +5818,71 @@ void emit_operand(FILE *f, struct AsmOperand *op)
     }
     case AsmOperand_REG: {
       switch (op->as.reg) {
+        case XMM0: {
+          fprintf(f, "%%xmm0");
+          break;
+        }
+        case XMM1: {
+          fprintf(f, "%%xmm1");
+          break;
+        }
+        case XMM2: {
+          fprintf(f, "%%xmm2");
+          break;
+        }
+        case XMM3: {
+          fprintf(f, "%%xmm3");
+          break;
+        }
+        case XMM4: {
+          fprintf(f, "%%xmm4");
+          break;
+        }
+        case XMM5: {
+          fprintf(f, "%%xmm5");
+          break;
+        }
+        case XMM6: {
+          fprintf(f, "%%xmm6");
+          break;
+        }
+        case XMM7: {
+          fprintf(f, "%%xmm7");
+          break;
+        }
+        case XMM8: {
+          fprintf(f, "%%xmm8");
+          break;
+        }
+        case XMM9: {
+          fprintf(f, "%%xmm9");
+          break;
+        }
+        case XMM10: {
+          fprintf(f, "%%xmm10");
+          break;
+        }
+        case XMM11: {
+          fprintf(f, "%%xmm11");
+          break;
+        }
+        case XMM12: {
+          fprintf(f, "%%xmm12");
+          break;
+        }
+        case XMM13: {
+          fprintf(f, "%%xmm13");
+          break;
+        }
+        case XMM14: {
+          fprintf(f, "%%xmm14");
+          break;
+        }
+        case XMM15: {
+          fprintf(f, "%%xmm15");
+          break;
+        }
+
         case AX: {
           switch (op->asm_type) {
             case AsmType_BYTE: {
@@ -5685,7 +6133,12 @@ void emit(struct AsmProgram *prog, char *path)
     fprintf(f, ".section .rodata\n");
     for (int i = 0; i < global_constants.len; i++) {
       fprintf(f, "%s:\n", global_constants.data[i].name);
-      fprintf(f, "\t.string \"%s\"\n", global_constants.data[i].value);
+      if (strncmp(global_constants.data[i].value, ".long", 5) == 0 ||
+          strncmp(global_constants.data[i].value, ".quad", 5) == 0) {
+        fprintf(f, "\t%s\n", global_constants.data[i].value);
+      } else {
+        fprintf(f, "\t.string \"%s\"\n", global_constants.data[i].value);
+      }
     }
     fprintf(f, "\n");
   }
@@ -5698,6 +6151,18 @@ void emit(struct AsmProgram *prog, char *path)
       struct AsmInstr *instr = &prog->funcs.data[i].body.data[j];
       fprintf(f, "\t");
       switch (instr->kind) {
+        case AsmInstr_CVT: {
+          if (instr->asm_type == AsmType_FLOAT) {
+            fprintf(f, "cvtss2sd ");
+          } else {
+            assert(0 && "Unhandled cast type");
+          }
+          emit_operand(f, &instr->as.cvt.src);
+          fprintf(f, ", ");
+          emit_operand(f, &instr->as.cvt.dst);
+          fprintf(f, "\n");
+          break;
+        }
         case AsmInstr_UNARY: {
           fprintf(f, "neg");
           switch (instr->asm_type) {
@@ -5862,24 +6327,29 @@ void emit(struct AsmProgram *prog, char *path)
           break;
         }
         case AsmInstr_MOV: {
-          fprintf(f, "mov");
-
-          switch (instr->asm_type) {
-            case AsmType_BYTE:
-              fprintf(f, "b");
-              break;
-            case AsmType_WORD:
-              fprintf(f, "w");
-              break;
-            case AsmType_LONGWORD:
-              fprintf(f, "l");
-              break;
-            case AsmType_QUADWORD:
-              fprintf(f, "q");
-              break;
+          if (instr->asm_type == AsmType_FLOAT) {
+            fprintf(f, "movss ");
+          } else if (instr->asm_type == AsmType_DOUBLE) {
+            fprintf(f, "movsd ");
+          } else {
+            fprintf(f, "mov");
+            switch (instr->asm_type) {
+              case AsmType_BYTE:
+                fprintf(f, "b ");
+                break;
+              case AsmType_WORD:
+                fprintf(f, "w ");
+                break;
+              case AsmType_LONGWORD:
+                fprintf(f, "l ");
+                break;
+              case AsmType_QUADWORD:
+                fprintf(f, "q ");
+                break;
+              default:
+                assert(0);
+            }
           }
-
-          fprintf(f, " ");
 
           emit_operand(f, &instr->as.mov.src);
           fprintf(f, ", ");
@@ -5890,66 +6360,91 @@ void emit(struct AsmProgram *prog, char *path)
         case AsmInstr_BIN: {
           switch (instr->as.binary.kind) {
             case AsmInstrBinary_ADD: {
-              fprintf(f, "add");
-
-              switch (instr->asm_type) {
-                case AsmType_BYTE:
-                  fprintf(f, "b");
-                  break;
-                case AsmType_WORD:
-                  fprintf(f, "w");
-                  break;
-                case AsmType_LONGWORD:
-                  fprintf(f, "l");
-                  break;
-                case AsmType_QUADWORD:
-                  fprintf(f, "q");
-                  break;
+              if (instr->asm_type == AsmType_FLOAT) {
+                fprintf(f, "addss ");
+              } else if (instr->asm_type == AsmType_DOUBLE) {
+                fprintf(f, "addsd ");
+              } else {
+                fprintf(f, "add");
+                switch (instr->asm_type) {
+                  case AsmType_BYTE:
+                    fprintf(f, "b ");
+                    break;
+                  case AsmType_WORD:
+                    fprintf(f, "w ");
+                    break;
+                  case AsmType_LONGWORD:
+                    fprintf(f, "l ");
+                    break;
+                  case AsmType_QUADWORD:
+                    fprintf(f, "q ");
+                    break;
+                  default:
+                    assert(0);
+                }
               }
-
-              fprintf(f, " ");
-
               break;
             }
             case AsmInstrBinary_SUB: {
-              fprintf(f, "sub");
-
-              switch (instr->asm_type) {
-                case AsmType_BYTE:
-                  fprintf(f, "b");
-                  break;
-                case AsmType_WORD:
-                  fprintf(f, "w");
-                  break;
-                case AsmType_LONGWORD:
-                  fprintf(f, "l");
-                  break;
-                case AsmType_QUADWORD:
-                  fprintf(f, "q");
-                  break;
+              if (instr->asm_type == AsmType_FLOAT) {
+                fprintf(f, "subss ");
+              } else if (instr->asm_type == AsmType_DOUBLE) {
+                fprintf(f, "subsd ");
+              } else {
+                fprintf(f, "sub");
+                switch (instr->asm_type) {
+                  case AsmType_BYTE:
+                    fprintf(f, "b ");
+                    break;
+                  case AsmType_WORD:
+                    fprintf(f, "w ");
+                    break;
+                  case AsmType_LONGWORD:
+                    fprintf(f, "l ");
+                    break;
+                  case AsmType_QUADWORD:
+                    fprintf(f, "q ");
+                    break;
+                  default:
+                    assert(0);
+                }
               }
-
-              fprintf(f, " ");
-
               break;
             }
             case AsmInstrBinary_MUL: {
-              fprintf(f, "imul ");
-              switch (instr->asm_type) {
-                case AsmType_BYTE:
-                  fprintf(f, "b");
-                  break;
-                case AsmType_WORD:
-                  fprintf(f, "w");
-                  break;
-                case AsmType_LONGWORD:
-                  fprintf(f, "l");
-                  break;
-                case AsmType_QUADWORD:
-                  fprintf(f, "q");
-                  break;
+              if (instr->asm_type == AsmType_FLOAT) {
+                fprintf(f, "mulss ");
+              } else if (instr->asm_type == AsmType_DOUBLE) {
+                fprintf(f, "mulsd ");
+              } else {
+                fprintf(f, "imul ");
+                switch (instr->asm_type) {
+                  case AsmType_BYTE:
+                    fprintf(f, "b ");
+                    break;
+                  case AsmType_WORD:
+                    fprintf(f, "w ");
+                    break;
+                  case AsmType_LONGWORD:
+                    fprintf(f, "l ");
+                    break;
+                  case AsmType_QUADWORD:
+                    fprintf(f, "q ");
+                    break;
+                  default:
+                    assert(0);
+                }
               }
-
+              break;
+            }
+            case AsmInstrBinary_DIV: {
+              if (instr->asm_type == AsmType_FLOAT) {
+                fprintf(f, "divss ");
+              } else if (instr->asm_type == AsmType_DOUBLE) {
+                fprintf(f, "divsd ");
+              } else {
+                assert(0 && "integer div not implemented");
+              }
               break;
             }
             default:
@@ -6103,6 +6598,12 @@ void print_type(Type *type)
     case I64_T:
       printf("i64");
       break;
+    case F32_T:
+      printf("f32");
+      break;
+    case F64_T:
+      printf("f64");
+      break;
     case STR_T:
       printf("str");
       break;
@@ -6138,6 +6639,30 @@ void print_symbol(struct Symbol *sym)
 bool promote_literal(struct Expr *expr, Type target_type)
 {
   if (expr->kind != EXPR_LITERAL || expr->as.literal.kind != LITERAL_NUM) {
+    return false;
+  }
+
+  bool src_is_float = (expr->as.literal.type.kind == F32_T ||
+                       expr->as.literal.type.kind == F64_T);
+  bool tgt_is_float = (target_type.kind == F32_T || target_type.kind == F64_T);
+
+  if (src_is_float && tgt_is_float) {
+    double val = (expr->as.literal.type.kind == F32_T)
+                     ? (double) expr->as.literal.as.f32
+                     : expr->as.literal.as.f64;
+
+    expr->type = target_type;
+    expr->as.literal.type = target_type;
+
+    if (target_type.kind == F32_T) {
+      expr->as.literal.as.f32 = (float) val;
+    } else {
+      expr->as.literal.as.f64 = val;
+    }
+    return true;
+  }
+
+  if (src_is_float != tgt_is_float) {
     return false;
   }
 
@@ -6332,6 +6857,16 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
   struct TypecheckResult res = {.is_ok = true, .msg = NULL, .ast = NULL};
 
   switch (expr->kind) {
+    case EXPR_CAST: {
+      struct TypecheckResult r;
+
+      r = typecheck_expr(expr->as.cast.expr, sym_table);
+      if (!r.is_ok) {
+        return r;
+      }
+
+      break;
+    }
     case EXPR_LITERAL: {
       if (expr->as.literal.kind == LITERAL_STR) {
         expr->type = (Type){.kind = STR_T};
@@ -6471,7 +7006,15 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
             .is_ok = false, .msg = "Called an undefined function", .ast = NULL};
       }
 
-      if (callee_sym->type.as.func.params.len != expr->as.call.arguments.len) {
+      bool is_variadic;
+      int expected_args, provided_args;
+
+      is_variadic = callee_sym->type.as.func.is_variadic;
+      expected_args = callee_sym->type.as.func.params.len;
+      provided_args = expr->as.call.arguments.len;
+
+      if (is_variadic ? (provided_args < expected_args)
+                      : (provided_args != expected_args)) {
         return (struct TypecheckResult){
             .is_ok = false,
             .msg = "Called with a wrong number of args",
@@ -6486,38 +7029,57 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
         }
 
         Type actual_type = expr->as.call.arguments.data[i].type;
-        Type expected_type = callee_sym->type.as.func.params.data[i];
 
-        if (!types_equal(actual_type, expected_type)) {
-          if (expr->as.call.arguments.data[i].kind == EXPR_LITERAL &&
-              expr->as.call.arguments.data[i].as.literal.kind == LITERAL_NUM) {
-            if (!promote_literal(&expr->as.call.arguments.data[i],
-                                 expected_type)) {
+        if (i < expected_args) {
+          Type expected_type = callee_sym->type.as.func.params.data[i];
+
+          if (!types_equal(actual_type, expected_type)) {
+            if (expr->as.call.arguments.data[i].kind == EXPR_LITERAL &&
+                expr->as.call.arguments.data[i].as.literal.kind ==
+                    LITERAL_NUM) {
+              if (!promote_literal(&expr->as.call.arguments.data[i],
+                                   expected_type)) {
+                return (struct TypecheckResult){
+                    .is_ok = false,
+                    .msg =
+                        "Type error: assignment does not fit in the expected "
+                        "type",
+                    .ast = NULL,
+                };
+              }
+            } else {
               return (struct TypecheckResult){
                   .is_ok = false,
                   .msg =
-                      "Type error: assignment does not fit in the expected "
-                      "type",
-                  .ast = NULL,
-              };
+                      "Type error: assignment does not match the expected "
+                      "return type",
+                  .ast = NULL};
             }
-          } else {
-            return (struct TypecheckResult){
-                .is_ok = false,
-                .msg =
-                    "Type error: assignment does not match the expected "
-                    "return type",
-                .ast = NULL};
+          }
+        } else {
+          if (actual_type.kind == I8_T || actual_type.kind == I16_T) {
+            expr->as.call.arguments.data[i].type = (Type){.kind = I32_T};
+          } else if (actual_type.kind == U8_T || actual_type.kind == U16_T) {
+            expr->as.call.arguments.data[i].type = (Type){.kind = U32_T};
+          } else if (actual_type.kind == F32_T) {
+            struct Expr *inner = malloc(sizeof(struct Expr));
+            *inner = expr->as.call.arguments.data[i];
+
+            struct Expr cast_expr;
+            cast_expr.kind = EXPR_CAST;
+            cast_expr.type = (Type){.kind = F64_T};
+            cast_expr.as.cast.expr = inner;
+
+            expr->as.call.arguments.data[i] = cast_expr;
           }
         }
-      }
 
-      expr->type = *callee_sym->type.as.func.retval;
+        expr->type = *callee_sym->type.as.func.retval;
+      }
 
       break;
     }
   }
-
   return res;
 }
 
@@ -6644,7 +7206,8 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
               return (struct TypecheckResult){
                   .is_ok = false,
                   .msg =
-                      "Type error: returned literal value does not fit in the "
+                      "Type error: returned literal value does not fit in "
+                      "the "
                       "expected return type",
                   .ast = NULL,
               };
@@ -6653,7 +7216,8 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
             return (struct TypecheckResult){
                 .is_ok = false,
                 .msg =
-                    "Type error: returned value does not match the function's "
+                    "Type error: returned value does not match the "
+                    "function's "
                     "expected return type",
                 .ast = NULL};
           }
@@ -6798,6 +7362,16 @@ struct ResolveResult resolve_expr(struct VariableMap **varmap,
                                   struct Expr *expr)
 {
   switch (expr->kind) {
+    case EXPR_CAST: {
+      struct ResolveResult r;
+
+      r = resolve_expr(varmap, expr->as.cast.expr);
+      if (!r.is_ok) {
+        return r;
+      }
+
+      break;
+    }
     case EXPR_LITERAL:
       break;
     case EXPR_VARIABLE: {

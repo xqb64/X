@@ -1,9 +1,8 @@
-extern fn puts(s: str) -> i32;
+extern fn printf(s: str, ...) -> i32;
 
 fn main(void) -> i32 {
-  let x: i32 = 0;
-  {
-    let z: str = "Hello world!";
-  }
-  ret x;
+  let x: f32 = -1.0;
+  let y: f32 = 2.0;
+  printf("spam: %f\n", x+y);
+  ret 0;
 }
