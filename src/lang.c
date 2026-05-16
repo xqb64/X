@@ -7298,7 +7298,6 @@ char *replace_ext(char *path, char *ext)
 
   a = strlen(path);
   b = strlen(ext);
-
   total = a + b + 1;
 
   replaced = malloc(total);
