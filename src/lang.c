@@ -6895,11 +6895,8 @@ struct ResolveResult resolve_param(struct VariableMap **varmap,
   char *uniq_name;
 
   uniq_name = mkuniq(param->name);
-
   varmap_insert(varmap, param->name, uniq_name);
-
   free(param->name);
-
   param->name = strdup(uniq_name);
 
   return (struct ResolveResult){.is_ok = true, .msg = NULL, .as.param = param};
