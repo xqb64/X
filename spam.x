@@ -1,7 +1,7 @@
-fn f(x: i32) -> i32 {
-  ret x;
+fn f(x: u8) -> u8 {
+  ret x+1;
 }
 
-fn main(void) -> i32 {
-  ret f(0);
+fn main(void) -> u8 {
+  ret f(-10);
 }
