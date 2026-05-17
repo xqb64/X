@@ -100,6 +100,9 @@ enum TokenKind {
   TOKEN_CONTINUE,
   TOKEN_IF,
   TOKEN_ELSE,
+  TOKEN_TRUE,
+  TOKEN_FALSE,
+  TOKEN_BOOL,
   TOKEN_IDENTIFIER,
   TOKEN_LPAREN,
   TOKEN_VOID,
@@ -342,7 +345,9 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
         break;
       }
       case 'b': {
-        if (lookahead(tokenizer, 4, "reak") == 0) {
+        if (lookahead(tokenizer, 3, "ool") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_BOOL, 4));
+        } else if (lookahead(tokenizer, 4, "reak") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_BREAK, 5));
         } else {
           vec_insert(&tokens, identifier(tokenizer));
@@ -360,12 +365,23 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
         break;
       }
       case 'f': {
-        if (lookahead(tokenizer, 2, "32") == 0) {
+        if (lookahead(tokenizer, 4, "alse") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_FALSE, 5));
+        } else if (lookahead(tokenizer, 2, "32") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_F32, 3));
         } else if (lookahead(tokenizer, 2, "64") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_F64, 3));
         } else if (lookahead(tokenizer, 1, "n") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_FN, 2));
+        } else {
+          vec_insert(&tokens, identifier(tokenizer));
+        }
+
+        break;
+      }
+      case 't': {
+        if (lookahead(tokenizer, 3, "rue") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_TRUE, 4));
         } else {
           vec_insert(&tokens, identifier(tokenizer));
         }
@@ -713,6 +729,15 @@ void print_token(struct Token *token)
     case TOKEN_ELLIPSIS:
       printf("ellipsis");
       break;
+    case TOKEN_BOOL:
+      printf("bool");
+      break;
+    case TOKEN_TRUE:
+      printf("true");
+      break;
+    case TOKEN_FALSE:
+      printf("false");
+      break;
     default:
       assert(0);
   }
@@ -730,6 +755,7 @@ void print_tokens(VecToken tokens)
 enum LiteralKind {
   LITERAL_NUM,
   LITERAL_STR,
+  LITERAL_BOOL,
 };
 
 enum TypeKind {
@@ -743,6 +769,7 @@ enum TypeKind {
   U64_T,
   F32_T,
   F64_T,
+  BOOL_T,
   STR_T,
   FN_T,
   UNKNOWN_T,
@@ -777,6 +804,7 @@ struct Literal {
     long long i64;
     float f32;
     double f64;
+    bool boolean;
   } as;
   Type type;
 };
@@ -869,6 +897,7 @@ bool types_equal(Type a, Type b)
     case F32_T:
     case F64_T:
     case STR_T:
+    case BOOL_T:
     case UNKNOWN_T:
       return true;
 
@@ -1179,6 +1208,8 @@ Type parse_type(struct Token *token)
     return (Type){.kind = F32_T};
   } else if (strncmp(token->start, "f64", token->len) == 0) {
     return (Type){.kind = F64_T};
+  } else if (strncmp(token->start, "bool", token->len) == 0) {
+    return (Type){.kind = BOOL_T};
   } else if (strncmp(token->start, "str", token->len) == 0) {
     return (Type){.kind = STR_T};
   } else {
@@ -1245,9 +1276,10 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
             .msg = "Expected `name: type` format for parameters"};
       }
 
-      type_token = consume_any(parser, 11, TOKEN_U8, TOKEN_U16, TOKEN_U32,
-                               TOKEN_U64, TOKEN_I8, TOKEN_I16, TOKEN_I32,
-                               TOKEN_I64, TOKEN_F32, TOKEN_F64, TOKEN_STR);
+      type_token =
+          consume_any(parser, 12, TOKEN_U8, TOKEN_U16, TOKEN_U32, TOKEN_U64,
+                      TOKEN_I8, TOKEN_I16, TOKEN_I32, TOKEN_I64, TOKEN_F32,
+                      TOKEN_F64, TOKEN_BOOL, TOKEN_STR);
       if (!type_token) {
         return (struct ParseFnResult){
             .is_ok = false,
@@ -1284,9 +1316,10 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
         .is_ok = false, .as.stmt = {0}, .msg = "Expected token '->' after ')'"};
   }
 
-  token_retval = consume_any(parser, 11, TOKEN_U8, TOKEN_U16, TOKEN_U32,
-                             TOKEN_U64, TOKEN_I8, TOKEN_I16, TOKEN_I32,
-                             TOKEN_I64, TOKEN_F32, TOKEN_F64, TOKEN_STR);
+  token_retval =
+      consume_any(parser, 12, TOKEN_U8, TOKEN_U16, TOKEN_U32, TOKEN_U64,
+                  TOKEN_I8, TOKEN_I16, TOKEN_I32, TOKEN_I64, TOKEN_F32,
+                  TOKEN_F64, TOKEN_BOOL, TOKEN_STR);
   if (!token_retval) {
     return (struct ParseFnResult){
         .is_ok = false, .as.stmt = {0}, .msg = "Expected retval after '->'"};
@@ -1419,6 +1452,25 @@ struct ParseFnResult primary(struct Parser *parser)
     var.type = (Type){.kind = UNKNOWN_T};
 
     res.as.expr = (struct Expr){.kind = EXPR_VARIABLE, .as.var = var};
+  } else if (check(parser, TOKEN_TRUE) || check(parser, TOKEN_FALSE)) {
+    struct Literal literal;
+    struct Token *token_literal;
+    bool is_true;
+
+    is_true = check(parser, TOKEN_TRUE);
+
+    token_literal = consume(parser, is_true ? TOKEN_TRUE : TOKEN_FALSE);
+    if (!token_literal) {
+      return (struct ParseFnResult){
+          .is_ok = false, .msg = "Expected bool literal", .as.expr = {0}};
+    }
+
+    literal.kind = LITERAL_BOOL;
+    literal.as.boolean = is_true ? true : false;
+    literal.type = (Type){.kind = BOOL_T};
+
+    res.as.expr = (struct Expr){
+        .kind = EXPR_LITERAL, .as.literal = literal, .type = literal.type};
   } else {
     res.is_ok = false;
     res.msg = "Expected number, string, or identifier";
@@ -1943,9 +1995,9 @@ struct ParseFnResult parse_let_stmt(struct Parser *parser)
         .msg = "Expected token ':' after identifier in let stmt"};
   }
 
-  token_type = consume_any(parser, 11, TOKEN_U8, TOKEN_U16, TOKEN_U32,
+  token_type = consume_any(parser, 12, TOKEN_U8, TOKEN_U16, TOKEN_U32,
                            TOKEN_U64, TOKEN_I8, TOKEN_I16, TOKEN_I32, TOKEN_I64,
-                           TOKEN_F32, TOKEN_F64, TOKEN_STR);
+                           TOKEN_F32, TOKEN_F64, TOKEN_BOOL, TOKEN_STR);
   if (!token_type) {
     free(name);
     return (struct ParseFnResult){.is_ok = false,
@@ -2291,9 +2343,10 @@ struct ParseFnResult parse_extern_stmt(struct Parser *parser)
             .msg = "Expected `name: type` format for parameters"};
       }
 
-      type_token = consume_any(parser, 11, TOKEN_U8, TOKEN_U16, TOKEN_U32,
-                               TOKEN_U64, TOKEN_I8, TOKEN_I16, TOKEN_I32,
-                               TOKEN_I64, TOKEN_F32, TOKEN_F64, TOKEN_STR);
+      type_token =
+          consume_any(parser, 12, TOKEN_U8, TOKEN_U16, TOKEN_U32, TOKEN_U64,
+                      TOKEN_I8, TOKEN_I16, TOKEN_I32, TOKEN_I64, TOKEN_F32,
+                      TOKEN_F64, TOKEN_BOOL, TOKEN_STR);
       if (!type_token) {
         return (struct ParseFnResult){
             .is_ok = false,
@@ -2548,7 +2601,14 @@ void print_expr(struct Expr *expr, int spaces)
       break;
     }
     case EXPR_LITERAL: {
-      if (expr->as.literal.kind == LITERAL_NUM) {
+      if (expr->as.literal.kind == LITERAL_BOOL) {
+        printf("Literal(\n");
+        print_indent(spaces + 2);
+        printf("v: %s,\n", expr->as.literal.as.boolean ? "true" : "false");
+        printf("\n");
+        print_indent(spaces);
+        printf(")");
+      } else if (expr->as.literal.kind == LITERAL_NUM) {
         printf("Literal(\n");
         print_indent(spaces + 2);
 
@@ -2874,6 +2934,7 @@ void free_expr(struct Expr *expr)
     case EXPR_LITERAL: {
       switch (expr->as.literal.kind) {
         case LITERAL_NUM:
+        case LITERAL_BOOL:
           break;
         case LITERAL_STR:
           free(expr->as.literal.as.str);
@@ -3214,12 +3275,12 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
     }
     case EXPR_BINARY: {
       if (expr->as.binary.kind == EXPR_BIN_LOGICAL_AND) {
-        struct IRValue *lhs, *rhs, *dst, *one, *zero, *ret;
+        struct IRValue *lhs, *rhs, *dst, *one, *zero, *dst_zero, *ret;
         char *lbl_false, *lbl_end;
         int tmp;
 
         dst = make_ir_var();
-        dst->type = (Type){.kind = U8_T};
+        dst->type = (Type){.kind = BOOL_T};
 
         tmp = mktmp();
 
@@ -3240,10 +3301,10 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
 
         one = malloc(sizeof(struct IRValue));
         one->kind = IRValue_CONST;
-        one->type = (Type){.kind = U8_T};
-        one->as.konst.kind = LITERAL_NUM;
-        one->as.konst.type = (Type){.kind = U8_T};
-        one->as.konst.as.u8 = 1;
+        one->type = (Type){.kind = BOOL_T};
+        one->as.konst.kind = LITERAL_BOOL;
+        one->as.konst.type = (Type){.kind = BOOL_T};
+        one->as.konst.as.boolean = true;
         vec_insert(instrs,
                    ((struct IRInstr){.kind = IRInstr_CPY,
                                      .as.copy = {.src = one, .dst = dst}}));
@@ -3257,13 +3318,19 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
 
         zero = malloc(sizeof(struct IRValue));
         zero->kind = IRValue_CONST;
-        zero->type = (Type){.kind = U8_T};
-        zero->as.konst.kind = LITERAL_NUM;
-        zero->as.konst.type = (Type){.kind = U8_T};
-        zero->as.konst.as.u8 = 0;
-        vec_insert(instrs,
-                   ((struct IRInstr){.kind = IRInstr_CPY,
-                                     .as.copy = {.src = zero, .dst = dst}}));
+        zero->type = (Type){.kind = BOOL_T};
+        zero->as.konst.kind = LITERAL_BOOL;
+        zero->as.konst.type = (Type){.kind = BOOL_T};
+        zero->as.konst.as.boolean = false;
+
+        dst_zero = malloc(sizeof(struct IRValue));
+        dst_zero->kind = IRValue_VAR;
+        dst_zero->as.var = strdup(dst->as.var);
+        dst_zero->type = dst->type;
+
+        vec_insert(instrs, ((struct IRInstr){
+                               .kind = IRInstr_CPY,
+                               .as.copy = {.src = zero, .dst = dst_zero}}));
 
         vec_insert(instrs,
                    ((struct IRInstr){.kind = IRInstr_LBL,
@@ -3281,12 +3348,12 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       }
 
       if (expr->as.binary.kind == EXPR_BIN_LOGICAL_OR) {
-        struct IRValue *lhs, *rhs, *dst, *one, *zero, *ret;
+        struct IRValue *lhs, *rhs, *dst, *one, *zero, *dst_zero, *ret;
         int tmp;
         char *lbl_check_rhs, *lbl_true, *lbl_false, *lbl_end;
 
         dst = make_ir_var();
-        dst->type = (Type){.kind = U8_T};
+        dst->type = (Type){.kind = BOOL_T};
 
         tmp = mktmp();
         lbl_check_rhs = mklbl("OrRhs", tmp);
@@ -3320,10 +3387,10 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
 
         one = malloc(sizeof(struct IRValue));
         one->kind = IRValue_CONST;
-        one->type = (Type){.kind = U8_T};
-        one->as.konst.kind = LITERAL_NUM;
-        one->as.konst.type = (Type){.kind = U8_T};
-        one->as.konst.as.u8 = 1;
+        one->type = (Type){.kind = BOOL_T};
+        one->as.konst.kind = LITERAL_BOOL;
+        one->as.konst.type = (Type){.kind = BOOL_T};
+        one->as.konst.as.boolean = true;
         vec_insert(instrs,
                    ((struct IRInstr){.kind = IRInstr_CPY,
                                      .as.copy = {.src = one, .dst = dst}}));
@@ -3337,13 +3404,19 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
 
         zero = malloc(sizeof(struct IRValue));
         zero->kind = IRValue_CONST;
-        zero->type = (Type){.kind = U8_T};
-        zero->as.konst.kind = LITERAL_NUM;
-        zero->as.konst.type = (Type){.kind = U8_T};
-        zero->as.konst.as.u8 = 0;
-        vec_insert(instrs,
-                   ((struct IRInstr){.kind = IRInstr_CPY,
-                                     .as.copy = {.src = zero, .dst = dst}}));
+        zero->type = (Type){.kind = BOOL_T};
+        zero->as.konst.kind = LITERAL_BOOL;
+        zero->as.konst.type = (Type){.kind = BOOL_T};
+        zero->as.konst.as.boolean = false;
+
+        dst_zero = malloc(sizeof(struct IRValue));
+        dst_zero->kind = IRValue_VAR;
+        dst_zero->as.var = strdup(dst->as.var);
+        dst_zero->type = dst->type;
+
+        vec_insert(instrs, ((struct IRInstr){
+                               .kind = IRInstr_CPY,
+                               .as.copy = {.src = zero, .dst = dst_zero}}));
 
         vec_insert(instrs,
                    ((struct IRInstr){.kind = IRInstr_LBL,
@@ -3971,6 +4044,10 @@ void print_ir_val(struct IRValue *ir_val, int spaces)
           printf("v: %f,\n", ir_val->as.konst.as.f64);
           break;
         }
+        case BOOL_T: {
+          printf("v: %s,\n", ir_val->as.konst.as.boolean ? "true" : "false");
+          break;
+        }
         default:
           assert(0);
       }
@@ -4242,6 +4319,7 @@ enum AsmType type_to_asm_type(Type type)
   switch (type.kind) {
     case U8_T:
     case I8_T:
+    case BOOL_T:
       return AsmType_BYTE;
     case U16_T:
     case I16_T:
@@ -4274,6 +4352,7 @@ struct AsmOperand {
 };
 
 struct AsmInstrCvt {
+  bool is_unsigned;
   struct AsmOperand src;
   struct AsmOperand dst;
 };
@@ -4404,6 +4483,7 @@ static inline int get_type_size(enum TypeKind kind)
   switch (kind) {
     case I8_T:
     case U8_T:
+    case BOOL_T:
       return 1;
     case I16_T:
     case U16_T:
@@ -4520,7 +4600,9 @@ struct AsmOperand codegen_irvalue(struct IRValue *val)
           operand.as.data = strdup(lbl);
           break;
         }
-
+        case BOOL_T:
+          operand.as.imm = val->as.konst.as.boolean ? 1 : 0;
+          break;
         default:
           assert(0);
       }
@@ -4555,6 +4637,8 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
 
       struct AsmInstr i = {0};
       i.kind = AsmInstr_CVT;
+      i.as.cvt.is_unsigned = is_unsigned(ir_instr->as.cast.src->type.kind) ||
+                             ir_instr->as.cast.src->type.kind == BOOL_T;
       i.as.cvt.src = src;
       i.as.cvt.dst = dst;
       i.asm_type = src.asm_type;
@@ -5914,12 +5998,17 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
         }
         case AsmInstr_CVT: {
           if (asminstr->as.cvt.dst.kind == AsmOperand_STACK) {
-            struct AsmOperand scratch_op = {.kind = AsmOperand_REG,
-                                            .as.reg = XMM8,
-                                            .asm_type = AsmType_DOUBLE};
+            bool is_float = (asminstr->asm_type == AsmType_FLOAT ||
+                             asminstr->asm_type == AsmType_DOUBLE);
+
+            struct AsmOperand scratch_op = {
+                .kind = AsmOperand_REG,
+                .as.reg = is_float ? XMM8 : R10,
+                .asm_type = asminstr->as.cvt.dst.asm_type};
             struct AsmInstr i1 = {0}, i2 = {0};
 
             i1.kind = AsmInstr_CVT;
+            i1.as.cvt.is_unsigned = asminstr->as.cvt.is_unsigned;
             i1.as.cvt.src = asminstr->as.cvt.src;
             i1.as.cvt.dst = scratch_op;
             i1.asm_type = asminstr->asm_type;
@@ -5927,7 +6016,7 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
             i2.kind = AsmInstr_MOV;
             i2.as.mov.src = scratch_op;
             i2.as.mov.dst = asminstr->as.cvt.dst;
-            i2.asm_type = AsmType_DOUBLE;
+            i2.asm_type = asminstr->as.cvt.dst.asm_type;
 
             vec_insert(&instrs, i1);
             vec_insert(&instrs, i2);
@@ -6442,6 +6531,10 @@ void emit(struct AsmProgram *prog, char *path)
         case AsmInstr_CVT: {
           if (instr->asm_type == AsmType_FLOAT) {
             fprintf(f, "cvtss2sd ");
+          } else if (instr->asm_type == AsmType_BYTE) {
+            fprintf(f, instr->as.cvt.is_unsigned ? "movzbl " : "movsbl ");
+          } else if (instr->asm_type == AsmType_WORD) {
+            fprintf(f, instr->as.cvt.is_unsigned ? "movzwl " : "movswl ");
           } else {
             assert(0 && "Unhandled cast type");
           }
@@ -6838,7 +6931,10 @@ void free_type(Type *t)
     case I16_T:
     case I32_T:
     case I64_T:
+    case F32_T:
+    case F64_T:
     case STR_T:
+    case BOOL_T:
     case UNKNOWN_T:
       break;
     case FN_T: {
@@ -6891,6 +6987,9 @@ void print_type(Type *type)
       break;
     case F64_T:
       printf("f64");
+      break;
+    case BOOL_T:
+      printf("bool");
       break;
     case STR_T:
       printf("str");
@@ -7202,7 +7301,7 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
 
       if (expr->as.binary.kind == EXPR_BIN_LOGICAL_AND ||
           expr->as.binary.kind == EXPR_BIN_LOGICAL_OR) {
-        expr->type = (Type){.kind = U8_T};
+        expr->type = (Type){.kind = BOOL_T};
         break;
       }
 
@@ -7327,10 +7426,27 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
             }
           }
         } else {
-          if (actual_type.kind == I8_T || actual_type.kind == I16_T) {
-            expr->as.call.arguments.data[i].type = (Type){.kind = I32_T};
+          if (actual_type.kind == I8_T || actual_type.kind == I16_T ||
+              actual_type.kind == BOOL_T) {
+            struct Expr *inner = malloc(sizeof(struct Expr));
+            *inner = expr->as.call.arguments.data[i];
+
+            struct Expr cast_expr;
+            cast_expr.kind = EXPR_CAST;
+            cast_expr.type = (Type){.kind = I32_T};
+            cast_expr.as.cast.expr = inner;
+
+            expr->as.call.arguments.data[i] = cast_expr;
           } else if (actual_type.kind == U8_T || actual_type.kind == U16_T) {
-            expr->as.call.arguments.data[i].type = (Type){.kind = U32_T};
+            struct Expr *inner = malloc(sizeof(struct Expr));
+            *inner = expr->as.call.arguments.data[i];
+
+            struct Expr cast_expr;
+            cast_expr.kind = EXPR_CAST;
+            cast_expr.type = (Type){.kind = U32_T};
+            cast_expr.as.cast.expr = inner;
+
+            expr->as.call.arguments.data[i] = cast_expr;
           } else if (actual_type.kind == F32_T) {
             struct Expr *inner = malloc(sizeof(struct Expr));
             *inner = expr->as.call.arguments.data[i];
@@ -7435,6 +7551,9 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
 
       Type actual_type = stmt->as.let.init->type;
       Type expected_type = stmt->as.let.type;
+
+      print_type(&actual_type);
+      print_type(&expected_type);
 
       if (!types_equal(actual_type, expected_type)) {
         if (stmt->as.let.init->kind == EXPR_LITERAL &&
