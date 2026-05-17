@@ -586,6 +586,9 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
 void print_token(struct Token *token)
 {
   switch (token->kind) {
+    case TOKEN_BANG:
+      printf("bang");
+      break;
     case TOKEN_AMPERSAND:
       printf("ampersand");
       break;
@@ -1563,7 +1566,7 @@ struct ParseFnResult call(struct Parser *parser)
 
 struct ParseFnResult unary(struct Parser *parser)
 {
-  if (match(parser, 1, TOKEN_MINUS)) {
+  if (match(parser, 2, TOKEN_MINUS, TOKEN_BANG)) {
     char *op = own_string_n(parser->prev->start, parser->prev->len);
 
     struct ParseFnResult right_result;
@@ -1643,6 +1646,12 @@ struct ParseFnResult unary(struct Parser *parser)
         right_result.as.expr.as.literal.as.i64 = val;
       }
 
+      free(op);
+      return right_result;
+    } else if (*op == '!' &&
+               right_result.as.expr.as.literal.kind == LITERAL_BOOL) {
+      right_result.as.expr.as.literal.as.boolean =
+          !right_result.as.expr.as.literal.as.boolean;
       free(op);
       return right_result;
     }
@@ -3090,6 +3099,7 @@ struct IRInstr_GetAddress {
 
 enum IRInstrUnaryKind {
   IRInstrUnary_NEG,
+  IRInstrUnary_NOT,
 };
 
 struct IRInstr_Unary {
@@ -3569,7 +3579,11 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       dst = make_ir_var();
       dst->type = expr->type;
 
-      kind = IRInstrUnary_NEG;
+      if (expr->as.unary.op[0] == '!') {
+        kind = IRInstrUnary_NOT;
+      } else {
+        kind = IRInstrUnary_NEG;
+      }
 
       iu.kind = kind;
       iu.src = src;
@@ -4110,7 +4124,11 @@ void print_ir_instr(struct IRInstr *instr, int spaces)
     case IRInstr_UNARY: {
       printf("IRInstr_UNARY(\n");
       print_indent(spaces + 2);
-      printf("kind = NEG,\n");
+      if (instr->as.unary.kind == IRInstrUnary_NOT) {
+        printf("kind = NOT,\n");
+      } else {
+        printf("kind = NEG,\n");
+      }
       print_indent(spaces + 2);
       printf("src = ");
       print_ir_val(instr->as.unary.src, spaces + 2);
@@ -4651,35 +4669,69 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       struct AsmOperand src = codegen_irvalue(ir_instr->as.cast.src);
       struct AsmOperand dst = codegen_irvalue(ir_instr->as.cast.dst);
 
-      struct AsmInstr i = {0};
-      i.kind = AsmInstr_CVT;
-      i.as.cvt.is_unsigned = is_unsigned(ir_instr->as.cast.src->type.kind) ||
-                             ir_instr->as.cast.src->type.kind == BOOL_T;
-      i.as.cvt.src = src;
-      i.as.cvt.dst = dst;
-      i.asm_type = src.asm_type;
+      if (src.kind == AsmOperand_IMM) {
+        struct AsmInstr i = {0};
+        i.kind = AsmInstr_MOV;
+        i.as.mov.src = src;
+        i.as.mov.dst = dst;
+        i.asm_type = dst.asm_type;
 
-      vec_insert(instrs, i);
+        vec_insert(instrs, i);
+      } else {
+        struct AsmInstr i = {0};
+        i.kind = AsmInstr_CVT;
+        i.as.cvt.is_unsigned = is_unsigned(ir_instr->as.cast.src->type.kind) ||
+                               ir_instr->as.cast.src->type.kind == BOOL_T;
+        i.as.cvt.src = src;
+        i.as.cvt.dst = dst;
+        i.asm_type = src.asm_type;
+
+        vec_insert(instrs, i);
+      }
       break;
     }
     case IRInstr_UNARY: {
       struct AsmOperand src, dst;
-      struct AsmInstr i1 = {0}, i2 = {0};
 
       src = codegen_irvalue(ir_instr->as.unary.src);
       dst = codegen_irvalue(ir_instr->as.unary.dst);
 
-      i1.kind = AsmInstr_MOV;
-      i1.as.mov.src = src;
-      i1.as.mov.dst = dst;
-      i1.asm_type = dst.asm_type;
+      if (ir_instr->as.unary.kind == IRInstrUnary_NOT) {
+        struct AsmInstr i1 = {0}, i2 = {0}, i3 = {0};
 
-      i2.kind = AsmInstr_UNARY;
-      i2.as.unary.op = dst;
-      i2.asm_type = dst.asm_type;
+        i1.kind = AsmInstr_MOV;
+        i1.as.mov.src = src;
+        i1.as.mov.dst = dst;
+        i1.asm_type = dst.asm_type;
 
-      vec_insert(instrs, i1);
-      vec_insert(instrs, i2);
+        i2.kind = AsmInstr_CMP;
+        i2.as.cmp.lhs =
+            (struct AsmOperand){.kind = AsmOperand_IMM, .as.imm = 0};
+        i2.as.cmp.rhs = dst;
+        i2.asm_type = dst.asm_type;
+
+        i3.kind = AsmInstr_SetCC;
+        i3.as.setcc.cc = E;
+        i3.as.setcc.op = dst;
+
+        vec_insert(instrs, i1);
+        vec_insert(instrs, i2);
+        vec_insert(instrs, i3);
+      } else {
+        struct AsmInstr i1 = {0}, i2 = {0};
+
+        i1.kind = AsmInstr_MOV;
+        i1.as.mov.src = src;
+        i1.as.mov.dst = dst;
+        i1.asm_type = dst.asm_type;
+
+        i2.kind = AsmInstr_UNARY;
+        i2.as.unary.op = dst;
+        i2.asm_type = dst.asm_type;
+
+        vec_insert(instrs, i1);
+        vec_insert(instrs, i2);
+      }
       break;
     }
     case IRInstr_GETADDR: {
@@ -7275,7 +7327,7 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
 
       expr->type = expr->as.unary.expr->type;
 
-      if (expr->as.unary.op[0] == '-') {
+      if (*expr->as.unary.op == '-') {
         switch (expr->type.kind) {
           case U8_T:
             expr->type.kind = I8_T;
@@ -7291,6 +7343,14 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
             break;
           default:
             break;
+        }
+      } else if (*expr->as.unary.op == '!') {
+        if (expr->type.kind != BOOL_T) {
+          return (struct TypecheckResult){
+              .is_ok = false,
+              .msg =
+                  "Type error: logical NOT (!) requires a boolean expression",
+              .ast = NULL};
         }
       }
 
@@ -7592,15 +7652,7 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
             };
           }
         }
-      } else {
-        return (struct TypecheckResult){
-            .is_ok = false,
-            .msg =
-                "Type error: returned value does not match the function's "
-                "expected return type",
-            .ast = NULL};
       }
-
       sym_insert(sym_table, stmt->as.let.name, stmt->as.let.type);
       break;
     }
@@ -7627,14 +7679,6 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
                   .ast = NULL,
               };
             }
-          } else {
-            return (struct TypecheckResult){
-                .is_ok = false,
-                .msg =
-                    "Type error: returned value does not match the "
-                    "function's "
-                    "expected return type",
-                .ast = NULL};
           }
         }
       }
