@@ -124,6 +124,10 @@ enum TokenKind {
   TOKEN_COMMA,
   TOKEN_COLON,
   TOKEN_SEMICOLON,
+  TOKEN_PIPE,
+  TOKEN_PIPE_PIPE,
+  TOKEN_AMPERSAND,
+  TOKEN_AMPERSAND_AMPERSAND,
   TOKEN_ARROW,
   TOKEN_I8,
   TOKEN_I16,
@@ -495,6 +499,22 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
         }
         break;
       }
+      case '|': {
+        if (lookahead(tokenizer, 1, "|") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_PIPE_PIPE, 2));
+        } else {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_PIPE, 1));
+        }
+        break;
+      }
+      case '&': {
+        if (lookahead(tokenizer, 1, "&") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_AMPERSAND_AMPERSAND, 2));
+        } else {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_AMPERSAND, 1));
+        }
+        break;
+      }
       case ',': {
         vec_insert(&tokens, mktoken(tokenizer, TOKEN_COMMA, 1));
         break;
@@ -548,6 +568,18 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
 void print_token(struct Token *token)
 {
   switch (token->kind) {
+    case TOKEN_AMPERSAND:
+      printf("ampersand");
+      break;
+    case TOKEN_PIPE:
+      printf("pipe");
+      break;
+    case TOKEN_AMPERSAND_AMPERSAND:
+      printf("ampersand ampersand");
+      break;
+    case TOKEN_PIPE_PIPE:
+      printf("pipe pipe");
+      break;
     case TOKEN_EXTERN:
       printf("extern");
       break;
@@ -770,6 +802,8 @@ enum ExprBinKind {
   EXPR_BIN_GREATER_EQUAL,
   EXPR_BIN_EQUAL_EQUAL,
   EXPR_BIN_BANG_EQUAL,
+  EXPR_BIN_LOGICAL_AND,
+  EXPR_BIN_LOGICAL_OR,
 };
 
 struct ExprCast {
@@ -1712,12 +1746,74 @@ struct ParseFnResult comparison(struct Parser *parser)
   return left_res;
 }
 
+struct ParseFnResult logical_and(struct Parser *parser)
+{
+  struct ParseFnResult left_res, right_res;
+  struct Expr left, right;
+
+  left_res = comparison(parser);
+  if (!left_res.is_ok) {
+    return left_res;
+  }
+
+  left = left_res.as.expr;
+  while (match(parser, 1, TOKEN_AMPERSAND_AMPERSAND)) {
+    right_res = comparison(parser);
+    if (!right_res.is_ok) {
+      return right_res;
+    }
+
+    right = right_res.as.expr;
+
+    struct ExprBin binexpr;
+    binexpr.kind = EXPR_BIN_LOGICAL_AND;
+    binexpr.lhs = ALLOC(left);
+    binexpr.rhs = ALLOC(right);
+
+    left = (struct Expr){.kind = EXPR_BINARY, .as.binary = binexpr};
+    left_res.as.expr = left;
+  }
+
+  return left_res;
+}
+
+struct ParseFnResult logical_or(struct Parser *parser)
+{
+  struct ParseFnResult left_res, right_res;
+  struct Expr left, right;
+
+  left_res = logical_and(parser);
+  if (!left_res.is_ok) {
+    return left_res;
+  }
+
+  left = left_res.as.expr;
+  while (match(parser, 1, TOKEN_PIPE_PIPE)) {
+    right_res = logical_and(parser);
+    if (!right_res.is_ok) {
+      return right_res;
+    }
+
+    right = right_res.as.expr;
+
+    struct ExprBin binexpr;
+    binexpr.kind = EXPR_BIN_LOGICAL_OR;
+    binexpr.lhs = ALLOC(left);
+    binexpr.rhs = ALLOC(right);
+
+    left = (struct Expr){.kind = EXPR_BINARY, .as.binary = binexpr};
+    left_res.as.expr = left;
+  }
+
+  return left_res;
+}
+
 struct ParseFnResult assignment(struct Parser *parser)
 {
   struct ParseFnResult expr_result, right_result;
   struct Expr expr, right;
 
-  expr_result = comparison(parser);
+  expr_result = logical_or(parser);
   if (!expr_result.is_ok) {
     return expr_result;
   }
@@ -2415,9 +2511,14 @@ void print_binary_op(int kind)
     case EXPR_BIN_BANG_EQUAL:
       printf("BANG EQUAL");
       break;
-    default:
-      printf("???");
+    case EXPR_BIN_LOGICAL_AND:
+      printf("LOGICAL AND");
       break;
+    case EXPR_BIN_LOGICAL_OR:
+      printf("LOGICAL OR");
+      break;
+    default:
+      assert(0);
   }
 }
 
@@ -3112,6 +3213,155 @@ struct IRValue *irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       return r;
     }
     case EXPR_BINARY: {
+      if (expr->as.binary.kind == EXPR_BIN_LOGICAL_AND) {
+        struct IRValue *lhs, *rhs, *dst, *one, *zero, *ret;
+        char *lbl_false, *lbl_end;
+        int tmp;
+
+        dst = make_ir_var();
+        dst->type = (Type){.kind = U8_T};
+
+        tmp = mktmp();
+
+        lbl_false = mklbl("AndFalse", tmp);
+        lbl_end = mklbl("AndEnd", tmp);
+
+        lhs = irfy_expr(instrs, expr->as.binary.lhs);
+        vec_insert(instrs,
+                   ((struct IRInstr){
+                       .kind = IRInstr_JZ,
+                       .as.jz = {.cond = *lhs, .target = strdup(lbl_false)}}));
+
+        rhs = irfy_expr(instrs, expr->as.binary.rhs);
+        vec_insert(instrs,
+                   ((struct IRInstr){
+                       .kind = IRInstr_JZ,
+                       .as.jz = {.cond = *rhs, .target = strdup(lbl_false)}}));
+
+        one = malloc(sizeof(struct IRValue));
+        one->kind = IRValue_CONST;
+        one->type = (Type){.kind = U8_T};
+        one->as.konst.kind = LITERAL_NUM;
+        one->as.konst.type = (Type){.kind = U8_T};
+        one->as.konst.as.u8 = 1;
+        vec_insert(instrs,
+                   ((struct IRInstr){.kind = IRInstr_CPY,
+                                     .as.copy = {.src = one, .dst = dst}}));
+        vec_insert(instrs,
+                   ((struct IRInstr){.kind = IRInstr_JMP,
+                                     .as.jmp = {.target = strdup(lbl_end)}}));
+
+        vec_insert(instrs,
+                   ((struct IRInstr){.kind = IRInstr_LBL,
+                                     .as.label = {.name = strdup(lbl_false)}}));
+
+        zero = malloc(sizeof(struct IRValue));
+        zero->kind = IRValue_CONST;
+        zero->type = (Type){.kind = U8_T};
+        zero->as.konst.kind = LITERAL_NUM;
+        zero->as.konst.type = (Type){.kind = U8_T};
+        zero->as.konst.as.u8 = 0;
+        vec_insert(instrs,
+                   ((struct IRInstr){.kind = IRInstr_CPY,
+                                     .as.copy = {.src = zero, .dst = dst}}));
+
+        vec_insert(instrs,
+                   ((struct IRInstr){.kind = IRInstr_LBL,
+                                     .as.label = {.name = strdup(lbl_end)}}));
+
+        free(lbl_false);
+        free(lbl_end);
+
+        ret = malloc(sizeof(struct IRValue));
+        ret->kind = IRValue_VAR;
+        ret->as.var = strdup(dst->as.var);
+        ret->type = dst->type;
+
+        return ret;
+      }
+
+      if (expr->as.binary.kind == EXPR_BIN_LOGICAL_OR) {
+        struct IRValue *lhs, *rhs, *dst, *one, *zero, *ret;
+        int tmp;
+        char *lbl_check_rhs, *lbl_true, *lbl_false, *lbl_end;
+
+        dst = make_ir_var();
+        dst->type = (Type){.kind = U8_T};
+
+        tmp = mktmp();
+        lbl_check_rhs = mklbl("OrRhs", tmp);
+        lbl_true = mklbl("OrTrue", tmp);
+        lbl_false = mklbl("OrFalse", tmp);
+        lbl_end = mklbl("OrEnd", tmp);
+
+        lhs = irfy_expr(instrs, expr->as.binary.lhs);
+        vec_insert(
+            instrs,
+            ((struct IRInstr){
+                .kind = IRInstr_JZ,
+                .as.jz = {.cond = *lhs, .target = strdup(lbl_check_rhs)}}));
+        vec_insert(instrs,
+                   ((struct IRInstr){.kind = IRInstr_JMP,
+                                     .as.jmp = {.target = strdup(lbl_true)}}));
+
+        vec_insert(instrs, ((struct IRInstr){
+                               .kind = IRInstr_LBL,
+                               .as.label = {.name = strdup(lbl_check_rhs)}}));
+
+        rhs = irfy_expr(instrs, expr->as.binary.rhs);
+        vec_insert(instrs,
+                   ((struct IRInstr){
+                       .kind = IRInstr_JZ,
+                       .as.jz = {.cond = *rhs, .target = strdup(lbl_false)}}));
+
+        vec_insert(instrs,
+                   ((struct IRInstr){.kind = IRInstr_LBL,
+                                     .as.label = {.name = strdup(lbl_true)}}));
+
+        one = malloc(sizeof(struct IRValue));
+        one->kind = IRValue_CONST;
+        one->type = (Type){.kind = U8_T};
+        one->as.konst.kind = LITERAL_NUM;
+        one->as.konst.type = (Type){.kind = U8_T};
+        one->as.konst.as.u8 = 1;
+        vec_insert(instrs,
+                   ((struct IRInstr){.kind = IRInstr_CPY,
+                                     .as.copy = {.src = one, .dst = dst}}));
+        vec_insert(instrs,
+                   ((struct IRInstr){.kind = IRInstr_JMP,
+                                     .as.jmp = {.target = strdup(lbl_end)}}));
+
+        vec_insert(instrs,
+                   ((struct IRInstr){.kind = IRInstr_LBL,
+                                     .as.label = {.name = strdup(lbl_false)}}));
+
+        zero = malloc(sizeof(struct IRValue));
+        zero->kind = IRValue_CONST;
+        zero->type = (Type){.kind = U8_T};
+        zero->as.konst.kind = LITERAL_NUM;
+        zero->as.konst.type = (Type){.kind = U8_T};
+        zero->as.konst.as.u8 = 0;
+        vec_insert(instrs,
+                   ((struct IRInstr){.kind = IRInstr_CPY,
+                                     .as.copy = {.src = zero, .dst = dst}}));
+
+        vec_insert(instrs,
+                   ((struct IRInstr){.kind = IRInstr_LBL,
+                                     .as.label = {.name = strdup(lbl_end)}}));
+
+        free(lbl_check_rhs);
+        free(lbl_true);
+        free(lbl_false);
+        free(lbl_end);
+
+        ret = malloc(sizeof(struct IRValue));
+        ret->kind = IRValue_VAR;
+        ret->as.var = strdup(dst->as.var);
+        ret->type = dst->type;
+
+        return ret;
+      }
+
       struct IRValue *lhs, *rhs, *dst;
 
       lhs = irfy_expr(instrs, expr->as.binary.lhs);
@@ -5624,6 +5874,44 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
     for (int j = 0; j < prog->funcs.data[i].body.len; j++) {
       struct AsmInstr *asminstr = &prog->funcs.data[i].body.data[j];
       switch (asminstr->kind) {
+        case AsmInstr_CMP: {
+          bool is_float, is_both_stack, is_dst_imm, is_dst_float_stack;
+
+          is_float = (asminstr->asm_type == AsmType_FLOAT ||
+                      asminstr->asm_type == AsmType_DOUBLE);
+
+          is_both_stack = (asminstr->as.cmp.lhs.kind == AsmOperand_STACK &&
+                           asminstr->as.cmp.rhs.kind == AsmOperand_STACK);
+
+          is_dst_imm = (asminstr->as.cmp.rhs.kind == AsmOperand_IMM);
+
+          is_dst_float_stack =
+              (is_float && asminstr->as.cmp.rhs.kind == AsmOperand_STACK);
+
+          if (is_both_stack || is_dst_imm || is_dst_float_stack) {
+            enum AsmRegister scratch_reg = is_float ? XMM8 : R10;
+            struct AsmOperand scratch_op = {.kind = AsmOperand_REG,
+                                            .as.reg = scratch_reg,
+                                            .asm_type = asminstr->asm_type};
+            struct AsmInstr i1 = {0}, i2 = {0};
+
+            i1.kind = AsmInstr_MOV;
+            i1.as.mov.src = asminstr->as.cmp.rhs;
+            i1.as.mov.dst = scratch_op;
+            i1.asm_type = asminstr->asm_type;
+
+            i2.kind = AsmInstr_CMP;
+            i2.as.cmp.lhs = asminstr->as.cmp.lhs;
+            i2.as.cmp.rhs = scratch_op;
+            i2.asm_type = asminstr->asm_type;
+
+            vec_insert(&instrs, i1);
+            vec_insert(&instrs, i2);
+          } else {
+            vec_insert(&instrs, *asminstr);
+          }
+          break;
+        }
         case AsmInstr_CVT: {
           if (asminstr->as.cvt.dst.kind == AsmOperand_STACK) {
             struct AsmOperand scratch_op = {.kind = AsmOperand_REG,
@@ -6910,6 +7198,12 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
           typecheck_expr(expr->as.binary.rhs, sym_table);
       if (!rhs_res.is_ok) {
         return rhs_res;
+      }
+
+      if (expr->as.binary.kind == EXPR_BIN_LOGICAL_AND ||
+          expr->as.binary.kind == EXPR_BIN_LOGICAL_OR) {
+        expr->type = (Type){.kind = U8_T};
+        break;
       }
 
       Type common_type;
