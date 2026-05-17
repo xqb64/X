@@ -197,13 +197,15 @@ void advance(struct Tokenizer *tokenizer)
     T *data;      \
   }
 
-#define vec_insert(vec, item)                                           \
-  if ((vec)->len >= (vec)->capacity) {                                  \
-    (vec)->capacity = (vec)->capacity == 0 ? 2 : (vec)->capacity * 2;   \
-    (vec)->data =                                                       \
-        realloc((vec)->data, sizeof((vec)->data[0]) * (vec)->capacity); \
-  }                                                                     \
-  (vec)->data[(vec)->len++] = (item);
+#define vec_insert(vec, item)                                             \
+  do {                                                                    \
+    if ((vec)->len >= (vec)->capacity) {                                  \
+      (vec)->capacity = (vec)->capacity == 0 ? 2 : (vec)->capacity * 2;   \
+      (vec)->data =                                                       \
+          realloc((vec)->data, sizeof((vec)->data[0]) * (vec)->capacity); \
+    }                                                                     \
+    (vec)->data[(vec)->len++] = (item);                                   \
+  } while (0)
 
 #define vec_free(vec) free((vec)->data);
 
@@ -861,7 +863,7 @@ struct ExprCall {
   VecExpr arguments;
 };
 
-void print_type(Type *t);
+void print_type(Type *t, int spaces);
 bool types_equal(Type a, Type b);
 
 bool vectype_equal(VecType a, VecType b)
@@ -2658,7 +2660,7 @@ void print_expr(struct Expr *expr, int spaces)
         }
         print_indent(spaces + 2);
         printf("type: ");
-        print_type(&expr->as.literal.type);
+        print_type(&expr->as.literal.type, spaces);
         printf("\n");
         print_indent(spaces);
         printf(")");
@@ -2808,7 +2810,7 @@ void print_stmt(struct Stmt *stmt, int spaces)
 
       print_indent(spaces + 2);
       printf("retval = ");
-      print_type(&stmt->as.fn.retval);
+      print_type(&stmt->as.fn.retval, spaces + 4);
       printf("\n");
 
       print_indent(spaces);
@@ -2858,7 +2860,7 @@ void print_stmt(struct Stmt *stmt, int spaces)
 
       print_indent(spaces + 2);
       printf("type = ");
-      print_type(&stmt->as.let.type);
+      print_type(&stmt->as.let.type, spaces + 4);
       printf(",\n");
 
       print_indent(spaces + 2);
@@ -4077,6 +4079,20 @@ void print_ir_instr(struct IRInstr *instr, int spaces)
   print_indent(spaces);
 
   switch (instr->kind) {
+    case IRInstr_GETADDR: {
+      printf("IRInstr_GETADDR(\n");
+      print_indent(spaces + 2);
+      printf("src = ");
+      print_ir_val(instr->as.getaddr.src, spaces + 2);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("dst = ");
+      print_ir_val(instr->as.getaddr.dst, spaces + 2);
+      printf("\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
     case IRInstr_CAST: {
       printf("IRInstr_CAST(\n");
       print_indent(spaces + 2);
@@ -6955,7 +6971,7 @@ struct Symbol *sym_get(struct Symbol *sym, char *name)
   return NULL;
 }
 
-void print_type(Type *type)
+void print_type(Type *type, int spaces)
 {
   switch (type->kind) {
     case U8_T:
@@ -6994,31 +7010,44 @@ void print_type(Type *type)
     case STR_T:
       printf("str");
       break;
-    case FN_T:
-      printf("fn\n");
+    case FN_T: {
+      printf("fn(\n");
+
+      print_indent(spaces + 2);
       printf("args: [\n");
       for (int i = 0; i < type->as.func.params.len; i++) {
-        print_type(&type->as.func.params.data[i]);
+        print_indent(spaces + 4);
+        print_type(&type->as.func.params.data[i], spaces + 4);
+        printf(",\n");
       }
+
+      if (type->as.func.is_variadic) {
+        print_indent(spaces + 4);
+        printf("...\n");
+      }
+
+      print_indent(spaces + 2);
+      printf("],\n");
+
+      print_indent(spaces + 2);
       printf("retval: ");
-      print_type(type->as.func.retval);
+      if (type->as.func.retval) {
+        print_type(type->as.func.retval, spaces + 2);
+      } else {
+        printf("void");
+      }
+      printf("\n");
+
+      print_indent(spaces);
       printf(")");
       break;
+    }
     case UNKNOWN_T:
-      printf("uknown");
+      printf("unknown");
       break;
     default:
       assert(0);
   }
-}
-
-void print_symbol(struct Symbol *sym)
-{
-  printf("Symbol(");
-  printf("name: %s,", sym->name);
-  printf("type: ");
-  print_type(&sym->type);
-  printf(")");
 }
 
 #define IN_RANGE(val, min, max) ((val) >= (min) && (val) <= (max))
@@ -7552,9 +7581,6 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
       Type actual_type = stmt->as.let.init->type;
       Type expected_type = stmt->as.let.type;
 
-      print_type(&actual_type);
-      print_type(&expected_type);
-
       if (!types_equal(actual_type, expected_type)) {
         if (stmt->as.let.init->kind == EXPR_LITERAL &&
             stmt->as.let.init->as.literal.kind == LITERAL_NUM) {
@@ -7565,14 +7591,14 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
                 .ast = NULL,
             };
           }
-        } else {
-          return (struct TypecheckResult){
-              .is_ok = false,
-              .msg =
-                  "Type error: returned value does not match the function's "
-                  "expected return type",
-              .ast = NULL};
         }
+      } else {
+        return (struct TypecheckResult){
+            .is_ok = false,
+            .msg =
+                "Type error: returned value does not match the function's "
+                "expected return type",
+            .ast = NULL};
       }
 
       sym_insert(sym_table, stmt->as.let.name, stmt->as.let.type);
