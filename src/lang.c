@@ -3935,19 +3935,22 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
   switch (expr->kind) {
     case EXPR_LITERAL: {
       if (expr->as.literal.kind == LITERAL_STR) {
-        char *name = mklbl("str", mktmp());
+        char *name;
+        struct IRValue *src, *dst;
+
+        name = mklbl("str", mktmp());
 
         struct StaticConstant sc;
         sc.name = strdup(name);
         sc.value = strdup(expr->as.literal.as.str);
         vec_insert(&global_constants, sc);
 
-        struct IRValue *src = malloc(sizeof(struct IRValue));
+        src = malloc(sizeof(struct IRValue));
         src->kind = IRValue_VAR;
         src->as.var = strdup(name);
         src->type = expr->type;
 
-        struct IRValue *dst = make_ir_var();
+        dst = make_ir_var();
         dst->type = expr->type;
 
         struct IRInstr instr;
@@ -3962,6 +3965,7 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
         ret->type = dst->type;
 
         free(name);
+
         return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = ret};
       } else {
         struct IRValue *ir_val = malloc(sizeof(struct IRValue));
@@ -3981,8 +3985,12 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = r};
     }
     case EXPR_UNARY: {
-      struct IRValue *src = irfy_expr_and_convert(instrs, expr->as.unary.expr);
-      struct IRValue *dst = make_ir_var();
+      struct IRValue *src, *dst;
+
+      /* Force lvalue-to-rvalue conversion for inner expr.  */
+      src = irfy_expr_and_convert(instrs, expr->as.unary.expr);
+
+      dst = make_ir_var();
       dst->type = expr->type;
 
       enum IRInstrUnaryKind kind;
@@ -4224,10 +4232,16 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = ret};
     }
     case EXPR_ASSIGN: {
-      struct ExpResult lhs_res = irfy_expr(instrs, expr->as.assign.lhs);
-      struct IRValue *rhs_val =
-          irfy_expr_and_convert(instrs, expr->as.assign.rhs);
+      struct ExpResult lhs_res;
+      struct IRValue *rhs_val;
 
+      /* Keep lhs as lvalue.  */
+      lhs_res = irfy_expr(instrs, expr->as.assign.lhs);
+
+      /* Force lvalue-to-rvalue conversion for rhs.  */
+      rhs_val = irfy_expr_and_convert(instrs, expr->as.assign.rhs);
+
+      /* If lhs is a plain operand, emit just a cpy.  */
       if (lhs_res.kind == EXPRESULT_PLAIN) {
         struct IRInstr instr = {0};
         instr.kind = IRInstr_CPY;
@@ -4239,9 +4253,10 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
         ret->kind = IRValue_VAR;
         ret->as.var = strdup(lhs_res.as.plain->as.var);
         ret->type = lhs_res.as.plain->type;
-        return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = ret};
 
+        return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = ret};
       } else if (lhs_res.kind == EXPRESULT_DEREF) {
+        /* ...otherwise, emit a store.  */
         struct IRInstr instr = {0};
         instr.kind = IRInstr_STORE;
         instr.as.store =
@@ -4257,6 +4272,7 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
           ret->as.konst = rhs_val->as.konst;
         }
         ret->type = rhs_val->type;
+
         return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = ret};
       } else {
         assert(0 && "Unhandled left-hand side in assignment");
@@ -4265,12 +4281,14 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       break;
     }
     case EXPR_CALL: {
+      /* Force lvalue-to-rvalue conversion upon the arguments.  */
       VecIRValuePtr args = {0};
       for (int i = 0; i < expr->as.call.arguments.len; i++) {
         vec_insert(&args, irfy_expr_and_convert(
                               instrs, &expr->as.call.arguments.data[i]));
       }
 
+      /* If the function returns a value, make sure we capture it in dst.  */
       struct IRValue *dst = NULL;
       if (expr->type.kind != VOID_T) {
         dst = make_ir_var();
@@ -4287,6 +4305,7 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       instr.as.call = call_instr;
       vec_insert(instrs, instr);
 
+      /* Function calls evaluate to rvalues.  */
       if (dst) {
         struct IRValue *ret = malloc(sizeof(struct IRValue));
         ret->kind = IRValue_VAR;
@@ -4300,10 +4319,13 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       break;
     }
     case EXPR_ADDROF: {
-      struct ExpResult result = irfy_expr(instrs, expr->as.addrof.expr);
+      struct ExpResult result;
 
+      result = irfy_expr(instrs, expr->as.addrof.expr);
       switch (result.kind) {
         case EXPRESULT_PLAIN: {
+          /* If we take addrof of a plain operand, we will do
+           * `dst = getaddr(src)`, and return cloned `dst`.  */
           struct IRValue *dst = make_ir_var();
           dst->type = expr->type;
 
@@ -4321,6 +4343,7 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
           return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = ret};
         }
         case EXPRESULT_DEREF: {
+          /* If we take addrof of a deref (like `&*p`), they cancel out.  */
           return (struct ExpResult){.kind = EXPRESULT_PLAIN,
                                     .as.plain = result.as.ptr};
         }
@@ -4330,26 +4353,52 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
         default:
           assert(0);
       }
-      assert(0);
 
       break;
     }
     case EXPR_DEREF: {
-      struct IRValue *ptr_val =
-          irfy_expr_and_convert(instrs, expr->as.deref.expr);
+      /* When we encounter a deref expression, like `*p`, we need to
+       * evaluate the inner expr, which is `p`, to get the actual mem
+       * addr.  But, we do NOT issue a LOAD instruction just yet.  Instead,
+       * we defer this to the parent node because a Deref node might be
+       * an lvalue (`*x = 5`) or an rvalue (`y = *x + 5`).  The parent node
+       * will be the one to intercept this and decide whether a LOAD is needed
+       * or just CPY.  */
+      struct IRValue *ptr_val;
+
+      ptr_val = irfy_expr_and_convert(instrs, expr->as.deref.expr);
       return (struct ExpResult){.kind = EXPRESULT_DEREF, .as.ptr = ptr_val};
     }
     case EXPR_CAST: {
-      struct IRValue *src = irfy_expr_and_convert(instrs, expr->as.cast.expr);
-      struct IRValue *dst = make_ir_var();
+      /* When we evaluate a type cast (e.g., `x as i32`), we are creating a
+       * new value of the target type based on the src.  */
+      struct IRValue *src, *dst;
+
+      /* 1. Lvalue-to-Rvalue Conversion: We must evaluate the inner expression
+       *    using `irfy_expr_and_convert`. If `x` is a variable in memory, this
+       *    forces a LOAD instruction to fetch its actual data. We cannot cast
+       *    an abstract memory location; we must cast the data itself.  */
+      src = irfy_expr_and_convert(instrs, expr->as.cast.expr);
+
+      /* 2. Temporary Generation: A cast does not mutate the original variable.
+       *    Therefore, we generate a fresh temporary IR variable (`dst`) and set
+       *    its type to the new, casted type.  */
+      dst = make_ir_var();
       dst->type = expr->type;
 
+      /* 3. IR Emission: We explicitly emit an `IRInstr_CAST`. This acts as a
+       *    directive for the backend, which will later decide if this requires
+       *    sign-extension (e.g., `movsbl`), floating-point conversion
+       *    (e.g., `cvtsi2sd`), or just a simple register move.  */
       struct IRInstr i;
       i.kind = IRInstr_CAST;
       i.as.cast.src = src;
       i.as.cast.dst = dst;
       vec_insert(instrs, i);
 
+      /* 4. Rvalue Return: The result of a cast is always an rvalue (you cannot
+       *    assign to a cast, like `(int)x = 5;`). Thus, we package our new
+       *    temporary variable into an `EXPRESULT_PLAIN` and return it.  */
       struct IRValue *ret = malloc(sizeof(struct IRValue));
       ret->kind = IRValue_VAR;
       ret->as.var = strdup(dst->as.var);
