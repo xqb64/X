@@ -3874,13 +3874,29 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr);
 
 struct IRValue *irfy_expr_and_convert(VecIRInstr *instrs, struct Expr *expr)
 {
-  struct ExpResult result = irfy_expr(instrs, expr);
+  /* evaluates an expr and forces lvalue2rvalue conversion. */
+  struct ExpResult result;
 
+  result = irfy_expr(instrs, expr);
   switch (result.kind) {
     case EXPRESULT_PLAIN:
+      /* When we evaluate a purely mathematical AST node, like `1 + 2`, the
+       * result of `irfy_expr` is `EXPRESULT_PLAIN`, which means that the result
+       * is already a concrete value or a temporary register holding that value.
+       *
+       * That's it, we do not need to do anything else to use the value in
+       * further IR generation pass.  */
       return result.as.plain;
-
     case EXPRESULT_DEREF: {
+      /* When we evaluate e.g. `y = *x + 5`, that is a ptr deref, `irfy_expr`
+       * returns `EXPRESULT_DEREF`, which gives us a memory address of that
+       * variable, NOT the data inside it.
+       *
+       * Since the mem address won't do any good and we can't add it to `5` in
+       * this case, we need the VALUE sitting at that memory address.  So, we
+       * create a new IR variable, `dst`, and do:  `dst = load(src_ptr)`.
+       *
+       * Then we clone (is all this cloning necessary?) and return `dst`. */
       struct IRValue *dst = make_ir_var();
       dst->type = expr->type;
 
@@ -3897,7 +3913,6 @@ struct IRValue *irfy_expr_and_convert(VecIRInstr *instrs, struct Expr *expr)
 
       return ret;
     }
-
     case EXPRESULT_SUBOBJECT: {
       assert(0);
     }
