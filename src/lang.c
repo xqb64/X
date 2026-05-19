@@ -4205,6 +4205,12 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
         case EXPR_BIN_DIV:
           kind = IRInstrBinary_DIV;
           break;
+        case EXPR_BIN_EQUAL_EQUAL:
+          kind = IRInstrBinary_E;
+          break;
+        case EXPR_BIN_BANG_EQUAL:
+          kind = IRInstrBinary_NE;
+          break;
         case EXPR_BIN_LESS:
           kind = IRInstrBinary_L;
           break;
@@ -4216,12 +4222,6 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
           break;
         case EXPR_BIN_GREATER_EQUAL:
           kind = IRInstrBinary_GE;
-          break;
-        case EXPR_BIN_EQUAL_EQUAL:
-          kind = IRInstrBinary_E;
-          break;
-        case EXPR_BIN_BANG_EQUAL:
-          kind = IRInstrBinary_NE;
           break;
         default:
           assert(0);
@@ -4377,7 +4377,6 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       i.as.cast.src = src;
       i.as.cast.dst = clone_irval(dst);
       vec_insert(instrs, i);
-
       /* 4. Rvalue Return: The result of a cast is always an rvalue (you cannot
        *    assign to a cast, like `(int)x = 5;`). Thus, we package our new
        *    temporary variable into an `EXPRESULT_PLAIN` and return it.  */
