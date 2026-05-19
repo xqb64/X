@@ -19,6 +19,10 @@
   }
 
 #define vec_insert(vec, item)                                             \
+  /* Capacity grows exponentially (doubling) when the vector is full.     \
+   * This geometric growth strategy ensures an amortized O(1) time        \
+   * complexity for insertions, avoiding the O(n) bottleneck that         \
+   * would occur with linear reallocation. */                             \
   do {                                                                    \
     if ((vec)->len >= (vec)->capacity) {                                  \
       (vec)->capacity = (vec)->capacity == 0 ? 2 : (vec)->capacity * 2;   \
