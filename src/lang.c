@@ -50,48 +50,48 @@ int mktmp(void)
   return i++;
 }
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdarg.h>
 
 /* Generates an allocated string based on a format (like printf) */
 char *mkstr(const char *fmt, ...)
 {
-    va_list args1, args2;
-    int len;
-    char *str;
+  va_list args1, args2;
+  int len;
+  char *str;
 
-    va_start(args1, fmt);
-    va_copy(args2, args1);
+  va_start(args1, fmt);
+  va_copy(args2, args1);
 
-    len = vsnprintf(NULL, 0, fmt, args1);
-    va_end(args1);
+  len = vsnprintf(NULL, 0, fmt, args1);
+  va_end(args1);
 
-    if (len < 0) {
-        va_end(args2);
-        return NULL;
-    }
-
-    str = malloc(len + 1);
-    if (!str) {
-        va_end(args2);
-        return NULL;
-    }
-
-    vsnprintf(str, len + 1, fmt, args2);
+  if (len < 0) {
     va_end(args2);
+    return NULL;
+  }
 
-    return str;
+  str = malloc(len + 1);
+  if (!str) {
+    va_end(args2);
+    return NULL;
+  }
+
+  vsnprintf(str, len + 1, fmt, args2);
+  va_end(args2);
+
+  return str;
 }
 
 char *mkuniq(char *s)
 {
-    return mkstr("var.%s.%d", s, mktmp());
+  return mkstr("var.%s.%d", s, mktmp());
 }
 
 char *mklbl(char *s, int d)
 {
-    return mkstr("%s.%d", s, d);
+  return mkstr("%s.%d", s, d);
 }
 
 static inline void print_indent(int spaces)
@@ -3277,6 +3277,27 @@ struct IRValue {
   } as;
 };
 
+struct IRValue *clone_irval(struct IRValue *v)
+{
+  if (!v) {
+    return NULL;
+  }
+
+  struct IRValue *clone;
+
+  clone = malloc(sizeof(struct IRValue));
+  clone->kind = v->kind;
+  clone->type = v->type;
+
+  if (v->kind == IRValue_VAR) {
+    clone->as.var = strdup(v->as.var);
+  } else if (v->kind == IRValue_CONST) {
+    clone->as.konst = v->as.konst;
+  }
+
+  return clone;
+}
+
 void print_ir_val(struct IRValue *ir_val, int spaces)
 {
   switch (ir_val->kind) {
@@ -3851,16 +3872,16 @@ void free_ir_prog(struct IRProgram *prog)
 
 struct IRValue *mkirvar(void)
 {
-    struct IRValue *var;
-    int i;
+  struct IRValue *var;
+  int i;
 
-    i = mktmp();
+  i = mktmp();
 
-    var = malloc(sizeof(struct IRValue));
-    var->kind = IRValue_VAR;
-    var->as.var = mkstr("tmp.%d", i);
+  var = malloc(sizeof(struct IRValue));
+  var->kind = IRValue_VAR;
+  var->as.var = mkstr("tmp.%d", i);
 
-    return var;
+  return var;
 }
 
 enum ExpResultKind {
@@ -3970,10 +3991,7 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
         instr.as.getaddr.dst = dst;
         vec_insert(instrs, instr);
 
-        struct IRValue *ret = malloc(sizeof(struct IRValue));
-        ret->kind = IRValue_VAR;
-        ret->as.var = strdup(dst->as.var);
-        ret->type = dst->type;
+        struct IRValue *ret = clone_irval(dst);
 
         free(name);
 
@@ -4021,10 +4039,7 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       i.as.unary = iu;
       vec_insert(instrs, i);
 
-      struct IRValue *ret = malloc(sizeof(struct IRValue));
-      ret->kind = IRValue_VAR;
-      ret->as.var = strdup(dst->as.var);
-      ret->type = expr->type;
+      struct IRValue *ret = clone_irval(dst);
 
       return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = ret};
     }
@@ -4077,10 +4092,7 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
         zero->as.konst.type = (Type){.kind = BOOL_T};
         zero->as.konst.as.boolean = false;
 
-        dst_zero = malloc(sizeof(struct IRValue));
-        dst_zero->kind = IRValue_VAR;
-        dst_zero->as.var = strdup(dst->as.var);
-        dst_zero->type = dst->type;
+        dst_zero = clone_irval(dst);
 
         vec_insert(instrs, ((struct IRInstr){
                                .kind = IRInstr_CPY,
@@ -4092,10 +4104,7 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
         free(lbl_false);
         free(lbl_end);
 
-        ret = malloc(sizeof(struct IRValue));
-        ret->kind = IRValue_VAR;
-        ret->as.var = strdup(dst->as.var);
-        ret->type = dst->type;
+        ret = clone_irval(dst);
 
         return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = ret};
       }
@@ -4161,10 +4170,7 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
         zero->as.konst.type = (Type){.kind = BOOL_T};
         zero->as.konst.as.boolean = false;
 
-        dst_zero = malloc(sizeof(struct IRValue));
-        dst_zero->kind = IRValue_VAR;
-        dst_zero->as.var = strdup(dst->as.var);
-        dst_zero->type = dst->type;
+        dst_zero = clone_irval(dst);
 
         vec_insert(instrs, ((struct IRInstr){
                                .kind = IRInstr_CPY,
@@ -4178,10 +4184,7 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
         free(lbl_false);
         free(lbl_end);
 
-        ret = malloc(sizeof(struct IRValue));
-        ret->kind = IRValue_VAR;
-        ret->as.var = strdup(dst->as.var);
-        ret->type = dst->type;
+        ret = clone_irval(dst);
 
         return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = ret};
       }
@@ -4235,10 +4238,7 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       instr.as.binary = bininstr;
       vec_insert(instrs, instr);
 
-      struct IRValue *ret = malloc(sizeof(struct IRValue));
-      ret->kind = IRValue_VAR;
-      ret->as.var = strdup(dst->as.var);
-      ret->type = expr->type;
+      struct IRValue *ret = clone_irval(dst);
 
       return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = ret};
     }
@@ -4260,10 +4260,7 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
             (struct IRInstr_Copy){.src = rhs_val, .dst = lhs_res.as.plain};
         vec_insert(instrs, instr);
 
-        struct IRValue *ret = malloc(sizeof(struct IRValue));
-        ret->kind = IRValue_VAR;
-        ret->as.var = strdup(lhs_res.as.plain->as.var);
-        ret->type = lhs_res.as.plain->type;
+        struct IRValue *ret = clone_irval(lhs_res.as.plain);
 
         return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = ret};
       } else if (lhs_res.kind == EXPRESULT_DEREF) {
@@ -4274,15 +4271,7 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
             (struct IRInstr_Store){.val = rhs_val, .dst = lhs_res.as.ptr};
         vec_insert(instrs, instr);
 
-        struct IRValue *ret = malloc(sizeof(struct IRValue));
-        if (rhs_val->kind == IRValue_VAR) {
-          ret->kind = IRValue_VAR;
-          ret->as.var = strdup(rhs_val->as.var);
-        } else {
-          ret->kind = IRValue_CONST;
-          ret->as.konst = rhs_val->as.konst;
-        }
-        ret->type = rhs_val->type;
+        struct IRValue *ret = clone_irval(rhs_val);
 
         return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = ret};
       } else {
@@ -4318,10 +4307,7 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
 
       /* Function calls evaluate to rvalues.  */
       if (dst) {
-        struct IRValue *ret = malloc(sizeof(struct IRValue));
-        ret->kind = IRValue_VAR;
-        ret->as.var = strdup(dst->as.var);
-        ret->type = dst->type;
+        struct IRValue *ret = clone_irval(dst);
         return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = ret};
       } else {
         return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = NULL};
@@ -4346,10 +4332,7 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
           instr.as.getaddr.dst = dst;
           vec_insert(instrs, instr);
 
-          struct IRValue *ret = malloc(sizeof(struct IRValue));
-          ret->kind = IRValue_VAR;
-          ret->as.var = strdup(dst->as.var);
-          ret->type = dst->type;
+          struct IRValue *ret = clone_irval(dst);
 
           return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = ret};
         }
@@ -4410,10 +4393,7 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       /* 4. Rvalue Return: The result of a cast is always an rvalue (you cannot
        *    assign to a cast, like `(int)x = 5;`). Thus, we package our new
        *    temporary variable into an `EXPRESULT_PLAIN` and return it.  */
-      struct IRValue *ret = malloc(sizeof(struct IRValue));
-      ret->kind = IRValue_VAR;
-      ret->as.var = strdup(dst->as.var);
-      ret->type = dst->type;
+      struct IRValue *ret = clone_irval(dst);
 
       return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = ret};
     }
