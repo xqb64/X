@@ -3988,14 +3988,12 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
         struct IRInstr instr;
         instr.kind = IRInstr_GETADDR;
         instr.as.getaddr.src = src;
-        instr.as.getaddr.dst = dst;
+        instr.as.getaddr.dst = clone_irval(dst);
         vec_insert(instrs, instr);
-
-        struct IRValue *ret = clone_irval(dst);
 
         free(name);
 
-        return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = ret};
+        return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = dst};
       } else {
         struct IRValue *ir_val = malloc(sizeof(struct IRValue));
         ir_val->kind = IRValue_CONST;
@@ -4032,20 +4030,18 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       struct IRInstr_Unary iu;
       iu.kind = kind;
       iu.src = src;
-      iu.dst = dst;
+      iu.dst = clone_irval(dst);
 
       struct IRInstr i;
       i.kind = IRInstr_UNARY;
       i.as.unary = iu;
       vec_insert(instrs, i);
 
-      struct IRValue *ret = clone_irval(dst);
-
-      return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = ret};
+      return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = dst};
     }
     case EXPR_BINARY: {
       if (expr->as.binary.kind == EXPR_BIN_LOGICAL_AND) {
-        struct IRValue *lhs, *rhs, *dst, *one, *zero, *dst_zero, *ret;
+        struct IRValue *lhs, *rhs, *dst, *one, *zero, *dst_zero;
         char *lbl_false, *lbl_end;
         int tmp;
 
@@ -4076,8 +4072,9 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
         one->as.konst.as.boolean = true;
 
         vec_insert(instrs,
-                   ((struct IRInstr){.kind = IRInstr_CPY,
-                                     .as.copy = {.src = one, .dst = dst}}));
+                   ((struct IRInstr){
+                       .kind = IRInstr_CPY,
+                       .as.copy = {.src = one, .dst = clone_irval(dst)}}));
         vec_insert(instrs,
                    ((struct IRInstr){.kind = IRInstr_JMP,
                                      .as.jmp = {.target = strdup(lbl_end)}}));
@@ -4104,13 +4101,11 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
         free(lbl_false);
         free(lbl_end);
 
-        ret = clone_irval(dst);
-
-        return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = ret};
+        return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = dst};
       }
 
       if (expr->as.binary.kind == EXPR_BIN_LOGICAL_OR) {
-        struct IRValue *lhs, *rhs, *dst, *one, *zero, *dst_zero, *ret;
+        struct IRValue *lhs, *rhs, *dst, *one, *zero, *dst_zero;
         int tmp;
         char *lbl_check_rhs, *lbl_true, *lbl_false, *lbl_end;
 
@@ -4154,8 +4149,9 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
         one->as.konst.as.boolean = true;
 
         vec_insert(instrs,
-                   ((struct IRInstr){.kind = IRInstr_CPY,
-                                     .as.copy = {.src = one, .dst = dst}}));
+                   ((struct IRInstr){
+                       .kind = IRInstr_CPY,
+                       .as.copy = {.src = one, .dst = clone_irval(dst)}}));
         vec_insert(instrs,
                    ((struct IRInstr){.kind = IRInstr_JMP,
                                      .as.jmp = {.target = strdup(lbl_end)}}));
@@ -4184,15 +4180,15 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
         free(lbl_false);
         free(lbl_end);
 
-        ret = clone_irval(dst);
-
-        return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = ret};
+        return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = dst};
       }
 
-      struct IRValue *lhs = irfy_expr_and_convert(instrs, expr->as.binary.lhs);
-      struct IRValue *rhs = irfy_expr_and_convert(instrs, expr->as.binary.rhs);
+      struct IRValue *lhs, *rhs, *dst;
 
-      struct IRValue *dst = mkirvar();
+      lhs = irfy_expr_and_convert(instrs, expr->as.binary.lhs);
+      rhs = irfy_expr_and_convert(instrs, expr->as.binary.rhs);
+
+      dst = mkirvar();
       dst->type = expr->type;
 
       enum IRInstrBinaryKind kind;
@@ -4232,15 +4228,13 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       }
 
       struct IRInstr_Binary bininstr = {
-          .lhs = lhs, .rhs = rhs, .dst = dst, .kind = kind};
+          .lhs = lhs, .rhs = rhs, .dst = clone_irval(dst), .kind = kind};
       struct IRInstr instr;
       instr.kind = IRInstr_BIN;
       instr.as.binary = bininstr;
       vec_insert(instrs, instr);
 
-      struct IRValue *ret = clone_irval(dst);
-
-      return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = ret};
+      return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = dst};
     }
     case EXPR_ASSIGN: {
       struct ExpResult lhs_res;
@@ -4256,24 +4250,21 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       if (lhs_res.kind == EXPRESULT_PLAIN) {
         struct IRInstr instr = {0};
         instr.kind = IRInstr_CPY;
-        instr.as.copy =
-            (struct IRInstr_Copy){.src = rhs_val, .dst = lhs_res.as.plain};
+        instr.as.copy = (struct IRInstr_Copy){
+            .src = rhs_val, .dst = clone_irval(lhs_res.as.plain)};
         vec_insert(instrs, instr);
 
-        struct IRValue *ret = clone_irval(lhs_res.as.plain);
-
-        return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = ret};
+        return (struct ExpResult){.kind = EXPRESULT_PLAIN,
+                                  .as.plain = lhs_res.as.plain};
       } else if (lhs_res.kind == EXPRESULT_DEREF) {
         /* ...otherwise, emit a store.  */
         struct IRInstr instr = {0};
         instr.kind = IRInstr_STORE;
-        instr.as.store =
-            (struct IRInstr_Store){.val = rhs_val, .dst = lhs_res.as.ptr};
+        instr.as.store = (struct IRInstr_Store){.val = clone_irval(rhs_val),
+                                                .dst = lhs_res.as.ptr};
         vec_insert(instrs, instr);
 
-        struct IRValue *ret = clone_irval(rhs_val);
-
-        return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = ret};
+        return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = rhs_val};
       } else {
         assert(0 && "Unhandled left-hand side in assignment");
       }
@@ -4298,7 +4289,7 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       struct IRInstr_Call call_instr = {0};
       call_instr.target = *expr->as.call.target;
       call_instr.args = args;
-      call_instr.dst = dst;
+      call_instr.dst = clone_irval(dst);
 
       struct IRInstr instr = {0};
       instr.kind = IRInstr_CALL;
@@ -4307,8 +4298,7 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
 
       /* Function calls evaluate to rvalues.  */
       if (dst) {
-        struct IRValue *ret = clone_irval(dst);
-        return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = ret};
+        return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = dst};
       } else {
         return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = NULL};
       }
@@ -4329,12 +4319,10 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
           struct IRInstr instr;
           instr.kind = IRInstr_GETADDR;
           instr.as.getaddr.src = result.as.plain;
-          instr.as.getaddr.dst = dst;
+          instr.as.getaddr.dst = clone_irval(dst);
           vec_insert(instrs, instr);
 
-          struct IRValue *ret = clone_irval(dst);
-
-          return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = ret};
+          return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = dst};
         }
         case EXPRESULT_DEREF: {
           /* If we take addrof of a deref (like `&*p`), they cancel out.  */
@@ -4387,15 +4375,13 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       struct IRInstr i;
       i.kind = IRInstr_CAST;
       i.as.cast.src = src;
-      i.as.cast.dst = dst;
+      i.as.cast.dst = clone_irval(dst);
       vec_insert(instrs, i);
 
       /* 4. Rvalue Return: The result of a cast is always an rvalue (you cannot
        *    assign to a cast, like `(int)x = 5;`). Thus, we package our new
        *    temporary variable into an `EXPRESULT_PLAIN` and return it.  */
-      struct IRValue *ret = clone_irval(dst);
-
-      return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = ret};
+      return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = dst};
     }
     default:
       assert(0);
