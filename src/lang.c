@@ -40,11 +40,6 @@ int mktmp(void)
   return i++;
 }
 
-#include <stdarg.h>
-#include <stdio.h>
-#include <stdlib.h>
-
-/* Generates an allocated string based on a format (like printf) */
 char *mkstr(const char *fmt, ...)
 {
   va_list args1, args2;
