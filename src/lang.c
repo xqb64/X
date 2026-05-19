@@ -34,16 +34,6 @@
 
 #define vec_free(vec) free((vec)->data);
 
-char *own_string_n(const char *string, int n)
-{
-  char *s;
-
-  s = malloc(strlen(string) + 1);
-  snprintf(s, n + 1, "%s", string);
-
-  return s;
-}
-
 int mktmp(void)
 {
   static int i = 0;
@@ -1923,7 +1913,7 @@ struct ParseFnResult primary(struct Parser *parser)
     }
 
     literal.kind = LITERAL_STR;
-    literal.as.str = own_string_n(token_literal->start, token_literal->len);
+    literal.as.str = strndup(token_literal->start, token_literal->len);
     literal.type = (Type){.kind = STR_T};
 
     res.as.expr = (struct Expr){.kind = EXPR_LITERAL, .as.literal = literal};
@@ -1938,7 +1928,7 @@ struct ParseFnResult primary(struct Parser *parser)
 
     struct ExprVar var;
 
-    var.name = own_string_n(token_id->start, token_id->len);
+    var.name = strndup(token_id->start, token_id->len);
     var.type = (Type){.kind = UNKNOWN_T};
 
     res.as.expr = (struct Expr){.kind = EXPR_VARIABLE, .as.var = var};
@@ -2048,7 +2038,7 @@ struct ParseFnResult call(struct Parser *parser)
 struct ParseFnResult unary(struct Parser *parser)
 {
   if (match(parser, 4, TOKEN_MINUS, TOKEN_BANG, TOKEN_AMPERSAND, TOKEN_STAR)) {
-    char *op = own_string_n(parser->prev->start, parser->prev->len);
+    char *op = strndup(parser->prev->start, parser->prev->len);
 
     if (strncmp(op, "-", 1) == 0 || strncmp(op, "!", 1) == 0) {
       struct ParseFnResult right_result;
@@ -2518,7 +2508,7 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
             .msg = "Expected `name: type` format for parameters"};
       }
 
-      name = own_string_n(name_token->start, name_token->len);
+      name = strndup(name_token->start, name_token->len);
       type = parse_type(parser);
 
       struct Parameter p;
@@ -2550,7 +2540,7 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
   Type retval = parse_type(parser);
 
   struct StmtFn stmt_fn;
-  stmt_fn.name = own_string_n(token_id->start, token_id->len);
+  stmt_fn.name = strndup(token_id->start, token_id->len);
   stmt_fn.params = parameters;
   stmt_fn.retval = retval;
 
@@ -2603,7 +2593,7 @@ struct ParseFnResult parse_let_stmt(struct Parser *parser)
                                   .msg = "Expected identifier after 'let'"};
   }
 
-  char *name = own_string_n(token_id->start, token_id->len);
+  char *name = strndup(token_id->start, token_id->len);
 
   token_colon = consume(parser, TOKEN_COLON);
   if (!token_colon) {
@@ -2969,7 +2959,7 @@ struct ParseFnResult parse_extern_stmt(struct Parser *parser)
             .msg = "Expected `name: type` format for parameters"};
       }
 
-      name = own_string_n(name_token->start, name_token->len);
+      name = strndup(name_token->start, name_token->len);
       type = parse_type(parser);
 
       struct Parameter p;
@@ -3009,8 +2999,7 @@ struct ParseFnResult parse_extern_stmt(struct Parser *parser)
   }
 
   struct StmtExtern extern_stmt;
-  extern_stmt.name =
-      own_string_n(token_identifier->start, token_identifier->len);
+  extern_stmt.name = strndup(token_identifier->start, token_identifier->len);
   extern_stmt.params = parameters;
   extern_stmt.retval = retval;
   extern_stmt.is_variadic = is_variadic;
