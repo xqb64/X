@@ -3849,25 +3849,18 @@ void free_ir_prog(struct IRProgram *prog)
   vec_free(&prog->funcs);
 }
 
-struct IRValue *make_ir_var(void)
+struct IRValue *mkirvar(void)
 {
-  struct IRValue *var;
-  int i;
+    struct IRValue *var;
+    int i;
 
-  i = mktmp();
+    i = mktmp();
 
-  var = malloc(sizeof(struct IRValue));
-  memset(var, 0, sizeof(struct IRValue));
+    var = malloc(sizeof(struct IRValue));
+    var->kind = IRValue_VAR;
+    var->as.var = mkstr("tmp.%d", i);
 
-  var->kind = IRValue_VAR;
-
-  int digit_len = snprintf(NULL, 0, "%d", i);
-  int total_len = strlen("tmp") + strlen(".") + digit_len + 1;
-  var->as.var = malloc(total_len);
-
-  snprintf(var->as.var, total_len, "tmp.%d", i);
-
-  return var;
+    return var;
 }
 
 enum ExpResultKind {
@@ -3915,7 +3908,7 @@ struct IRValue *irfy_expr_and_convert(VecIRInstr *instrs, struct Expr *expr)
        * create a new IR variable, `dst`, and do:  `dst = load(src_ptr)`.
        *
        * Then we clone (is all this cloning necessary?) and return `dst`. */
-      struct IRValue *dst = make_ir_var();
+      struct IRValue *dst = mkirvar();
       dst->type = expr->type;
 
       struct IRInstr instr;
@@ -3968,7 +3961,7 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
         src->as.var = strdup(name);
         src->type = expr->type;
 
-        dst = make_ir_var();
+        dst = mkirvar();
         dst->type = expr->type;
 
         struct IRInstr instr;
@@ -4008,7 +4001,7 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       /* Force lvalue-to-rvalue conversion for inner expr.  */
       src = irfy_expr_and_convert(instrs, expr->as.unary.expr);
 
-      dst = make_ir_var();
+      dst = mkirvar();
       dst->type = expr->type;
 
       enum IRInstrUnaryKind kind;
@@ -4041,7 +4034,7 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
         char *lbl_false, *lbl_end;
         int tmp;
 
-        dst = make_ir_var();
+        dst = mkirvar();
         dst->type = (Type){.kind = BOOL_T};
 
         tmp = mktmp();
@@ -4112,7 +4105,7 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
         int tmp;
         char *lbl_check_rhs, *lbl_true, *lbl_false, *lbl_end;
 
-        dst = make_ir_var();
+        dst = mkirvar();
         dst->type = (Type){.kind = BOOL_T};
 
         tmp = mktmp();
@@ -4196,7 +4189,7 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       struct IRValue *lhs = irfy_expr_and_convert(instrs, expr->as.binary.lhs);
       struct IRValue *rhs = irfy_expr_and_convert(instrs, expr->as.binary.rhs);
 
-      struct IRValue *dst = make_ir_var();
+      struct IRValue *dst = mkirvar();
       dst->type = expr->type;
 
       enum IRInstrBinaryKind kind;
@@ -4309,7 +4302,7 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       /* If the function returns a value, make sure we capture it in dst.  */
       struct IRValue *dst = NULL;
       if (expr->type.kind != VOID_T) {
-        dst = make_ir_var();
+        dst = mkirvar();
         dst->type = expr->type;
       }
 
@@ -4344,7 +4337,7 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
         case EXPRESULT_PLAIN: {
           /* If we take addrof of a plain operand, we will do
            * `dst = getaddr(src)`, and return cloned `dst`.  */
-          struct IRValue *dst = make_ir_var();
+          struct IRValue *dst = mkirvar();
           dst->type = expr->type;
 
           struct IRInstr instr;
@@ -4401,7 +4394,7 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       /* 2. Temporary Generation: A cast does not mutate the original variable.
        *    Therefore, we generate a fresh temporary IR variable (`dst`) and set
        *    its type to the new, casted type.  */
-      dst = make_ir_var();
+      dst = mkirvar();
       dst->type = expr->type;
 
       /* 3. IR Emission: We explicitly emit an `IRInstr_CAST`. This acts as a
