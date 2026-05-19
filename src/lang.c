@@ -183,6 +183,7 @@ enum TokenKind {
   TOKEN_RET,
   TOKEN_EXTERN,
   TOKEN_VOID,
+  TOKEN_STRUCT,
   TOKEN_BOOL,
   TOKEN_TRUE,
   TOKEN_FALSE,
@@ -216,6 +217,7 @@ enum TokenKind {
   TOKEN_BANG,
   TOKEN_PIPE,
   TOKEN_AMPERSAND,
+  TOKEN_DOT,
 
   /* two chars */
   TOKEN_LESS_EQUAL,
@@ -489,7 +491,9 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
         break;
       }
       case 's': {
-        if (lookahead(tokenizer, 2, "tr") == 0) {
+        if (lookahead(tokenizer, 5, "truct") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_STRUCT, 6));
+        } else if (lookahead(tokenizer, 2, "tr") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_STR, 3));
         } else {
           vec_insert(&tokens, identifier(tokenizer));
@@ -563,8 +567,7 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
         if (lookahead(tokenizer, 2, "..") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_ELLIPSIS, 3));
         } else {
-          /* we do not have structs yet, so error for now */
-          vec_insert(&tokens, mktoken(tokenizer, TOKEN_ERROR, 1));
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_DOT, 1));
         }
 
         break;
@@ -700,6 +703,9 @@ void print_token(struct Token *token)
     case TOKEN_VOID:
       printf("void");
       break;
+    case TOKEN_STRUCT:
+      printf("struct");
+      break;
     case TOKEN_BOOL:
       printf("bool");
       break;
@@ -793,6 +799,9 @@ void print_token(struct Token *token)
     case TOKEN_AMPERSAND:
       printf("ampersand");
       break;
+    case TOKEN_DOT:
+      printf("dot");
+      break;
     case TOKEN_LESS_EQUAL:
       printf("less equal");
       break;
@@ -866,6 +875,7 @@ enum TypeKind {
   FN_T,
   VOID_T,
   PTR_T,
+  STRUCT_T,
   UNKNOWN_T,
 };
 
@@ -882,8 +892,63 @@ struct Type {
       bool is_variadic;
     } func;
     struct Type *base;
+    char *struct_name;
   } as;
 };
+
+struct StructField {
+  char *name;
+  Type type;
+  int offset;
+};
+
+typedef Vector(struct StructField) VecStructField;
+
+struct StructDef {
+  char *name;
+  VecStructField fields;
+  int size;
+  int alignment;
+};
+
+struct StructTable {
+  struct StructTable *next;
+  struct StructDef def;
+};
+
+struct StructTable *struct_table = NULL;
+
+void free_struct_table(struct StructTable *table)
+{
+  while (table) {
+    struct StructTable *tmp = table;
+    table = table->next;
+    free(tmp);
+  }
+}
+
+void struct_insert(struct StructTable **table, struct StructDef def)
+{
+  struct StructTable *node;
+
+  node = malloc(sizeof(struct StructTable));
+  node->def = def;
+  node->def.name = strdup(def.name);
+  node->next = *table;
+
+  *table = node;
+}
+
+struct StructDef *struct_get(struct StructTable *table, char *name)
+{
+  while (table) {
+    if (strcmp(table->def.name, name) == 0) {
+      return &table->def;
+    }
+    table = table->next;
+  }
+  return NULL;
+}
 
 Type clone_type(Type t)
 {
@@ -891,6 +956,8 @@ Type clone_type(Type t)
   if (t.kind == PTR_T) {
     copy.as.base = malloc(sizeof(Type));
     *copy.as.base = clone_type(*t.as.base);
+  } else if (t.kind == STRUCT_T) {
+    copy.as.struct_name = strdup(t.as.struct_name);
   }
   return copy;
 }
@@ -918,6 +985,10 @@ void free_type(Type *t)
     case PTR_T: {
       free_type(t->as.base);
       free(t->as.base);
+      break;
+    }
+    case STRUCT_T: {
+      free(t->as.struct_name);
       break;
     }
     case FN_T: {
@@ -964,6 +1035,8 @@ enum ExprKind {
   EXPR_ADDROF,
   EXPR_DEREF,
   EXPR_CAST,
+  EXPR_STRUCT_INIT,
+  EXPR_MEMBER,
 };
 
 enum ExprBinKind {
@@ -1065,6 +1138,17 @@ struct ExprCast {
   struct Expr *expr;
 };
 
+struct ExprStructInit {
+  char *struct_name;
+  VecExpr values;
+};
+
+struct ExprMember {
+  struct Expr *target;
+  char *field_name;
+  bool is_arrow;
+};
+
 struct Expr {
   enum ExprKind kind;
   union {
@@ -1077,6 +1161,8 @@ struct Expr {
     struct ExprAddrOf addrof;
     struct ExprDeref deref;
     struct ExprCast cast;
+    struct ExprStructInit struct_init;
+    struct ExprMember member;
   } as;
   Type type;
 };
@@ -1105,6 +1191,8 @@ bool types_equal(Type a, Type b)
   }
 
   switch (a.kind) {
+    case STRUCT_T:
+      return strcmp(a.as.struct_name, b.as.struct_name) == 0;
     case PTR_T:
       return types_equal(*a.as.base, *b.as.base);
     case I8_T:
@@ -1316,6 +1404,37 @@ void print_expr(struct Expr *expr, int spaces)
       printf(")");
       break;
     }
+    case EXPR_STRUCT_INIT: {
+      printf("StructInit(\n");
+      print_indent(spaces + 2);
+      printf("name = %s,\n", expr->as.struct_init.struct_name);
+      print_indent(spaces + 2);
+      printf("values = [\n");
+      for (int i = 0; i < expr->as.struct_init.values.len; i++) {
+        print_indent(spaces + 4);
+        print_expr(&expr->as.struct_init.values.data[i], spaces + 4);
+        printf(",\n");
+      }
+      print_indent(spaces + 2);
+      printf("]\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case EXPR_MEMBER: {
+      printf("Member(\n");
+      print_indent(spaces + 2);
+      printf("target = ");
+      print_expr(expr->as.member.target, spaces + 4);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("field = %s,\n", expr->as.member.field_name);
+      print_indent(spaces + 2);
+      printf("is_arrow = %s\n", expr->as.member.is_arrow ? "true" : "false");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
   }
 }
 
@@ -1381,6 +1500,19 @@ void free_expr(struct Expr *expr)
       free(expr->as.cast.expr);
       break;
     }
+    case EXPR_STRUCT_INIT: {
+      free(expr->as.struct_init.struct_name);
+      for (int i = 0; i < expr->as.struct_init.values.len; i++) {
+        free_expr(&expr->as.struct_init.values.data[i]);
+      }
+      vec_free(&expr->as.struct_init.values);
+      break;
+    }
+    case EXPR_MEMBER: {
+      free(expr->as.member.field_name);
+      free_expr(expr->as.member.target);
+      break;
+    }
   }
 }
 
@@ -1403,6 +1535,7 @@ enum StmtKind {
   STMT_BLOCK,
   STMT_EXTERN,
   STMT_EXPR,
+  STMT_STRUCT,
 };
 
 struct StmtFn {
@@ -1458,6 +1591,11 @@ struct StmtExpr {
   struct Expr expr;
 };
 
+struct StmtStruct {
+  char *name;
+  VecStructField fields;
+};
+
 struct Stmt {
   enum StmtKind kind;
   union {
@@ -1471,6 +1609,7 @@ struct Stmt {
     struct StmtBlock block;
     struct StmtExtern extern_stmt;
     struct StmtExpr expr_stmt;
+    struct StmtStruct struct_stmt;
   } as;
 };
 
@@ -1680,6 +1819,33 @@ void print_stmt(struct Stmt *stmt, int spaces)
       printf(")\n");
       break;
     }
+    case STMT_STRUCT: {
+      print_indent(spaces);
+      printf("STMT_STRUCT(\n");
+
+      print_indent(spaces + 2);
+      printf("name = %s,\n", stmt->as.struct_stmt.name);
+
+      print_indent(spaces + 2);
+      printf("fields = [\n");
+
+      for (int i = 0; i < stmt->as.struct_stmt.fields.len; i++) {
+        print_indent(spaces + 4);
+        printf("Field(name: %s, type: ",
+               stmt->as.struct_stmt.fields.data[i].name);
+
+        print_type(&stmt->as.struct_stmt.fields.data[i].type, spaces + 6);
+
+        printf(", offset: %d),\n", stmt->as.struct_stmt.fields.data[i].offset);
+      }
+
+      print_indent(spaces + 2);
+      printf("]\n");
+
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
     default:
       assert(0 && "Unhandled statement kind in print_stmt");
   }
@@ -1688,6 +1854,15 @@ void print_stmt(struct Stmt *stmt, int spaces)
 void free_stmt(struct Stmt *stmt)
 {
   switch (stmt->kind) {
+    case STMT_STRUCT: {
+      free(stmt->as.struct_stmt.name);
+      for (int i = 0; i < stmt->as.struct_stmt.fields.len; i++) {
+        free(stmt->as.struct_stmt.fields.data[i].name);
+        free_type(&stmt->as.struct_stmt.fields.data[i].type);
+      }
+
+      break;
+    }
     case STMT_EXTERN: {
       free(stmt->as.extern_stmt.name);
       for (int i = 0; i < stmt->as.extern_stmt.params.len; i++) {
@@ -1967,43 +2142,59 @@ struct ParseFnResult primary(struct Parser *parser)
 
     res.as.expr = (struct Expr){.kind = EXPR_LITERAL, .as.literal = literal};
   } else if (check(parser, TOKEN_IDENTIFIER)) {
-    struct Token *token_id;
-
-    token_id = consume(parser, TOKEN_IDENTIFIER);
+    struct Token *token_id = consume(parser, TOKEN_IDENTIFIER);
     if (!token_id) {
       return (struct ParseFnResult){
           .is_ok = false, .as.expr = {0}, .msg = "Expected identifier"};
     }
 
-    struct ExprVar var;
+    /* Lookahead: If it's a brace, this is a struct initialization */
+    if (match(parser, 1, TOKEN_LBRACE)) {
+      VecExpr values = {0};
 
-    var.name = strndup(token_id->start, token_id->len);
-    var.type = (Type){.kind = UNKNOWN_T};
+      while (!check(parser, TOKEN_RBRACE)) {
+        if (check(parser, TOKEN_IDENTIFIER) &&
+            parser->idx < parser->tokens->len &&
+            parser->tokens->data[parser->idx].kind == TOKEN_COLON) {
+          advance_parser(parser);
+          advance_parser(parser);
+        }
 
-    res.as.expr = (struct Expr){.kind = EXPR_VARIABLE, .as.var = var};
-  } else if (check(parser, TOKEN_TRUE) || check(parser, TOKEN_FALSE)) {
-    struct Literal literal;
-    struct Token *token_literal;
-    bool is_true;
+        struct ParseFnResult val_res = parse_expr(parser);
+        if (!val_res.is_ok) {
+          return val_res;
+        }
 
-    is_true = check(parser, TOKEN_TRUE);
+        vec_insert(&values, val_res.as.expr);
 
-    token_literal = consume(parser, is_true ? TOKEN_TRUE : TOKEN_FALSE);
-    if (!token_literal) {
-      return (struct ParseFnResult){
-          .is_ok = false, .msg = "Expected bool literal", .as.expr = {0}};
+        if (check(parser, TOKEN_COMMA)) {
+          advance_parser(parser);
+        }
+      }
+
+      struct Token *token_rbrace = consume(parser, TOKEN_RBRACE);
+      if (!token_rbrace) {
+        return (struct ParseFnResult){
+            .is_ok = false,
+            .as.expr = {0},
+            .msg = "Expected '}' after struct values"};
+      }
+
+      struct ExprStructInit init;
+      init.struct_name = strndup(token_id->start, token_id->len);
+      printf("init.struct_name: %s\n", init.struct_name);
+      init.values = values;
+
+      res.as.expr =
+          (struct Expr){.kind = EXPR_STRUCT_INIT, .as.struct_init = init};
+    } else {
+      /* Standard variable access */
+      struct ExprVar var;
+      var.name = strndup(token_id->start, token_id->len);
+      var.type = (Type){.kind = UNKNOWN_T};
+
+      res.as.expr = (struct Expr){.kind = EXPR_VARIABLE, .as.var = var};
     }
-
-    literal.kind = LITERAL_BOOL;
-    literal.as.boolean = is_true ? true : false;
-    literal.type = (Type){.kind = BOOL_T};
-
-    res.as.expr = (struct Expr){
-        .kind = EXPR_LITERAL, .as.literal = literal, .type = literal.type};
-  } else {
-    res.is_ok = false;
-    res.msg = "Expected number, string, or identifier";
-    return res;
   }
 
   return res;
@@ -2056,7 +2247,7 @@ struct ParseFnResult finish_call(struct Parser *parser, struct Expr callee)
   return (struct ParseFnResult){.as.expr = e, .is_ok = true, .msg = NULL};
 }
 
-struct ParseFnResult call(struct Parser *parser)
+struct ParseFnResult postfix(struct Parser *parser)
 {
   struct ParseFnResult expr_result;
 
@@ -2076,6 +2267,21 @@ struct ParseFnResult call(struct Parser *parser)
         return finish_call_result;
       }
       expr = finish_call_result.as.expr;
+    } else if (match(parser, 2, TOKEN_DOT, TOKEN_ARROW)) {
+      bool is_arrow;
+      struct Token *field;
+
+      is_arrow = (parser->prev->kind == TOKEN_ARROW);
+      field = consume(parser, TOKEN_IDENTIFIER);
+
+      struct ExprMember member_expr = {
+          .target = ALLOC(expr),
+          .field_name = strndup(field->start, field->len),
+          .is_arrow = is_arrow,
+      };
+
+      expr.kind = EXPR_MEMBER;
+      expr.as.member = member_expr;
     } else {
       break;
     }
@@ -2156,7 +2362,7 @@ struct ParseFnResult unary(struct Parser *parser)
     }
   }
 
-  return call(parser);
+  return postfix(parser);
 }
 
 struct ParseFnResult factor(struct Parser *parser)
@@ -2453,6 +2659,13 @@ Type parse_type(struct Parser *parser)
     } else if (strncmp(type_token->start, "str", type_token->len) == 0) {
       return (Type){.kind = STR_T};
     }
+  } else if (check(parser, TOKEN_IDENTIFIER)) {
+    struct Token *id_token = consume(parser, TOKEN_IDENTIFIER);
+    Type custom_type;
+    custom_type.kind = STRUCT_T;
+    custom_type.as.struct_name = strndup(id_token->start, id_token->len);
+    printf("custom_type.as.struct_name: %s\n", custom_type.as.struct_name);
+    return custom_type;
   }
   return (Type){.kind = UNKNOWN_T};
 }
@@ -3097,6 +3310,82 @@ struct ParseFnResult parse_expr_stmt(struct Parser *parser)
   return result;
 }
 
+struct ParseFnResult parse_struct_stmt(struct Parser *parser)
+{
+  struct ParseFnResult result;
+  struct Token *token_struct, *token_id, *token_lbrace, *token_rbrace;
+  VecStructField fields = {0};
+
+  result.is_ok = true;
+  result.msg = NULL;
+
+  token_struct = consume(parser, TOKEN_STRUCT);
+  if (!token_struct) {
+    return (struct ParseFnResult){
+        .is_ok = false, .as.stmt = {0}, .msg = "Expected token 'struct'"};
+  }
+
+  token_id = consume(parser, TOKEN_IDENTIFIER);
+  if (!token_id) {
+    return (struct ParseFnResult){.is_ok = false,
+                                  .as.stmt = {0},
+                                  .msg = "Expected identifier after 'struct'"};
+  }
+
+  char *name = strndup(token_id->start, token_id->len);
+
+  token_lbrace = consume(parser, TOKEN_LBRACE);
+  if (!token_lbrace) {
+    free(name);
+    return (struct ParseFnResult){.is_ok = false,
+                                  .as.stmt = {0},
+                                  .msg = "Expected '{' in struct declaration"};
+  }
+
+  while (!check(parser, TOKEN_RBRACE)) {
+    struct Token *field_token = consume(parser, TOKEN_IDENTIFIER);
+    if (!field_token) {
+      return (struct ParseFnResult){
+          .is_ok = false, .as.stmt = {0}, .msg = "Expected field name"};
+    }
+
+    struct Token *colon_token = consume(parser, TOKEN_COLON);
+    if (!colon_token) {
+      return (struct ParseFnResult){.is_ok = false,
+                                    .as.stmt = {0},
+                                    .msg = "Expected ':' after field name"};
+    }
+
+    Type field_type = parse_type(parser);
+
+    struct StructField field;
+    field.name = strndup(field_token->start, field_token->len);
+    field.type = field_type;
+    field.offset = 0; /* To be calculated during typechecking */
+    vec_insert(&fields, field);
+
+    if (check(parser, TOKEN_COMMA)) {
+      advance_parser(parser);
+    }
+  }
+
+  token_rbrace = consume(parser, TOKEN_RBRACE);
+  if (!token_rbrace) {
+    return (struct ParseFnResult){.is_ok = false,
+                                  .as.stmt = {0},
+                                  .msg = "Expected '}' after struct fields"};
+  }
+
+  struct StmtStruct struct_stmt;
+  struct_stmt.name = name;
+  struct_stmt.fields = fields;
+
+  result.as.stmt =
+      (struct Stmt){.kind = STMT_STRUCT, .as.struct_stmt = struct_stmt};
+
+  return result;
+}
+
 struct ParseFnResult parse_stmt(struct Parser *parser)
 {
   struct ParseFnResult result;
@@ -3175,6 +3464,14 @@ struct ParseFnResult parse_stmt(struct Parser *parser)
         return block_res;
       }
       result.as.stmt = block_res.as.stmt;
+      break;
+    }
+    case TOKEN_STRUCT: {
+      struct ParseFnResult struct_res = parse_struct_stmt(parser);
+      if (!struct_res.is_ok) {
+        return struct_res;
+      }
+      result.as.stmt = struct_res.as.stmt;
       break;
     }
     default: {
@@ -3283,6 +3580,7 @@ struct LoopLabelResult loop_label_stmt(struct Stmt *stmt, char *label)
     case STMT_EXPR:
     case STMT_LET:
     case STMT_EXTERN:
+    case STMT_STRUCT:
       break;
     default:
       assert(0);
@@ -3325,7 +3623,7 @@ struct IRValue *clone_irval(struct IRValue *v)
 
   clone = malloc(sizeof(struct IRValue));
   clone->kind = v->kind;
-  clone->type = v->type;
+  clone->type = clone_type(v->type);
 
   if (v->kind == IRValue_VAR) {
     clone->as.var = strdup(v->as.var);
@@ -3451,6 +3749,9 @@ enum IRInstrKind {
   IRInstr_LOAD,
   IRInstr_STORE,
   IRInstr_CAST,
+  IRInstr_CPY_TO_OFFSET,
+  IRInstr_CPY_FROM_OFFSET,
+  IRInstr_ADD_PTR,
 };
 
 enum IRInstrBinaryKind {
@@ -3571,6 +3872,24 @@ struct IRInstr_Cast {
   struct IRValue *dst;
 };
 
+struct IRInstr_CopyFromOffset {
+  struct IRValue *src;
+  int offset;
+  struct IRValue *dst;
+};
+
+struct IRInstr_CopyToOffset {
+  struct IRValue *dst;
+  int offset;
+  struct IRValue *src;
+};
+
+struct IRInstr_AddPtr {
+  struct IRValue *ptr;
+  int offset;
+  struct IRValue *dst;
+};
+
 struct IRInstr {
   enum IRInstrKind kind;
   union {
@@ -3586,6 +3905,9 @@ struct IRInstr {
     struct IRInstr_Load load;
     struct IRInstr_Store store;
     struct IRInstr_Cast cast;
+    struct IRInstr_CopyFromOffset cpy_from_offset;
+    struct IRInstr_CopyToOffset cpy_to_offset;
+    struct IRInstr_AddPtr add_ptr;
   } as;
 };
 
@@ -3779,6 +4101,54 @@ void print_ir_instr(struct IRInstr *instr, int spaces)
       printf(")");
       break;
     }
+    case IRInstr_CPY_FROM_OFFSET: {
+      printf("IRInstr_CPY_FROM_OFFSET(\n");
+      print_indent(spaces + 2);
+      printf("src = ");
+      print_ir_val(instr->as.cpy_from_offset.src, spaces + 2);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("offset = %d,\n", instr->as.cpy_from_offset.offset);
+      print_indent(spaces + 2);
+      printf("dst = ");
+      print_ir_val(instr->as.cpy_from_offset.dst, spaces + 2);
+      printf("\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case IRInstr_CPY_TO_OFFSET: {
+      printf("IRInstr_CPY_TO_OFFSET(\n");
+      print_indent(spaces + 2);
+      printf("dst = ");
+      print_ir_val(instr->as.cpy_to_offset.dst, spaces + 2);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("offset = %d,\n", instr->as.cpy_to_offset.offset);
+      print_indent(spaces + 2);
+      printf("src = ");
+      print_ir_val(instr->as.cpy_to_offset.src, spaces + 2);
+      printf("\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case IRInstr_ADD_PTR: {
+      printf("IRInstr_ADD_PTR(\n");
+      print_indent(spaces + 2);
+      printf("ptr = ");
+      print_ir_val(instr->as.add_ptr.ptr, spaces + 2);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("offset = %d,\n", instr->as.add_ptr.offset);
+      print_indent(spaces + 2);
+      printf("dst = ");
+      print_ir_val(instr->as.add_ptr.dst, spaces + 2);
+      printf("\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
   }
 }
 
@@ -3853,6 +4223,21 @@ void free_ir_instr(struct IRInstr *instr)
       free_ir_val(instr->as.store.val);
       break;
     }
+    case IRInstr_CPY_FROM_OFFSET: {
+      free_ir_val(instr->as.cpy_from_offset.src);
+      free_ir_val(instr->as.cpy_from_offset.dst);
+      break;
+    }
+    case IRInstr_CPY_TO_OFFSET: {
+      free_ir_val(instr->as.cpy_to_offset.dst);
+      free_ir_val(instr->as.cpy_to_offset.src);
+      break;
+    }
+    case IRInstr_ADD_PTR: {
+      free_ir_val(instr->as.add_ptr.ptr);
+      free_ir_val(instr->as.add_ptr.dst);
+      break;
+    }
     default:
       assert(0 && "Unhandled IR instruction in free_ir_instr");
   }
@@ -3922,6 +4307,31 @@ struct IRValue *mkirvar(void)
   return var;
 }
 
+/*
+ * ExpResult describes what an expression refers to during IR lowering.
+ *
+ * Some expressions already produce a normal IR value:
+ *   x, 42, foo()
+ * These use EXPRESULT_PLAIN.
+ *
+ * Some expressions describe a memory location instead of immediately loading
+ * it: *ptr        -> EXPRESULT_DEREF point.x     -> EXPRESULT_SUBOBJECT
+ *
+ * Keeping these as locations is important because the caller may want to:
+ *   - read from them,
+ *   - assign to them,
+ *   - or take their address.
+ *
+ * For example:
+ *   point.x        can become a load from (point + field_offset)
+ *   point.x = 10   can become a store to (point + field_offset)
+ *   &point.x       can become the address (point + field_offset)
+ *
+ * SUBOBJECT stores:
+ *   - the base aggregate object,
+ *   - the byte offset of the field within that object,
+ *   - and the base object's type, so later lowering still knows its layout.
+ */
 enum ExpResultKind {
   EXPRESULT_PLAIN,
   EXPRESULT_DEREF,
@@ -3936,6 +4346,7 @@ struct ExpResult {
     struct {
       char *base;
       size_t offset;
+      Type base_type;
     } subobject;
   } as;
 };
@@ -3984,7 +4395,25 @@ struct IRValue *irfy_expr_and_convert(VecIRInstr *instrs, struct Expr *expr)
       return ret;
     }
     case EXPRESULT_SUBOBJECT: {
-      assert(0);
+      struct IRValue *dst = mkirvar();
+      dst->type = expr->type;
+
+      struct IRValue *base_var = malloc(sizeof(struct IRValue));
+      base_var->kind = IRValue_VAR;
+      base_var->as.var = strdup(result.as.subobject.base);
+      base_var->type = result.as.subobject.base_type;
+
+      struct IRInstr_CopyFromOffset copy_from = {
+          .src = base_var,
+          .offset = result.as.subobject.offset,
+          .dst = clone_irval(dst)};
+
+      struct IRInstr instr;
+      instr.kind = IRInstr_CPY_FROM_OFFSET;
+      instr.as.cpy_from_offset = copy_from;
+      vec_insert(instrs, instr);
+
+      return dst;
     }
   }
 
@@ -4303,6 +4732,25 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
         vec_insert(instrs, instr);
 
         return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = rhs_val};
+      } else if (lhs_res.kind == EXPRESULT_SUBOBJECT) {
+        /* Reconstruct the base variable from the subobject name */
+        struct IRValue *base_var = malloc(sizeof(struct IRValue));
+        base_var->kind = IRValue_VAR;
+        base_var->as.var = strdup(lhs_res.as.subobject.base);
+        base_var->type = lhs_res.as.subobject.base_type;
+
+        struct IRInstr_CopyToOffset copy_to = {
+            .dst = base_var,
+            .offset = lhs_res.as.subobject.offset,
+            .src = clone_irval(rhs_val)};
+
+        struct IRInstr instr = {0};
+        instr.kind = IRInstr_CPY_TO_OFFSET;
+        instr.as.cpy_to_offset = copy_to;
+        vec_insert(instrs, instr);
+
+        /* Assignments evaluate to their right-hand side value */
+        return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = rhs_val};
       } else {
         assert(0 && "Unhandled left-hand side in assignment");
       }
@@ -4368,7 +4816,31 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
                                     .as.plain = result.as.ptr};
         }
         case EXPRESULT_SUBOBJECT: {
-          assert(0);
+          struct IRValue *base_var = malloc(sizeof(struct IRValue));
+          base_var->kind = IRValue_VAR;
+          base_var->as.var = strdup(result.as.subobject.base);
+          base_var->type = result.as.subobject.base_type;
+
+          struct IRValue *base_ptr = mkirvar();
+          base_ptr->type =
+              (Type){.kind = PTR_T, .as.base = ALLOC(base_var->type)};
+
+          struct IRInstr_GetAddress getaddr = {.src = base_var,
+                                               .dst = clone_irval(base_ptr)};
+          vec_insert(instrs, ((struct IRInstr){.kind = IRInstr_GETADDR,
+                                               .as.getaddr = getaddr}));
+
+          struct IRValue *field_ptr = mkirvar();
+          field_ptr->type = expr->type;
+
+          struct IRInstr_AddPtr add_ptr = {.ptr = base_ptr,
+                                           .offset = result.as.subobject.offset,
+                                           .dst = clone_irval(field_ptr)};
+          vec_insert(instrs, ((struct IRInstr){.kind = IRInstr_ADD_PTR,
+                                               .as.add_ptr = add_ptr}));
+
+          return (struct ExpResult){.kind = EXPRESULT_PLAIN,
+                                    .as.plain = field_ptr};
         }
         default:
           assert(0);
@@ -4419,6 +4891,115 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
        *    assign to a cast, like `(int)x = 5;`). Thus, we package our new
        *    temporary variable into an `EXPRESULT_PLAIN` and return it.  */
       return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = dst};
+    }
+    case EXPR_MEMBER: {
+      Type target_type = expr->as.member.target->type;
+      char *struct_name = expr->as.member.is_arrow
+                              ? target_type.as.base->as.struct_name
+                              : target_type.as.struct_name;
+
+      printf("IRFY_EXPR: Type kind: %d\n", target_type.kind);
+      if (target_type.kind == STRUCT_T) {
+        printf("IRFY_EXPR: Struct name: %s\n", target_type.as.struct_name);
+      }
+
+      printf("IRFY_EXPR: Looking up struct: %s\n", struct_name);
+
+      struct StructDef *def = struct_get(struct_table, struct_name);
+
+      int offset = 0;
+      for (int i = 0; i < def->fields.len; i++) {
+        if (strcmp(def->fields.data[i].name, expr->as.member.field_name) == 0) {
+          offset = def->fields.data[i].offset;
+          break;
+        }
+      }
+
+      if (expr->as.member.is_arrow) {
+        /* foo->bar is a pointer dereference plus an offset. */
+        struct IRValue *base_ptr =
+            irfy_expr_and_convert(instrs, expr->as.member.target);
+
+        if (offset == 0) {
+          return (struct ExpResult){.kind = EXPRESULT_DEREF,
+                                    .as.ptr = base_ptr};
+        }
+
+        struct IRValue *field_ptr = mkirvar();
+        field_ptr->type = (Type){.kind = PTR_T, .as.base = ALLOC(expr->type)};
+
+        struct IRInstr_AddPtr add_ptr = {
+            .ptr = base_ptr, .offset = offset, .dst = clone_irval(field_ptr)};
+        vec_insert(instrs, ((struct IRInstr){.kind = IRInstr_ADD_PTR,
+                                             .as.add_ptr = add_ptr}));
+
+        return (struct ExpResult){.kind = EXPRESULT_DEREF, .as.ptr = field_ptr};
+      } else {
+        /* Direct access: foo.bar */
+        struct ExpResult target_res = irfy_expr(instrs, expr->as.member.target);
+        if (target_res.kind == EXPRESULT_PLAIN) {
+          return (struct ExpResult){
+              .kind = EXPRESULT_SUBOBJECT,
+              .as.subobject = {
+                  .base = strdup(target_res.as.plain->as.var),
+                  .offset = offset,
+                  .base_type = target_res.as.plain->type,
+              }};
+        } else if (target_res.kind == EXPRESULT_SUBOBJECT) {
+          /* Target is already a subobject: a.b.c -> accumulate the offset */
+          return (struct ExpResult){
+              .kind = EXPRESULT_SUBOBJECT,
+              .as.subobject = {
+                  .base = strdup(target_res.as.subobject.base),
+                  .offset = target_res.as.subobject.offset + offset,
+                  .base_type = target_res.as.subobject.base_type,
+              }};
+        } else if (target_res.kind == EXPRESULT_DEREF) {
+          /* Target is a deref: (*foo).bar -> use pointer arithmetic */
+          if (offset == 0) {
+            return target_res;
+          }
+
+          struct IRValue *field_ptr = mkirvar();
+          field_ptr->type = (Type){.kind = PTR_T, .as.base = ALLOC(expr->type)};
+
+          struct IRInstr_AddPtr add_ptr = {.ptr = target_res.as.ptr,
+                                           .offset = offset,
+                                           .dst = clone_irval(field_ptr)};
+          vec_insert(instrs, ((struct IRInstr){.kind = IRInstr_ADD_PTR,
+                                               .as.add_ptr = add_ptr}));
+
+          return (struct ExpResult){.kind = EXPRESULT_DEREF,
+                                    .as.ptr = field_ptr};
+        }
+      }
+      break;
+    }
+    case EXPR_STRUCT_INIT: {
+      struct StructDef *def =
+          struct_get(struct_table, expr->as.struct_init.struct_name);
+
+      /* 1. Allocate a temporary variable for the struct */
+      struct IRValue *tmp_struct = mkirvar();
+      tmp_struct->type.kind = STRUCT_T;
+      tmp_struct->type.as.struct_name = expr->as.struct_init.struct_name;
+
+      /* 2. Populate each field directly using CopyToOffset */
+      for (int i = 0; i < expr->as.struct_init.values.len; i++) {
+        struct IRValue *val =
+            irfy_expr_and_convert(instrs, &expr->as.struct_init.values.data[i]);
+        int offset = def->fields.data[i].offset;
+
+        struct IRInstr_CopyToOffset copy_to = {
+            .dst = clone_irval(tmp_struct), .offset = offset, .src = val};
+
+        vec_insert(instrs, ((struct IRInstr){.kind = IRInstr_CPY_TO_OFFSET,
+                                             .as.cpy_to_offset = copy_to}));
+      }
+
+      /* Return the temporary struct itself as an rvalue */
+      return (struct ExpResult){.kind = EXPRESULT_PLAIN,
+                                .as.plain = tmp_struct};
     }
     default:
       assert(0);
@@ -4732,6 +5313,26 @@ struct ResolveResult resolve_expr(struct VariableMap **varmap,
                                   struct Expr *expr)
 {
   switch (expr->kind) {
+    case EXPR_STRUCT_INIT: {
+      for (int i = 0; i < expr->as.struct_init.values.len; i++) {
+        struct ResolveResult r;
+
+        r = resolve_expr(varmap, &expr->as.struct_init.values.data[i]);
+        if (!r.is_ok) {
+          return r;
+        }
+      }
+      break;
+    }
+    case EXPR_MEMBER: {
+      struct ResolveResult r;
+
+      r = resolve_expr(varmap, expr->as.member.target);
+      if (!r.is_ok) {
+        return r;
+      }
+      break;
+    }
     case EXPR_CAST: {
       struct ResolveResult r;
 
@@ -4745,7 +5346,9 @@ struct ResolveResult resolve_expr(struct VariableMap **varmap,
     case EXPR_LITERAL:
       break;
     case EXPR_VARIABLE: {
+      printf("trying to resolve: %s\n", expr->as.var.name);
       char *resolved_name = varmap_get(*varmap, expr->as.var.name);
+      printf("resolved p to %s\n", resolved_name);
       if (!resolved_name) {
         return (struct ResolveResult){.is_ok = false,
                                       .msg = "Undefined variable"};
@@ -5088,6 +5691,9 @@ struct Symbol *sym_get(struct Symbol *sym, char *name)
 void print_type(Type *type, int spaces)
 {
   switch (type->kind) {
+    case STRUCT_T:
+      printf("%s", type->as.struct_name);
+      break;
     case VOID_T:
       printf("void");
       break;
@@ -5204,6 +5810,47 @@ static inline int get_type_size(enum TypeKind kind)
       return 8;
     default:
       return -1;
+  }
+}
+
+void get_type_size_and_align(Type *type, int *size, int *align)
+{
+  switch (type->kind) {
+    case I8_T:
+    case U8_T:
+    case BOOL_T:
+      *size = 1;
+      *align = 1;
+      break;
+    case I16_T:
+    case U16_T:
+      *size = 2;
+      *align = 2;
+      break;
+    case I32_T:
+    case U32_T:
+    case F32_T:
+      *size = 4;
+      *align = 4;
+      break;
+    case I64_T:
+    case U64_T:
+    case F64_T:
+    case PTR_T:
+      *size = 8;
+      *align = 8;
+      break;
+    case STRUCT_T: {
+      struct StructDef *def = struct_get(struct_table, type->as.struct_name);
+      assert(def && "Tried to get size of incomplete/unknown struct");
+      *size = def->size;
+      *align = def->alignment;
+      break;
+    }
+    default:
+      *size = -1;
+      *align = -1;
+      break;
   }
 }
 
@@ -5449,6 +6096,126 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
   struct TypecheckResult res = {.is_ok = true, .msg = NULL, .ast = NULL};
 
   switch (expr->kind) {
+    case EXPR_MEMBER: {
+      struct TypecheckResult r;
+
+      r = typecheck_expr(expr->as.member.target, sym_table);
+      if (!r.is_ok) {
+        return r;
+      }
+
+      Type target_type = expr->as.member.target->type;
+      char *struct_name = NULL;
+
+      /* 1. Validate the left-hand side */
+      if (expr->as.member.is_arrow) {
+        if (target_type.kind != PTR_T ||
+            target_type.as.base->kind != STRUCT_T) {
+          return (struct TypecheckResult){
+              .is_ok = false,
+              .msg = "Left of '->' must be a pointer to struct",
+              .ast = NULL};
+        }
+        struct_name = target_type.as.base->as.struct_name;
+        printf("struct name is: %s\n", struct_name);
+      } else {
+        if (target_type.kind != STRUCT_T) {
+          return (struct TypecheckResult){.is_ok = false,
+                                          .msg = "Left of '.' must be a struct",
+                                          .ast = NULL};
+        }
+        struct_name = target_type.as.struct_name;
+        printf("struct name is: %s\n", struct_name);
+      }
+
+      /* 2. Look up the struct definition */
+      struct StructDef *def = struct_get(struct_table, struct_name);
+      if (!def) {
+        return (struct TypecheckResult){
+            .is_ok = false,
+            .msg = "Accessing member of incomplete/unknown struct",
+            .ast = NULL};
+      }
+
+      /* 3. Find the field and assign the expression's type */
+      bool found = false;
+      for (int i = 0; i < def->fields.len; i++) {
+        if (strcmp(def->fields.data[i].name, expr->as.member.field_name) == 0) {
+          expr->type = clone_type(def->fields.data[i].type);
+          found = true;
+          break;
+        }
+      }
+
+      if (!found) {
+        return (struct TypecheckResult){
+            .is_ok = false, .msg = "Struct has no such field", .ast = NULL};
+      }
+
+      break;
+    }
+    case EXPR_STRUCT_INIT: {
+      printf("geetting %s\n", expr->as.struct_init.struct_name);
+      struct StructDef *def =
+          struct_get(struct_table, expr->as.struct_init.struct_name);
+      if (!def) {
+        return (struct TypecheckResult){
+            .is_ok = false, .msg = "Initializing unknown struct", .ast = NULL};
+      }
+
+      if (expr->as.struct_init.values.len != def->fields.len) {
+        return (struct TypecheckResult){
+            .is_ok = false,
+            .msg = "Struct initialization field count mismatch",
+            .ast = NULL};
+      }
+
+      for (int i = 0; i < expr->as.struct_init.values.len; i++) {
+        struct Expr *val_expr = &expr->as.struct_init.values.data[i];
+
+        struct TypecheckResult r = typecheck_expr(val_expr, sym_table);
+        if (!r.is_ok) {
+          return r;
+        }
+
+        Type expected_type = def->fields.data[i].type;
+        Type actual_type = val_expr->type;
+
+        /* Validate type match, promoting/casting if necessary */
+        if (!types_equal(actual_type, expected_type)) {
+          bool is_literal = (val_expr->kind == EXPR_LITERAL &&
+                             val_expr->as.literal.kind == LITERAL_NUM);
+          bool is_unary_literal =
+              (val_expr->kind == EXPR_UNARY &&
+               val_expr->as.unary.expr->kind == EXPR_LITERAL &&
+               val_expr->as.unary.expr->as.literal.kind == LITERAL_NUM);
+
+          if (is_literal || is_unary_literal) {
+            if (!promote_literal(val_expr, expected_type)) {
+              return (struct TypecheckResult){
+                  .is_ok = false,
+                  .msg =
+                      "Type error: struct init value does not fit expected "
+                      "field type",
+                  .ast = NULL};
+            }
+          } else {
+            /* Implicit cast for runtime variables */
+            struct Expr *inner = malloc(sizeof(struct Expr));
+            *inner = *val_expr;
+
+            val_expr->kind = EXPR_CAST;
+            val_expr->type = expected_type;
+            val_expr->as.cast.expr = inner;
+          }
+        }
+      }
+
+      expr->type.kind = STRUCT_T;
+      expr->type.as.struct_name = strdup(def->name);
+      printf("expr->type.as.struct_name is: %s\n", expr->type.as.struct_name);
+      break;
+    }
     case EXPR_ADDROF: {
       struct TypecheckResult r;
 
@@ -5552,7 +6319,7 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
             .is_ok = false, .msg = "Referenced an unknown type", .ast = NULL};
       }
 
-      expr->type = sym->type;
+      expr->type = clone_type(sym->type);
 
       break;
     }
@@ -5764,6 +6531,51 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
   struct TypecheckResult res = {.is_ok = true, .msg = NULL, .ast = NULL};
 
   switch (stmt->kind) {
+    case STMT_STRUCT: {
+      struct StructDef def;
+      def.name = stmt->as.struct_stmt.name;
+      def.fields = stmt->as.struct_stmt.fields; /* sharing the pointer */
+      def.size = 0;
+      def.alignment = 1;
+
+      /* Calculate offsets with x86_64 ABI padding */
+      for (int i = 0; i < def.fields.len; i++) {
+        int field_size, field_align;
+        get_type_size_and_align(&def.fields.data[i].type, &field_size,
+                                &field_align);
+
+        if (field_size == -1) {
+          return (struct TypecheckResult){
+              .is_ok = false, .msg = "Struct field has invalid type"};
+        }
+
+        /* Pad the current size to match the field's required alignment */
+        if (def.size % field_align != 0) {
+          def.size += field_align - (def.size % field_align);
+        }
+
+        /* Write back the calculated offset to the AST */
+        stmt->as.struct_stmt.fields.data[i].offset = def.size;
+        def.fields.data[i].offset = def.size; /* Update our table copy */
+
+        def.size += field_size;
+
+        /* Struct alignment is the largest alignment of its fields */
+        if (field_align > def.alignment) {
+          def.alignment = field_align;
+        }
+      }
+
+      /* Final padding so arrays of this struct align properly */
+      if (def.size % def.alignment != 0) {
+        def.size += def.alignment - (def.size % def.alignment);
+      }
+
+      printf("%s\n", def.name);
+
+      struct_insert(&struct_table, def);
+      break;
+    }
     case STMT_EXTERN: {
       Type t = {0};
       VecType param_types = {0};
@@ -6029,18 +6841,29 @@ enum AsmRegister {
   XMM15,
 };
 
-enum AsmType {
+enum AsmTypeKind {
   AsmType_BYTE,
   AsmType_WORD,
   AsmType_LONGWORD,
   AsmType_QUADWORD,
   AsmType_FLOAT,
   AsmType_DOUBLE,
+  AsmType_BYTE_ARRAY,
 };
 
-void print_asm_type(enum AsmType type)
+struct AsmType {
+  enum AsmTypeKind kind;
+  union {
+    struct {
+      int size;
+      int alignment;
+    } bytearray;
+  } as;
+};
+
+void print_asm_type(struct AsmType type)
 {
-  switch (type) {
+  switch (type.kind) {
     case AsmType_BYTE:
       printf("AsmType_BYTE");
       break;
@@ -6058,35 +6881,88 @@ void print_asm_type(enum AsmType type)
   }
 }
 
-enum AsmType type_to_asm_type(Type type)
+struct AsmType type_to_asm_type(Type type)
 {
   switch (type.kind) {
     case U8_T:
     case I8_T:
     case BOOL_T:
-      return AsmType_BYTE;
+      return (struct AsmType){.kind = AsmType_BYTE};
     case U16_T:
     case I16_T:
-      return AsmType_WORD;
+      return (struct AsmType){.kind = AsmType_WORD};
     case U32_T:
     case I32_T:
-      return AsmType_LONGWORD;
+      return (struct AsmType){.kind = AsmType_LONGWORD};
     case U64_T:
     case I64_T:
     case PTR_T:
-      return AsmType_QUADWORD;
+      return (struct AsmType){.kind = AsmType_QUADWORD};
     case F32_T:
-      return AsmType_FLOAT;
+      return (struct AsmType){.kind = AsmType_FLOAT};
     case F64_T:
-      return AsmType_DOUBLE;
+      return (struct AsmType){.kind = AsmType_DOUBLE};
+    case STRUCT_T: {
+      int size, alignment;
+      get_type_size_and_align(&type, &size, &alignment);
+      return (struct AsmType){
+          .kind = AsmType_BYTE_ARRAY,
+          .as.bytearray = {.size = size, .alignment = alignment}};
+    }
     default:
-      return AsmType_QUADWORD;
+      return (struct AsmType){.kind = AsmType_QUADWORD};
   }
+}
+
+static inline int asm_type_stack_size(struct AsmType t)
+{
+  switch (t.kind) {
+    case AsmType_BYTE:
+      return 1;
+    case AsmType_WORD:
+      return 2;
+    case AsmType_LONGWORD:
+    case AsmType_FLOAT:
+      return 4;
+    case AsmType_QUADWORD:
+    case AsmType_DOUBLE:
+      return 8;
+    case AsmType_BYTE_ARRAY:
+      return t.as.bytearray.size;
+  }
+
+  assert(0);
+}
+
+static inline int asm_type_stack_align(struct AsmType t)
+{
+  switch (t.kind) {
+    case AsmType_BYTE:
+      return 1;
+    case AsmType_WORD:
+      return 2;
+    case AsmType_LONGWORD:
+    case AsmType_FLOAT:
+      return 4;
+    case AsmType_QUADWORD:
+    case AsmType_DOUBLE:
+      return 8;
+    case AsmType_BYTE_ARRAY:
+      return t.as.bytearray.alignment;
+  }
+
+  assert(0);
+}
+
+static inline int align_up_int(int n, int align)
+{
+  assert(align > 0);
+  return ((n + align - 1) / align) * align;
 }
 
 struct AsmOperand {
   enum AsmOperandKind kind;
-  enum AsmType asm_type;
+  struct AsmType asm_type;
   union {
     long long imm;
     char *pseudo;
@@ -6219,7 +7095,7 @@ void print_asm_operand(struct AsmOperand *op)
           break;
         }
         case AX: {
-          switch (op->asm_type) {
+          switch (op->asm_type.kind) {
             case AsmType_BYTE: {
               printf("%%al");
               break;
@@ -6243,7 +7119,7 @@ void print_asm_operand(struct AsmOperand *op)
           break;
         }
         case DI: {
-          switch (op->asm_type) {
+          switch (op->asm_type.kind) {
             case AsmType_BYTE: {
               printf("%%dil");
               break;
@@ -6266,7 +7142,7 @@ void print_asm_operand(struct AsmOperand *op)
           break;
         }
         case SI: {
-          switch (op->asm_type) {
+          switch (op->asm_type.kind) {
             case AsmType_BYTE: {
               printf("%%sil");
               break;
@@ -6289,7 +7165,7 @@ void print_asm_operand(struct AsmOperand *op)
           break;
         }
         case DX: {
-          switch (op->asm_type) {
+          switch (op->asm_type.kind) {
             case AsmType_BYTE: {
               printf("%%dl");
               break;
@@ -6312,7 +7188,7 @@ void print_asm_operand(struct AsmOperand *op)
           break;
         }
         case CX: {
-          switch (op->asm_type) {
+          switch (op->asm_type.kind) {
             case AsmType_BYTE: {
               printf("%%cl");
               break;
@@ -6335,7 +7211,7 @@ void print_asm_operand(struct AsmOperand *op)
           break;
         }
         case R8: {
-          switch (op->asm_type) {
+          switch (op->asm_type.kind) {
             case AsmType_BYTE: {
               printf("%%r8b");
               break;
@@ -6358,7 +7234,7 @@ void print_asm_operand(struct AsmOperand *op)
           break;
         }
         case R9: {
-          switch (op->asm_type) {
+          switch (op->asm_type.kind) {
             case AsmType_BYTE: {
               printf("%%r9b");
               break;
@@ -6381,7 +7257,7 @@ void print_asm_operand(struct AsmOperand *op)
           break;
         }
         case R10: {
-          switch (op->asm_type) {
+          switch (op->asm_type.kind) {
             case AsmType_BYTE: {
               printf("%%r10b");
               break;
@@ -6404,7 +7280,7 @@ void print_asm_operand(struct AsmOperand *op)
           break;
         }
         case BP: {
-          switch (op->asm_type) {
+          switch (op->asm_type.kind) {
             case AsmType_BYTE: {
               printf("%%bpl");
               break;
@@ -6427,7 +7303,7 @@ void print_asm_operand(struct AsmOperand *op)
           break;
         }
         case SP: {
-          switch (op->asm_type) {
+          switch (op->asm_type.kind) {
             case AsmType_BYTE: {
               printf("%%spl");
               break;
@@ -6483,6 +7359,7 @@ enum AsmInstrKind {
   AsmInstr_LEA,
   AsmInstr_UNARY,
   AsmInstr_CVT,
+  AsmInstr_REP_MOVSB,
 };
 
 struct AsmInstrMov {
@@ -6556,7 +7433,7 @@ struct AsmInstrSetCC {
 };
 
 struct AsmInstrCmp {
-  enum AsmType asm_type;
+  struct AsmType asm_type;
   struct AsmOperand lhs;
   struct AsmOperand rhs;
 };
@@ -6587,7 +7464,7 @@ struct AsmInstrCvt {
 
 struct AsmInstr {
   enum AsmInstrKind kind;
-  enum AsmType asm_type;
+  struct AsmType asm_type;
   union {
     struct AsmInstrMov mov;
     struct AsmInstrBinary binary;
@@ -6849,6 +7726,10 @@ void print_asm_instr(struct AsmInstr *instr, int spaces)
       printf(",\n");
       print_indent(spaces);
       printf("),\n");
+      break;
+    }
+    case AsmInstr_REP_MOVSB: {
+      printf("AsmInstr_REP_MOVSB,\n");
       break;
     }
   }
@@ -7176,8 +8057,8 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         retval = (struct AsmOperand){.kind = AsmOperand_IMM, .as.imm = 0};
       }
 
-      bool is_ret_float = (retval.asm_type == AsmType_FLOAT ||
-                           retval.asm_type == AsmType_DOUBLE);
+      bool is_ret_float = (retval.asm_type.kind == AsmType_FLOAT ||
+                           retval.asm_type.kind == AsmType_DOUBLE);
 
       i1.kind = AsmInstr_MOV;
       i1.asm_type = retval.asm_type;
@@ -7187,16 +8068,22 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
                                           .asm_type = retval.asm_type};
 
       mov.src = (struct AsmOperand){
-          .kind = AsmOperand_REG, .as.reg = BP, .asm_type = AsmType_QUADWORD};
+          .kind = AsmOperand_REG,
+          .as.reg = BP,
+          .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
       mov.dst = (struct AsmOperand){
-          .kind = AsmOperand_REG, .as.reg = SP, .asm_type = AsmType_QUADWORD};
+          .kind = AsmOperand_REG,
+          .as.reg = SP,
+          .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
 
       pop.op = (struct AsmOperand){
-          .kind = AsmOperand_REG, .as.reg = BP, .asm_type = AsmType_QUADWORD};
+          .kind = AsmOperand_REG,
+          .as.reg = BP,
+          .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
 
       e1.kind = AsmInstr_MOV;
       e1.as.mov = mov;
-      e1.asm_type = AsmType_QUADWORD;
+      e1.asm_type = (struct AsmType){.kind = AsmType_QUADWORD};
 
       e2.kind = AsmInstr_POP;
       e2.as.pop = pop;
@@ -7212,22 +8099,47 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       break;
     }
     case IRInstr_CPY: {
-      struct AsmOperand src, dst;
+      struct AsmOperand src = codegen_irvalue(ir_instr->as.copy.src);
+      struct AsmOperand dst = codegen_irvalue(ir_instr->as.copy.dst);
 
-      src = codegen_irvalue(ir_instr->as.copy.src);
-      dst = codegen_irvalue(ir_instr->as.copy.dst);
+      int size, align;
+      get_type_size_and_align(&ir_instr->as.copy.src->type, &size, &align);
 
-      struct AsmInstr i = {0};
-      struct AsmInstrMov mov;
+      if (size <= 8) {
+        vec_insert(instrs,
+                   ((struct AsmInstr){.kind = AsmInstr_MOV,
+                                      .asm_type = src.asm_type,
+                                      .as.mov = {.src = src, .dst = dst}}));
+      } else {
+        /* Block copy for structs > 8 bytes */
+        struct AsmOperand rsi = {
+            .kind = AsmOperand_REG,
+            .as.reg = SI,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+        struct AsmOperand rdi = {
+            .kind = AsmOperand_REG,
+            .as.reg = DI,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+        struct AsmOperand rcx = {
+            .kind = AsmOperand_REG,
+            .as.reg = CX,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
 
-      mov.src = src;
-      mov.dst = dst;
-
-      i.asm_type = src.asm_type;
-      i.kind = AsmInstr_MOV;
-      i.as.mov = mov;
-
-      vec_insert(instrs, i);
+        vec_insert(instrs,
+                   ((struct AsmInstr){.kind = AsmInstr_LEA,
+                                      .as.lea = {.src = src, .dst = rsi}}));
+        vec_insert(instrs,
+                   ((struct AsmInstr){.kind = AsmInstr_LEA,
+                                      .as.lea = {.src = dst, .dst = rdi}}));
+        vec_insert(
+            instrs,
+            ((struct AsmInstr){
+                .kind = AsmInstr_MOV,
+                .asm_type = (struct AsmType){.kind = AsmType_QUADWORD},
+                .as.mov = {.src = {.kind = AsmOperand_IMM, .as.imm = size},
+                           .dst = rcx}}));
+        vec_insert(instrs, ((struct AsmInstr){.kind = AsmInstr_REP_MOVSB}));
+      }
       break;
     }
     case IRInstr_CALL: {
@@ -7282,13 +8194,15 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         struct AsmInstr padding_instr = {0};
 
         padding_instr.kind = AsmInstr_BIN;
-        padding_instr.asm_type = AsmType_QUADWORD;
+        padding_instr.asm_type = (struct AsmType){.kind = AsmType_QUADWORD};
 
         padding_instr.as.binary.kind = AsmInstrBinary_SUB;
         padding_instr.as.binary.lhs = (struct AsmOperand){
             .kind = AsmOperand_IMM, .as.imm = stack_padding};
         padding_instr.as.binary.rhs = (struct AsmOperand){
-            .kind = AsmOperand_REG, .as.reg = SP, .asm_type = AsmType_QUADWORD};
+            .kind = AsmOperand_REG,
+            .as.reg = SP,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
 
         vec_insert(instrs, padding_instr);
       }
@@ -7322,11 +8236,13 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
        * functions) */
       struct AsmInstr eax_instr = {0};
       eax_instr.kind = AsmInstr_MOV;
-      eax_instr.asm_type = AsmType_LONGWORD;
+      eax_instr.asm_type = (struct AsmType){.kind = AsmType_LONGWORD};
       eax_instr.as.mov.src =
           (struct AsmOperand){.kind = AsmOperand_IMM, .as.imm = xmm_reg_idx};
       eax_instr.as.mov.dst = (struct AsmOperand){
-          .kind = AsmOperand_REG, .as.reg = AX, .asm_type = AsmType_LONGWORD};
+          .kind = AsmOperand_REG,
+          .as.reg = AX,
+          .asm_type = (struct AsmType){.kind = AsmType_LONGWORD}};
       vec_insert(instrs, eax_instr);
 
       struct AsmInstr call_instr = {0};
@@ -7342,13 +8258,15 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       if (bytes_to_remove != 0) {
         struct AsmInstr cleanup_instr = {0};
         cleanup_instr.kind = AsmInstr_BIN;
-        cleanup_instr.asm_type = AsmType_QUADWORD;
+        cleanup_instr.asm_type = (struct AsmType){.kind = AsmType_QUADWORD};
 
         cleanup_instr.as.binary.kind = AsmInstrBinary_ADD;
         cleanup_instr.as.binary.lhs = (struct AsmOperand){
             .kind = AsmOperand_IMM, .as.imm = bytes_to_remove};
         cleanup_instr.as.binary.rhs = (struct AsmOperand){
-            .kind = AsmOperand_REG, .as.reg = SP, .asm_type = AsmType_QUADWORD};
+            .kind = AsmOperand_REG,
+            .as.reg = SP,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
         vec_insert(instrs, cleanup_instr);
       }
 
@@ -7359,8 +8277,8 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         struct AsmOperand dst_op = codegen_irvalue(ir_instr->as.call.dst);
         struct AsmInstr mov_instr = {0};
 
-        bool is_dst_float = (dst_op.asm_type == AsmType_FLOAT ||
-                             dst_op.asm_type == AsmType_DOUBLE);
+        bool is_dst_float = (dst_op.asm_type.kind == AsmType_FLOAT ||
+                             dst_op.asm_type.kind == AsmType_DOUBLE);
 
         mov_instr.kind = AsmInstr_MOV;
         mov_instr.as.mov.src =
@@ -7422,80 +8340,139 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
     case IRInstr_GETADDR: {
       struct AsmInstr i = {0};
       i.kind = AsmInstr_LEA;
-      i.asm_type = AsmType_QUADWORD;
+      i.asm_type = (struct AsmType){.kind = AsmType_QUADWORD};
       i.as.lea.src = codegen_irvalue(ir_instr->as.getaddr.src);
       i.as.lea.dst = codegen_irvalue(ir_instr->as.getaddr.dst);
       vec_insert(instrs, i);
       break;
     }
     case IRInstr_LOAD: {
-      struct AsmOperand src_ptr, dst_val, scratch_ptr;
+      struct AsmOperand src_ptr = codegen_irvalue(ir_instr->as.load.src);
+      struct AsmOperand dst_val = codegen_irvalue(ir_instr->as.load.dst);
 
-      src_ptr = codegen_irvalue(ir_instr->as.load.src);
-      dst_val = codegen_irvalue(ir_instr->as.load.dst);
+      int size, align;
+      get_type_size_and_align(&ir_instr->as.load.dst->type, &size, &align);
 
-      scratch_ptr = (struct AsmOperand){
-          .kind = AsmOperand_REG, .as.reg = R10, .asm_type = AsmType_QUADWORD};
-      struct AsmInstr i1 = {0};
-      i1.kind = AsmInstr_MOV;
-      i1.as.mov.src = src_ptr;
-      i1.as.mov.dst = scratch_ptr;
-      i1.asm_type = AsmType_QUADWORD;
+      if (size <= 8) {
+        // Standard load
+        struct AsmOperand scratch_ptr = {
+            .kind = AsmOperand_REG,
+            .as.reg = R10,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+        vec_insert(
+            instrs,
+            ((struct AsmInstr){
+                .kind = AsmInstr_MOV,
+                .as.mov = {.src = src_ptr, .dst = scratch_ptr},
+                .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}}));
 
-      struct AsmOperand indirect_op = {.kind = AsmOperand_MEMORY,
-                                       .as.mem = {.base = R10, .offset = 0},
-                                       .asm_type = dst_val.asm_type};
-      struct AsmInstr i2 = {0};
-      i2.kind = AsmInstr_MOV;
-      i2.as.mov.src = indirect_op;
-      i2.as.mov.dst = dst_val;
-      i2.asm_type = dst_val.asm_type;
+        struct AsmOperand mem_op = {.kind = AsmOperand_MEMORY,
+                                    .as.mem = {.base = R10, .offset = 0},
+                                    .asm_type = dst_val.asm_type};
+        vec_insert(instrs,
+                   ((struct AsmInstr){.kind = AsmInstr_MOV,
+                                      .as.mov = {.src = mem_op, .dst = dst_val},
+                                      .asm_type = dst_val.asm_type}));
+      } else {
+        // Block load (Copy from memory address held in src_ptr to dst_val
+        // memory)
+        struct AsmOperand rsi = {
+            .kind = AsmOperand_REG,
+            .as.reg = SI,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+        struct AsmOperand rdi = {
+            .kind = AsmOperand_REG,
+            .as.reg = DI,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+        struct AsmOperand rcx = {
+            .kind = AsmOperand_REG,
+            .as.reg = CX,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
 
-      vec_insert(instrs, i1);
-      vec_insert(instrs, i2);
+        vec_insert(instrs,
+                   ((struct AsmInstr){.kind = AsmInstr_MOV,
+                                      .as.mov = {.src = src_ptr, .dst = rsi},
+                                      .asm_type = (struct AsmType){
+                                          .kind = AsmType_QUADWORD}}));
+        vec_insert(instrs,
+                   ((struct AsmInstr){.kind = AsmInstr_LEA,
+                                      .as.lea = {.src = dst_val, .dst = rdi}}));
+        vec_insert(
+            instrs,
+            ((struct AsmInstr){
+                .kind = AsmInstr_MOV,
+                .as.mov = {.src = {.kind = AsmOperand_IMM, .as.imm = size},
+                           .dst = rcx},
+                .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}}));
+        vec_insert(instrs, ((struct AsmInstr){.kind = AsmInstr_REP_MOVSB}));
+      }
       break;
     }
     case IRInstr_STORE: {
-      struct AsmOperand src_val, dst_ptr, scratch_val, scratch_ptr;
-      bool is_float;
-      enum AsmRegister val_reg;
+      struct AsmOperand src_val = codegen_irvalue(ir_instr->as.store.val);
+      struct AsmOperand dst_ptr = codegen_irvalue(ir_instr->as.store.dst);
 
-      src_val = codegen_irvalue(ir_instr->as.store.val);
-      dst_ptr = codegen_irvalue(ir_instr->as.store.dst);
+      int size, align;
+      get_type_size_and_align(&ir_instr->as.store.val->type, &size, &align);
 
-      is_float = (src_val.asm_type == AsmType_FLOAT ||
-                  src_val.asm_type == AsmType_DOUBLE);
-      val_reg = is_float ? XMM8 : R9;
+      if (size <= 8) {
+        struct AsmOperand scratch_val = {
+            .kind = AsmOperand_REG, .as.reg = R9, .asm_type = src_val.asm_type};
+        vec_insert(instrs, ((struct AsmInstr){
+                               .kind = AsmInstr_MOV,
+                               .as.mov = {.src = src_val, .dst = scratch_val},
+                               .asm_type = src_val.asm_type}));
 
-      scratch_val = (struct AsmOperand){.kind = AsmOperand_REG,
-                                        .as.reg = val_reg,
-                                        .asm_type = src_val.asm_type};
-      struct AsmInstr i1 = {0};
-      i1.kind = AsmInstr_MOV;
-      i1.as.mov.src = src_val;
-      i1.as.mov.dst = scratch_val;
-      i1.asm_type = src_val.asm_type;
+        struct AsmOperand scratch_ptr = {
+            .kind = AsmOperand_REG,
+            .as.reg = R10,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+        vec_insert(
+            instrs,
+            ((struct AsmInstr){
+                .kind = AsmInstr_MOV,
+                .as.mov = {.src = dst_ptr, .dst = scratch_ptr},
+                .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}}));
 
-      scratch_ptr = (struct AsmOperand){
-          .kind = AsmOperand_REG, .as.reg = R10, .asm_type = AsmType_QUADWORD};
-      struct AsmInstr i2 = {0};
-      i2.kind = AsmInstr_MOV;
-      i2.as.mov.src = dst_ptr;
-      i2.as.mov.dst = scratch_ptr;
-      i2.asm_type = AsmType_QUADWORD;
+        struct AsmOperand mem_op = {.kind = AsmOperand_MEMORY,
+                                    .as.mem = {.base = R10, .offset = 0},
+                                    .asm_type = src_val.asm_type};
+        vec_insert(instrs, ((struct AsmInstr){
+                               .kind = AsmInstr_MOV,
+                               .as.mov = {.src = scratch_val, .dst = mem_op},
+                               .asm_type = src_val.asm_type}));
+      } else {
+        // Block store (Copy from src_val memory to address held in dst_ptr)
+        struct AsmOperand rsi = {
+            .kind = AsmOperand_REG,
+            .as.reg = SI,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+        struct AsmOperand rdi = {
+            .kind = AsmOperand_REG,
+            .as.reg = DI,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+        struct AsmOperand rcx = {
+            .kind = AsmOperand_REG,
+            .as.reg = CX,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
 
-      struct AsmOperand indirect_op = {.kind = AsmOperand_MEMORY,
-                                       .as.mem = {.base = R10, .offset = 0},
-                                       .asm_type = src_val.asm_type};
-      struct AsmInstr i3 = {0};
-      i3.kind = AsmInstr_MOV;
-      i3.as.mov.src = scratch_val;
-      i3.as.mov.dst = indirect_op;
-      i3.asm_type = src_val.asm_type;
-
-      vec_insert(instrs, i1);
-      vec_insert(instrs, i2);
-      vec_insert(instrs, i3);
+        vec_insert(instrs,
+                   ((struct AsmInstr){.kind = AsmInstr_LEA,
+                                      .as.lea = {.src = src_val, .dst = rsi}}));
+        vec_insert(instrs,
+                   ((struct AsmInstr){.kind = AsmInstr_MOV,
+                                      .as.mov = {.src = dst_ptr, .dst = rdi},
+                                      .asm_type = (struct AsmType){
+                                          .kind = AsmType_QUADWORD}}));
+        vec_insert(
+            instrs,
+            ((struct AsmInstr){
+                .kind = AsmInstr_MOV,
+                .as.mov = {.src = {.kind = AsmOperand_IMM, .as.imm = size},
+                           .dst = rcx},
+                .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}}));
+        vec_insert(instrs, ((struct AsmInstr){.kind = AsmInstr_REP_MOVSB}));
+      }
       break;
     }
     case IRInstr_CAST: {
@@ -7510,7 +8487,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         i.asm_type = dst.asm_type;
 
         vec_insert(instrs, i);
-      } else if (src.asm_type == dst.asm_type) {
+      } else if (src.asm_type.kind == dst.asm_type.kind) {
         struct AsmInstr i = {0};
         i.kind = AsmInstr_MOV;
         i.as.mov.src = src;
@@ -7531,6 +8508,187 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       }
       break;
     }
+    case IRInstr_ADD_PTR: {
+      struct AsmOperand ptr = codegen_irvalue(ir_instr->as.add_ptr.ptr);
+      struct AsmOperand dst = codegen_irvalue(ir_instr->as.add_ptr.dst);
+
+      struct AsmInstr i1 = {0}, i2 = {0};
+      i1.kind = AsmInstr_MOV;
+      i1.as.mov.src = ptr;
+      i1.as.mov.dst = dst;
+      i1.asm_type = (struct AsmType){.kind = AsmType_QUADWORD};
+
+      i2.kind = AsmInstr_BIN;
+      i2.as.binary.kind = AsmInstrBinary_ADD;
+      i2.as.binary.lhs = (struct AsmOperand){
+          .kind = AsmOperand_IMM, .as.imm = ir_instr->as.add_ptr.offset};
+      i2.as.binary.rhs = dst;
+      i2.asm_type = (struct AsmType){.kind = AsmType_QUADWORD};
+
+      vec_insert(instrs, i1);
+      vec_insert(instrs, i2);
+      break;
+    }
+
+    case IRInstr_CPY_FROM_OFFSET: {
+      struct AsmOperand src = codegen_irvalue(ir_instr->as.cpy_from_offset.src);
+      struct AsmOperand dst = codegen_irvalue(ir_instr->as.cpy_from_offset.dst);
+
+      int size, align;
+      get_type_size_and_align(&ir_instr->as.cpy_from_offset.dst->type, &size,
+                              &align);
+
+      if (size <= 8) {
+        struct AsmOperand scratch_reg = {
+            .kind = AsmOperand_REG,
+            .as.reg = R10,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
+        /* leaq src, %r10 */
+        struct AsmInstr i1 = {0};
+        i1.kind = AsmInstr_LEA;
+        i1.as.lea.src = src;
+        i1.as.lea.dst = scratch_reg;
+
+        /* movq offset(%r10), dst */
+        struct AsmOperand mem_op = {
+            .kind = AsmOperand_MEMORY,
+            .as.mem = {.base = R10,
+                       .offset = ir_instr->as.cpy_from_offset.offset},
+            .asm_type = dst.asm_type};
+        struct AsmInstr i2 = {0};
+        i2.kind = AsmInstr_MOV;
+        i2.as.mov.src = mem_op;
+        i2.as.mov.dst = dst;
+        i2.asm_type = dst.asm_type;
+
+        vec_insert(instrs, i1);
+        vec_insert(instrs, i2);
+      } else {
+        /* Block Copy:
+         * leaq src, %r10
+         * leaq offset(%r10), %rsi
+         * leaq dst, %rdi
+         * movq $size, %rcx
+         * rep movsb
+         */
+        struct AsmOperand r10 = {
+            .kind = AsmOperand_REG,
+            .as.reg = R10,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+        struct AsmOperand rsi = {
+            .kind = AsmOperand_REG,
+            .as.reg = SI,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+        struct AsmOperand rdi = {
+            .kind = AsmOperand_REG,
+            .as.reg = DI,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+        struct AsmOperand rcx = {
+            .kind = AsmOperand_REG,
+            .as.reg = CX,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
+        vec_insert(instrs,
+                   ((struct AsmInstr){.kind = AsmInstr_LEA,
+                                      .as.lea = {.src = src, .dst = r10}}));
+
+        struct AsmOperand mem_offset = {
+            .kind = AsmOperand_MEMORY,
+            .as.mem = {.base = R10,
+                       .offset = ir_instr->as.cpy_from_offset.offset}};
+        vec_insert(instrs, ((struct AsmInstr){
+                               .kind = AsmInstr_LEA,
+                               .as.lea = {.src = mem_offset, .dst = rsi}}));
+        vec_insert(instrs,
+                   ((struct AsmInstr){.kind = AsmInstr_LEA,
+                                      .as.lea = {.src = dst, .dst = rdi}}));
+        vec_insert(
+            instrs,
+            ((struct AsmInstr){
+                .kind = AsmInstr_MOV,
+                .asm_type = (struct AsmType){.kind = AsmType_QUADWORD},
+                .as.mov = {.src = {.kind = AsmOperand_IMM, .as.imm = size},
+                           .dst = rcx}}));
+        vec_insert(instrs, ((struct AsmInstr){.kind = AsmInstr_REP_MOVSB}));
+      }
+      break;
+    }
+
+    case IRInstr_CPY_TO_OFFSET: {
+      struct AsmOperand dst = codegen_irvalue(ir_instr->as.cpy_to_offset.dst);
+      struct AsmOperand src = codegen_irvalue(ir_instr->as.cpy_to_offset.src);
+
+      int size, align;
+      get_type_size_and_align(&ir_instr->as.cpy_to_offset.src->type, &size,
+                              &align);
+
+      if (size <= 8) {
+        struct AsmOperand scratch_reg = {
+            .kind = AsmOperand_REG,
+            .as.reg = R10,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
+        /* leaq dst, %r10 */
+        vec_insert(instrs, ((struct AsmInstr){
+                               .kind = AsmInstr_LEA,
+                               .as.lea = {.src = dst, .dst = scratch_reg}}));
+
+        /* movq src, offset(%r10) */
+        struct AsmOperand mem_op = {
+            .kind = AsmOperand_MEMORY,
+            .as.mem = {.base = R10,
+                       .offset = ir_instr->as.cpy_to_offset.offset},
+            .asm_type = src.asm_type};
+        vec_insert(instrs,
+                   ((struct AsmInstr){.kind = AsmInstr_MOV,
+                                      .asm_type = src.asm_type,
+                                      .as.mov = {.src = src, .dst = mem_op}}));
+      } else {
+        /* Block Copy */
+        struct AsmOperand r10 = {
+            .kind = AsmOperand_REG,
+            .as.reg = R10,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+        struct AsmOperand rsi = {
+            .kind = AsmOperand_REG,
+            .as.reg = SI,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+        struct AsmOperand rdi = {
+            .kind = AsmOperand_REG,
+            .as.reg = DI,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+        struct AsmOperand rcx = {
+            .kind = AsmOperand_REG,
+            .as.reg = CX,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
+        vec_insert(instrs,
+                   ((struct AsmInstr){.kind = AsmInstr_LEA,
+                                      .as.lea = {.src = src, .dst = rsi}}));
+        vec_insert(instrs,
+                   ((struct AsmInstr){.kind = AsmInstr_LEA,
+                                      .as.lea = {.src = dst, .dst = r10}}));
+
+        struct AsmOperand mem_offset = {
+            .kind = AsmOperand_MEMORY,
+            .as.mem = {.base = R10,
+                       .offset = ir_instr->as.cpy_to_offset.offset}};
+        vec_insert(instrs, ((struct AsmInstr){
+                               .kind = AsmInstr_LEA,
+                               .as.lea = {.src = mem_offset, .dst = rdi}}));
+
+        vec_insert(
+            instrs,
+            ((struct AsmInstr){
+                .kind = AsmInstr_MOV,
+                .asm_type = (struct AsmType){.kind = AsmType_QUADWORD},
+                .as.mov = {.src = {.kind = AsmOperand_IMM, .as.imm = size},
+                           .dst = rcx}}));
+        vec_insert(instrs, ((struct AsmInstr){.kind = AsmInstr_REP_MOVSB}));
+      }
+      break;
+    }
     default:
       break;
   }
@@ -7548,28 +8706,36 @@ struct AsmFunction codegen_fn(struct IRFunction *ir_func)
 
   /*  In the prologue, we save the caller's BP.  */
   push.op = (struct AsmOperand){
-      .kind = AsmOperand_REG, .as.reg = BP, .asm_type = AsmType_QUADWORD};
+      .kind = AsmOperand_REG,
+      .as.reg = BP,
+      .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
   p1.kind = AsmInstr_PUSH;
   p1.as.push = push;
   /*  ...and place ours SP into BP.  */
   mov.src = (struct AsmOperand){
-      .kind = AsmOperand_REG, .as.reg = SP, .asm_type = AsmType_QUADWORD};
+      .kind = AsmOperand_REG,
+      .as.reg = SP,
+      .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
   mov.dst = (struct AsmOperand){
-      .kind = AsmOperand_REG, .as.reg = BP, .asm_type = AsmType_QUADWORD};
+      .kind = AsmOperand_REG,
+      .as.reg = BP,
+      .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
   p2.kind = AsmInstr_MOV;
   p2.as.mov = mov;
-  p2.asm_type = AsmType_QUADWORD;
+  p2.asm_type = (struct AsmType){.kind = AsmType_QUADWORD};
 
   /* We will need to reserve the stack space for our local variables.
    * NOTE: 0 for now is a placeholder that is patched up later on.  */
   sub.kind = AsmInstrBinary_SUB;
   sub.lhs = (struct AsmOperand){.kind = AsmOperand_IMM, .as.imm = 0};
   sub.rhs = (struct AsmOperand){
-      .kind = AsmOperand_REG, .as.reg = SP, .asm_type = AsmType_QUADWORD};
+      .kind = AsmOperand_REG,
+      .as.reg = SP,
+      .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
 
   p3.kind = AsmInstr_BIN;
   p3.as.binary = sub;
-  p3.asm_type = AsmType_QUADWORD;
+  p3.asm_type = (struct AsmType){.kind = AsmType_QUADWORD};
 
   vec_insert(&func.body, p1);
   vec_insert(&func.body, p2);
@@ -7587,7 +8753,7 @@ struct AsmFunction codegen_fn(struct IRFunction *ir_func)
   /* Move the values from the registers and from the stack that we had
    * received previously by the caller, into pseudo registers.  */
   for (int i = 0; i < num_params; i++) {
-    enum AsmType param_asm_type =
+    struct AsmType param_asm_type =
         type_to_asm_type(ir_func->params.data[i].type);
     bool is_float = (ir_func->params.data[i].type.kind == F32_T ||
                      ir_func->params.data[i].type.kind == F64_T);
@@ -7665,13 +8831,12 @@ struct Map {
   struct Map *next;
   char *name;
   int offset;
+  struct AsmType asm_type;
 };
-
-int get_offset(struct Map *map, char *name, int *offset)
+int get_offset(struct Map *map, char *name, struct AsmType asm_type,
+               int *used_stack_bytes)
 {
-  struct Map *curr;
-
-  curr = map;
+  struct Map *curr = map;
 
   while (curr) {
     if (curr->name && strcmp(curr->name, name) == 0) {
@@ -7685,23 +8850,30 @@ int get_offset(struct Map *map, char *name, int *offset)
     curr = curr->next;
   }
 
-  *offset -= 8;
+  int size = asm_type_stack_size(asm_type);
+  int align = asm_type_stack_align(asm_type);
 
-  struct Map *new_entry;
+  int aligned_used = align_up_int(*used_stack_bytes, align);
+  int new_used = aligned_used + size;
+  int new_offset = -new_used;
 
-  new_entry = malloc(sizeof(struct Map));
+  struct Map *new_entry = malloc(sizeof(struct Map));
+  assert(new_entry);
 
   new_entry->next = NULL;
   new_entry->name = name;
-  new_entry->offset = *offset;
+  new_entry->offset = new_offset;
+  new_entry->asm_type = asm_type;
 
   curr->next = new_entry;
+  *used_stack_bytes = new_used;
 
-  return *offset;
+  return new_offset;
 }
 
 static inline void replace_operand_pseudo(struct AsmOperand *op,
-                                          struct Map *map, int *offset)
+                                          struct Map *map,
+                                          int *used_stack_bytes)
 {
   if (op->kind == AsmOperand_PSEUDO) {
     for (int k = 0; k < global_constants.len; k++) {
@@ -7713,7 +8885,8 @@ static inline void replace_operand_pseudo(struct AsmOperand *op,
     }
 
     op->kind = AsmOperand_STACK;
-    op->as.stack_offset = get_offset(map, op->as.pseudo, offset);
+    op->as.stack_offset =
+        get_offset(map, op->as.pseudo, op->asm_type, used_stack_bytes);
   }
 }
 
@@ -7724,44 +8897,47 @@ struct AsmProgram *replace_pseudo(struct AsmProgram *asmcode)
     memset(map, 0, sizeof(struct Map));
     map->next = NULL;
 
-    int offset = 0;
-    int stack_size = 0;
+    int used_stack_bytes = 0;
 
     for (int j = 0; j < asmcode->funcs.data[i].body.len; j++) {
       struct AsmInstr *asminstr = &asmcode->funcs.data[i].body.data[j];
 
       switch (asminstr->kind) {
         case AsmInstr_CVT:
-          replace_operand_pseudo(&asminstr->as.cvt.src, map, &offset);
-          replace_operand_pseudo(&asminstr->as.cvt.dst, map, &offset);
+          replace_operand_pseudo(&asminstr->as.cvt.src, map, &used_stack_bytes);
+          replace_operand_pseudo(&asminstr->as.cvt.dst, map, &used_stack_bytes);
           break;
         case AsmInstr_UNARY:
-          replace_operand_pseudo(&asminstr->as.unary.op, map, &offset);
+          replace_operand_pseudo(&asminstr->as.unary.op, map,
+                                 &used_stack_bytes);
           break;
         case AsmInstr_LEA:
-          replace_operand_pseudo(&asminstr->as.lea.src, map, &offset);
-          replace_operand_pseudo(&asminstr->as.lea.dst, map, &offset);
+          replace_operand_pseudo(&asminstr->as.lea.src, map, &used_stack_bytes);
+          replace_operand_pseudo(&asminstr->as.lea.dst, map, &used_stack_bytes);
           break;
         case AsmInstr_SetCC:
-          replace_operand_pseudo(&asminstr->as.setcc.op, map, &offset);
+          replace_operand_pseudo(&asminstr->as.setcc.op, map,
+                                 &used_stack_bytes);
           break;
         case AsmInstr_MOV:
-          replace_operand_pseudo(&asminstr->as.mov.src, map, &offset);
-          replace_operand_pseudo(&asminstr->as.mov.dst, map, &offset);
+          replace_operand_pseudo(&asminstr->as.mov.src, map, &used_stack_bytes);
+          replace_operand_pseudo(&asminstr->as.mov.dst, map, &used_stack_bytes);
           break;
         case AsmInstr_BIN:
-          replace_operand_pseudo(&asminstr->as.binary.lhs, map, &offset);
-          replace_operand_pseudo(&asminstr->as.binary.rhs, map, &offset);
+          replace_operand_pseudo(&asminstr->as.binary.lhs, map,
+                                 &used_stack_bytes);
+          replace_operand_pseudo(&asminstr->as.binary.rhs, map,
+                                 &used_stack_bytes);
           break;
         case AsmInstr_CMP:
-          replace_operand_pseudo(&asminstr->as.cmp.lhs, map, &offset);
-          replace_operand_pseudo(&asminstr->as.cmp.rhs, map, &offset);
+          replace_operand_pseudo(&asminstr->as.cmp.lhs, map, &used_stack_bytes);
+          replace_operand_pseudo(&asminstr->as.cmp.rhs, map, &used_stack_bytes);
           break;
         case AsmInstr_PUSH:
-          replace_operand_pseudo(&asminstr->as.push.op, map, &offset);
+          replace_operand_pseudo(&asminstr->as.push.op, map, &used_stack_bytes);
           break;
         case AsmInstr_POP:
-          replace_operand_pseudo(&asminstr->as.pop.op, map, &offset);
+          replace_operand_pseudo(&asminstr->as.pop.op, map, &used_stack_bytes);
           break;
         case AsmInstr_RET:
         case AsmInstr_CALL:
@@ -7772,11 +8948,7 @@ struct AsmProgram *replace_pseudo(struct AsmProgram *asmcode)
       }
     }
 
-    stack_size = -offset;
-    if (stack_size % 16 != 0) {
-      stack_size = (stack_size / 16 + 1) * 16;
-    }
-
+    int stack_size = align_up_int(used_stack_bytes, 16);
     asmcode->funcs.data[i].body.data[2].as.binary.lhs.as.imm = stack_size;
 
     struct Map *curr = map, *tmp;
@@ -7800,8 +8972,8 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
         case AsmInstr_CMP: {
           bool is_float, is_both_stack, is_dst_imm, is_dst_float_stack;
 
-          is_float = (asminstr->asm_type == AsmType_FLOAT ||
-                      asminstr->asm_type == AsmType_DOUBLE);
+          is_float = (asminstr->asm_type.kind == AsmType_FLOAT ||
+                      asminstr->asm_type.kind == AsmType_DOUBLE);
 
           is_both_stack = (asminstr->as.cmp.lhs.kind == AsmOperand_STACK &&
                            asminstr->as.cmp.rhs.kind == AsmOperand_STACK);
@@ -7837,8 +9009,8 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
         }
         case AsmInstr_CVT: {
           if (asminstr->as.cvt.dst.kind == AsmOperand_STACK) {
-            bool is_float = (asminstr->asm_type == AsmType_FLOAT ||
-                             asminstr->asm_type == AsmType_DOUBLE);
+            bool is_float = (asminstr->asm_type.kind == AsmType_FLOAT ||
+                             asminstr->asm_type.kind == AsmType_DOUBLE);
 
             struct AsmOperand scratch_op = {
                 .kind = AsmOperand_REG,
@@ -7866,20 +9038,21 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
         }
         case AsmInstr_LEA: {
           if (asminstr->as.lea.dst.kind == AsmOperand_STACK) {
-            struct AsmOperand scratch_op = {.kind = AsmOperand_REG,
-                                            .as.reg = R10,
-                                            .asm_type = AsmType_QUADWORD};
+            struct AsmOperand scratch_op = {
+                .kind = AsmOperand_REG,
+                .as.reg = R10,
+                .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
             struct AsmInstr i1 = {0}, i2 = {0};
 
             i1.kind = AsmInstr_LEA;
             i1.as.lea.src = asminstr->as.lea.src;
             i1.as.lea.dst = scratch_op;
-            i1.asm_type = AsmType_QUADWORD;
+            i1.asm_type = (struct AsmType){.kind = AsmType_QUADWORD};
 
             i2.kind = AsmInstr_MOV;
             i2.as.mov.src = scratch_op;
             i2.as.mov.dst = asminstr->as.lea.dst;
-            i2.asm_type = AsmType_QUADWORD;
+            i2.asm_type = (struct AsmType){.kind = AsmType_QUADWORD};
 
             vec_insert(&instrs, i1);
             vec_insert(&instrs, i2);
@@ -7891,8 +9064,8 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
         case AsmInstr_MOV: {
           if ((asminstr->as.mov.src.kind == AsmOperand_STACK &&
                asminstr->as.mov.dst.kind == AsmOperand_STACK) ||
-              ((asminstr->asm_type == AsmType_FLOAT ||
-                asminstr->asm_type == AsmType_DOUBLE) &&
+              ((asminstr->asm_type.kind == AsmType_FLOAT ||
+                asminstr->asm_type.kind == AsmType_DOUBLE) &&
                asminstr->as.mov.dst.kind == AsmOperand_STACK) ||
               (asminstr->as.mov.src.kind == AsmOperand_MEMORY &&
                asminstr->as.mov.dst.kind == AsmOperand_STACK)) {
@@ -7901,8 +9074,8 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
             struct AsmInstrMov mov1, mov2;
             struct AsmInstr i1 = {0}, i2 = {0};
 
-            scratch_reg = (asminstr->asm_type == AsmType_FLOAT ||
-                           asminstr->asm_type == AsmType_DOUBLE)
+            scratch_reg = (asminstr->asm_type.kind == AsmType_FLOAT ||
+                           asminstr->asm_type.kind == AsmType_DOUBLE)
                               ? XMM8
                               : R10;
             scratch_op.kind = AsmOperand_REG;
@@ -7930,8 +9103,8 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
           break;
         }
         case AsmInstr_BIN: {
-          bool is_float = (asminstr->asm_type == AsmType_FLOAT ||
-                           asminstr->asm_type == AsmType_DOUBLE);
+          bool is_float = (asminstr->asm_type.kind == AsmType_FLOAT ||
+                           asminstr->asm_type.kind == AsmType_DOUBLE);
 
           /* imul and float ops cannot use mem as dst */
           if ((asminstr->as.binary.kind == AsmInstrBinary_MUL || is_float) &&
@@ -8141,7 +9314,7 @@ void emit_operand(FILE *f, struct AsmOperand *op)
         }
 
         case AX: {
-          switch (op->asm_type) {
+          switch (op->asm_type.kind) {
             case AsmType_BYTE: {
               fprintf(f, "%%al");
               break;
@@ -8165,7 +9338,7 @@ void emit_operand(FILE *f, struct AsmOperand *op)
           break;
         }
         case DI: {
-          switch (op->asm_type) {
+          switch (op->asm_type.kind) {
             case AsmType_BYTE: {
               fprintf(f, "%%dil");
               break;
@@ -8188,7 +9361,7 @@ void emit_operand(FILE *f, struct AsmOperand *op)
           break;
         }
         case SI: {
-          switch (op->asm_type) {
+          switch (op->asm_type.kind) {
             case AsmType_BYTE: {
               fprintf(f, "%%sil");
               break;
@@ -8211,7 +9384,7 @@ void emit_operand(FILE *f, struct AsmOperand *op)
           break;
         }
         case DX: {
-          switch (op->asm_type) {
+          switch (op->asm_type.kind) {
             case AsmType_BYTE: {
               fprintf(f, "%%dl");
               break;
@@ -8234,7 +9407,7 @@ void emit_operand(FILE *f, struct AsmOperand *op)
           break;
         }
         case CX: {
-          switch (op->asm_type) {
+          switch (op->asm_type.kind) {
             case AsmType_BYTE: {
               fprintf(f, "%%cl");
               break;
@@ -8257,7 +9430,7 @@ void emit_operand(FILE *f, struct AsmOperand *op)
           break;
         }
         case R8: {
-          switch (op->asm_type) {
+          switch (op->asm_type.kind) {
             case AsmType_BYTE: {
               fprintf(f, "%%r8b");
               break;
@@ -8280,7 +9453,7 @@ void emit_operand(FILE *f, struct AsmOperand *op)
           break;
         }
         case R9: {
-          switch (op->asm_type) {
+          switch (op->asm_type.kind) {
             case AsmType_BYTE: {
               fprintf(f, "%%r9b");
               break;
@@ -8303,7 +9476,7 @@ void emit_operand(FILE *f, struct AsmOperand *op)
           break;
         }
         case R10: {
-          switch (op->asm_type) {
+          switch (op->asm_type.kind) {
             case AsmType_BYTE: {
               fprintf(f, "%%r10b");
               break;
@@ -8326,7 +9499,7 @@ void emit_operand(FILE *f, struct AsmOperand *op)
           break;
         }
         case BP: {
-          switch (op->asm_type) {
+          switch (op->asm_type.kind) {
             case AsmType_BYTE: {
               fprintf(f, "%%bpl");
               break;
@@ -8349,7 +9522,7 @@ void emit_operand(FILE *f, struct AsmOperand *op)
           break;
         }
         case SP: {
-          switch (op->asm_type) {
+          switch (op->asm_type.kind) {
             case AsmType_BYTE: {
               fprintf(f, "%%spl");
               break;
@@ -8421,13 +9594,13 @@ void emit(struct AsmProgram *prog, char *path)
           break;
         }
         case AsmInstr_MOV: {
-          if (instr->asm_type == AsmType_FLOAT) {
+          if (instr->asm_type.kind == AsmType_FLOAT) {
             fprintf(f, "movss ");
-          } else if (instr->asm_type == AsmType_DOUBLE) {
+          } else if (instr->asm_type.kind == AsmType_DOUBLE) {
             fprintf(f, "movsd ");
           } else {
             fprintf(f, "mov");
-            switch (instr->asm_type) {
+            switch (instr->asm_type.kind) {
               case AsmType_BYTE:
                 fprintf(f, "b ");
                 break;
@@ -8454,13 +9627,13 @@ void emit(struct AsmProgram *prog, char *path)
         case AsmInstr_BIN: {
           switch (instr->as.binary.kind) {
             case AsmInstrBinary_ADD: {
-              if (instr->asm_type == AsmType_FLOAT) {
+              if (instr->asm_type.kind == AsmType_FLOAT) {
                 fprintf(f, "addss ");
-              } else if (instr->asm_type == AsmType_DOUBLE) {
+              } else if (instr->asm_type.kind == AsmType_DOUBLE) {
                 fprintf(f, "addsd ");
               } else {
                 fprintf(f, "add");
-                switch (instr->asm_type) {
+                switch (instr->asm_type.kind) {
                   case AsmType_BYTE:
                     fprintf(f, "b ");
                     break;
@@ -8480,13 +9653,13 @@ void emit(struct AsmProgram *prog, char *path)
               break;
             }
             case AsmInstrBinary_SUB: {
-              if (instr->asm_type == AsmType_FLOAT) {
+              if (instr->asm_type.kind == AsmType_FLOAT) {
                 fprintf(f, "subss ");
-              } else if (instr->asm_type == AsmType_DOUBLE) {
+              } else if (instr->asm_type.kind == AsmType_DOUBLE) {
                 fprintf(f, "subsd ");
               } else {
                 fprintf(f, "sub");
-                switch (instr->asm_type) {
+                switch (instr->asm_type.kind) {
                   case AsmType_BYTE:
                     fprintf(f, "b ");
                     break;
@@ -8506,13 +9679,13 @@ void emit(struct AsmProgram *prog, char *path)
               break;
             }
             case AsmInstrBinary_MUL: {
-              if (instr->asm_type == AsmType_FLOAT) {
+              if (instr->asm_type.kind == AsmType_FLOAT) {
                 fprintf(f, "mulss ");
-              } else if (instr->asm_type == AsmType_DOUBLE) {
+              } else if (instr->asm_type.kind == AsmType_DOUBLE) {
                 fprintf(f, "mulsd ");
               } else {
                 fprintf(f, "imul ");
-                switch (instr->asm_type) {
+                switch (instr->asm_type.kind) {
                   case AsmType_BYTE:
                     fprintf(f, "b ");
                     break;
@@ -8532,9 +9705,9 @@ void emit(struct AsmProgram *prog, char *path)
               break;
             }
             case AsmInstrBinary_DIV: {
-              if (instr->asm_type == AsmType_FLOAT) {
+              if (instr->asm_type.kind == AsmType_FLOAT) {
                 fprintf(f, "divss ");
-              } else if (instr->asm_type == AsmType_DOUBLE) {
+              } else if (instr->asm_type.kind == AsmType_DOUBLE) {
                 fprintf(f, "divsd ");
               } else {
                 assert(0 && "integer div not implemented");
@@ -8570,7 +9743,7 @@ void emit(struct AsmProgram *prog, char *path)
         case AsmInstr_CMP: {
           char *i;
 
-          switch (instr->as.cmp.asm_type) {
+          switch (instr->as.cmp.asm_type.kind) {
             case AsmType_BYTE:
               i = "cmpb";
               break;
@@ -8691,7 +9864,7 @@ void emit(struct AsmProgram *prog, char *path)
         }
         case AsmInstr_UNARY: {
           fprintf(f, "neg");
-          switch (instr->asm_type) {
+          switch (instr->asm_type.kind) {
             case AsmType_BYTE:
               fprintf(f, "b");
               break;
@@ -8713,15 +9886,15 @@ void emit(struct AsmProgram *prog, char *path)
           break;
         }
         case AsmInstr_CVT: {
-          if (instr->asm_type == AsmType_FLOAT) {
+          if (instr->asm_type.kind == AsmType_FLOAT) {
             fprintf(f, "cvtss2sd ");
-          } else if (instr->asm_type == AsmType_DOUBLE) {
+          } else if (instr->asm_type.kind == AsmType_DOUBLE) {
             fprintf(f, "cvtsd2ss ");
-          } else if (instr->asm_type == AsmType_BYTE) {
+          } else if (instr->asm_type.kind == AsmType_BYTE) {
             fprintf(f, instr->as.cvt.is_unsigned ? "movzbl " : "movsbl ");
-          } else if (instr->asm_type == AsmType_WORD) {
+          } else if (instr->asm_type.kind == AsmType_WORD) {
             fprintf(f, instr->as.cvt.is_unsigned ? "movzwl " : "movswl ");
-          } else if (instr->asm_type == AsmType_LONGWORD) {
+          } else if (instr->asm_type.kind == AsmType_LONGWORD) {
             if (instr->as.cvt.is_unsigned) {
               fprintf(f, "movl ");
             } else {
@@ -8734,6 +9907,10 @@ void emit(struct AsmProgram *prog, char *path)
           fprintf(f, ", ");
           emit_operand(f, &instr->as.cvt.dst);
           fprintf(f, "\n");
+          break;
+        }
+        case AsmInstr_REP_MOVSB: {
+          fprintf(f, "rep movsb\n");
           break;
         }
         default:
