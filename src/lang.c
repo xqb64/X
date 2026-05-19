@@ -1147,46 +1147,6 @@ bool types_equal(Type a, Type b)
 void print_expr(struct Expr *expr, int spaces)
 {
   switch (expr->kind) {
-    case EXPR_ADDROF: {
-      printf("AddrOf(\n");
-      print_indent(spaces + 2);
-      print_expr(expr->as.addrof.expr, spaces + 2);
-      printf("\n");
-      print_indent(spaces);
-      printf(")");
-      break;
-    }
-    case EXPR_DEREF: {
-      printf("Deref(\n");
-      print_indent(spaces + 2);
-      print_expr(expr->as.deref.expr, spaces + 2);
-      printf("\n");
-      print_indent(spaces);
-      printf(")");
-      break;
-    }
-    case EXPR_CAST: {
-      printf("Cast(\n");
-      print_indent(spaces + 2);
-      print_expr(expr->as.cast.expr, spaces + 2);
-      printf("\n");
-      print_indent(spaces);
-      printf(")");
-      break;
-    }
-    case EXPR_UNARY: {
-      printf("Unary(\n");
-
-      print_indent(spaces + 2);
-      printf("expr = ");
-      print_expr(expr->as.unary.expr, spaces + 4);
-      printf(",\n");
-
-      print_indent(spaces);
-      printf(")");
-
-      break;
-    }
     case EXPR_LITERAL: {
       if (expr->as.literal.kind == LITERAL_BOOL) {
         printf("Literal(\n");
@@ -1258,6 +1218,19 @@ void print_expr(struct Expr *expr, int spaces)
       printf("Variable(%s)", expr->as.var.name);
       break;
     }
+    case EXPR_UNARY: {
+      printf("Unary(\n");
+
+      print_indent(spaces + 2);
+      printf("expr = ");
+      print_expr(expr->as.unary.expr, spaces + 4);
+      printf(",\n");
+
+      print_indent(spaces);
+      printf(")");
+
+      break;
+    }
     case EXPR_BINARY: {
       printf("Binary(\n");
 
@@ -1321,31 +1294,65 @@ void print_expr(struct Expr *expr, int spaces)
       printf(")");
       break;
     }
+    case EXPR_ADDROF: {
+      printf("AddrOf(\n");
+      print_indent(spaces + 2);
+      print_expr(expr->as.addrof.expr, spaces + 2);
+      printf("\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case EXPR_DEREF: {
+      printf("Deref(\n");
+      print_indent(spaces + 2);
+      print_expr(expr->as.deref.expr, spaces + 2);
+      printf("\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case EXPR_CAST: {
+      printf("Cast(\n");
+      print_indent(spaces + 2);
+      print_expr(expr->as.cast.expr, spaces + 2);
+      printf("\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
   }
 }
 
 void free_expr(struct Expr *expr)
 {
   switch (expr->kind) {
-    case EXPR_DEREF: {
-      free_expr(expr->as.deref.expr);
-      free(expr->as.deref.expr);
+    case EXPR_LITERAL: {
+      switch (expr->as.literal.kind) {
+        case LITERAL_NUM:
+        case LITERAL_BOOL:
+          break;
+        case LITERAL_STR:
+          free(expr->as.literal.as.str);
+          break;
+      }
       break;
     }
-    case EXPR_ADDROF: {
-      free_expr(expr->as.addrof.expr);
-      free(expr->as.addrof.expr);
-      break;
-    }
-    case EXPR_CAST: {
-      free_expr(expr->as.cast.expr);
-      free(expr->as.cast.expr);
+    case EXPR_VARIABLE: {
+      free(expr->as.var.name);
       break;
     }
     case EXPR_UNARY: {
       free_expr(expr->as.unary.expr);
       free(expr->as.unary.expr);
       free(expr->as.unary.op);
+      break;
+    }
+    case EXPR_BINARY: {
+      free_expr(expr->as.binary.lhs);
+      free_expr(expr->as.binary.rhs);
+      free(expr->as.binary.lhs);
+      free(expr->as.binary.rhs);
       break;
     }
     case EXPR_ASSIGN: {
@@ -1364,26 +1371,19 @@ void free_expr(struct Expr *expr)
       vec_free(&expr->as.call.arguments);
       break;
     }
-    case EXPR_LITERAL: {
-      switch (expr->as.literal.kind) {
-        case LITERAL_NUM:
-        case LITERAL_BOOL:
-          break;
-        case LITERAL_STR:
-          free(expr->as.literal.as.str);
-          break;
-      }
+    case EXPR_ADDROF: {
+      free_expr(expr->as.addrof.expr);
+      free(expr->as.addrof.expr);
       break;
     }
-    case EXPR_VARIABLE: {
-      free(expr->as.var.name);
+    case EXPR_DEREF: {
+      free_expr(expr->as.deref.expr);
+      free(expr->as.deref.expr);
       break;
     }
-    case EXPR_BINARY: {
-      free_expr(expr->as.binary.lhs);
-      free_expr(expr->as.binary.rhs);
-      free(expr->as.binary.lhs);
-      free(expr->as.binary.rhs);
+    case EXPR_CAST: {
+      free_expr(expr->as.cast.expr);
+      free(expr->as.cast.expr);
       break;
     }
   }
@@ -1482,28 +1482,74 @@ struct Stmt {
 void print_stmt(struct Stmt *stmt, int spaces)
 {
   switch (stmt->kind) {
-    case STMT_BREAK: {
+    case STMT_FN: {
       print_indent(spaces);
-      printf("STMT_BREAK(...)\n");
-      break;
-    }
-    case STMT_CONTINUE: {
-      print_indent(spaces);
-      printf("STMT_CONTINUE(...)\n");
-      break;
-    }
-    case STMT_WHILE: {
-      print_indent(spaces);
-      printf("STMT_WHILE(\n");
+      printf("STMT_FN(\n");
 
       print_indent(spaces + 2);
-      printf("cond = ");
-      print_expr(&stmt->as.while_stmt.cond, spaces + 2);
+      printf("name = %s,\n", stmt->as.fn.name);
+
+      print_indent(spaces + 2);
+      printf("params = [\n");
+      for (int i = 0; i < stmt->as.fn.params.len; i++) {
+        print_indent(spaces + 4);
+        printf("%s: ", stmt->as.fn.params.data[i].name);
+        print_type(&stmt->as.fn.params.data[i].type, 0);
+        printf(",\n");
+      }
+      print_indent(spaces + 2);
+      printf("],\n");
+
+      print_indent(spaces + 2);
+      printf("body = [\n");
+      for (int i = 0; i < stmt->as.fn.body.len; i++) {
+        print_stmt(&stmt->as.fn.body.data[i], spaces + 4);
+      }
+      print_indent(spaces + 2);
+      printf("],\n");
+
+      print_indent(spaces + 2);
+      printf("retval = ");
+      print_type(&stmt->as.fn.retval, spaces + 4);
+      printf("\n");
+
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
+    case STMT_LET: {
+      print_indent(spaces);
+      printf("STMT_LET(\n");
+
+      print_indent(spaces + 2);
+      printf("name = %s,\n", stmt->as.let.name);
+
+      print_indent(spaces + 2);
+      printf("type = ");
+      print_type(&stmt->as.let.type, spaces + 4);
       printf(",\n");
 
       print_indent(spaces + 2);
-      printf("body = \n");
-      print_stmt(stmt->as.while_stmt.body, spaces + 2);
+      printf("init = ");
+      print_expr(stmt->as.let.init, spaces + 2);
+      printf("\n");
+
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
+    case STMT_RET: {
+      print_indent(spaces);
+      printf("STMT_RET(\n");
+
+      print_indent(spaces + 2);
+      printf("val = ");
+      if (stmt->as.ret.val) {
+        print_expr(stmt->as.ret.val, spaces + 2);
+      } else {
+        printf("NULL");
+      }
+      printf("\n");
 
       print_indent(spaces);
       printf(")\n");
@@ -1532,26 +1578,47 @@ void print_stmt(struct Stmt *stmt, int spaces)
       printf(")\n");
       break;
     }
-    case STMT_FN: {
+    case STMT_WHILE: {
       print_indent(spaces);
-      printf("STMT_FN(\n");
+      printf("STMT_WHILE(\n");
 
       print_indent(spaces + 2);
-      printf("name = %s,\n", stmt->as.fn.name);
+      printf("label = %s,\n",
+             stmt->as.while_stmt.label ? stmt->as.while_stmt.label : "NULL");
 
       print_indent(spaces + 2);
-      printf("body = [\n");
-      for (int i = 0; i < stmt->as.fn.body.len; i++) {
-        print_stmt(&stmt->as.fn.body.data[i], spaces + 4);
-      }
+      printf("cond = ");
+      print_expr(&stmt->as.while_stmt.cond, spaces + 2);
+      printf(",\n");
 
       print_indent(spaces + 2);
-      printf("],\n");
+      printf("body = \n");
+      print_stmt(stmt->as.while_stmt.body, spaces + 2);
+
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
+    case STMT_BREAK: {
+      print_indent(spaces);
+      printf("STMT_BREAK(\n");
 
       print_indent(spaces + 2);
-      printf("retval = ");
-      print_type(&stmt->as.fn.retval, spaces + 4);
-      printf("\n");
+      printf("label = %s\n",
+             stmt->as.break_stmt.label ? stmt->as.break_stmt.label : "NULL");
+
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
+    case STMT_CONTINUE: {
+      print_indent(spaces);
+      printf("STMT_CONTINUE(\n");
+
+      print_indent(spaces + 2);
+      printf("label = %s\n", stmt->as.continue_stmt.label
+                                 ? stmt->as.continue_stmt.label
+                                 : "NULL");
 
       print_indent(spaces);
       printf(")\n");
@@ -1574,38 +1641,31 @@ void print_stmt(struct Stmt *stmt, int spaces)
       printf(")\n");
       break;
     }
-    case STMT_RET: {
+    case STMT_EXTERN: {
       print_indent(spaces);
-      printf("STMT_RET(\n");
+      printf("STMT_EXTERN(\n");
 
       print_indent(spaces + 2);
-      printf("val = ");
-      if (stmt->as.ret.val) {
-        print_expr(stmt->as.ret.val, spaces + 2);
-      } else {
-        printf("NULL");
+      printf("name = %s,\n", stmt->as.extern_stmt.name);
+
+      print_indent(spaces + 2);
+      printf("params = [\n");
+      for (int i = 0; i < stmt->as.extern_stmt.params.len; i++) {
+        print_indent(spaces + 4);
+        printf("%s: ", stmt->as.extern_stmt.params.data[i].name);
+        print_type(&stmt->as.extern_stmt.params.data[i].type, 0);
+        printf(",\n");
       }
-      printf("\n");
-
-      print_indent(spaces);
-      printf(")\n");
-      break;
-    }
-    case STMT_LET: {
-      print_indent(spaces);
-      printf("STMT_LET(\n");
+      if (stmt->as.extern_stmt.is_variadic) {
+        print_indent(spaces + 4);
+        printf("...\n");
+      }
+      print_indent(spaces + 2);
+      printf("],\n");
 
       print_indent(spaces + 2);
-      printf("name = %s,\n", stmt->as.let.name);
-
-      print_indent(spaces + 2);
-      printf("type = ");
-      print_type(&stmt->as.let.type, spaces + 4);
-      printf(",\n");
-
-      print_indent(spaces + 2);
-      printf("init = ");
-      print_expr(stmt->as.let.init, spaces + 2);
+      printf("retval = ");
+      print_type(&stmt->as.extern_stmt.retval, spaces + 4);
       printf("\n");
 
       print_indent(spaces);
@@ -1623,16 +1683,10 @@ void print_stmt(struct Stmt *stmt, int spaces)
 
       print_indent(spaces);
       printf(")\n");
-
-      break;
-    }
-    case STMT_EXTERN: {
-      print_indent(spaces);
-      printf("STMT_EXTERN(...)");
       break;
     }
     default:
-      assert(0);
+      assert(0 && "Unhandled statement kind in print_stmt");
   }
 }
 
