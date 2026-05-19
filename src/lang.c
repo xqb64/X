@@ -50,34 +50,48 @@ int mktmp(void)
   return i++;
 }
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdarg.h>
+
+/* Generates an allocated string based on a format (like printf) */
+char *mkstr(const char *fmt, ...)
+{
+    va_list args1, args2;
+    int len;
+    char *str;
+
+    va_start(args1, fmt);
+    va_copy(args2, args1);
+
+    len = vsnprintf(NULL, 0, fmt, args1);
+    va_end(args1);
+
+    if (len < 0) {
+        va_end(args2);
+        return NULL;
+    }
+
+    str = malloc(len + 1);
+    if (!str) {
+        va_end(args2);
+        return NULL;
+    }
+
+    vsnprintf(str, len + 1, fmt, args2);
+    va_end(args2);
+
+    return str;
+}
+
 char *mkuniq(char *s)
 {
-  int digit_len, total_len, i;
-  char *uniq;
-
-  i = mktmp();
-
-  digit_len = snprintf(NULL, 0, "%d", i);
-  total_len = strlen("var.") + strlen(s) + strlen(".") + digit_len + 1;
-
-  uniq = malloc(total_len);
-  snprintf(uniq, total_len, "var.%s.%d", s, i);
-
-  return uniq;
+    return mkstr("var.%s.%d", s, mktmp());
 }
 
 char *mklbl(char *s, int d)
 {
-  int digit_len, total_len;
-  char *lbl;
-
-  digit_len = snprintf(NULL, 0, "%d", d);
-  total_len = strlen(s) + strlen(".") + digit_len + 1;
-
-  lbl = malloc(total_len);
-  snprintf(lbl, total_len, "%s.%d", s, d);
-
-  return lbl;
+    return mkstr("%s.%d", s, d);
 }
 
 static inline void print_indent(int spaces)
