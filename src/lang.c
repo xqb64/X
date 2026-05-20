@@ -5772,8 +5772,6 @@ void print_type(Type *type, int spaces)
     case UNKNOWN_T:
       printf("unknown");
       break;
-    default:
-      assert(0);
   }
 }
 
@@ -5804,9 +5802,13 @@ static inline int get_type_size(enum TypeKind kind)
       return 2;
     case I32_T:
     case U32_T:
+    case F32_T:
       return 4;
     case I64_T:
     case U64_T:
+    case F64_T:
+    case STR_T:
+    case PTR_T:
       return 8;
     default:
       return -1;
@@ -5837,6 +5839,7 @@ void get_type_size_and_align(Type *type, int *size, int *align)
     case U64_T:
     case F64_T:
     case PTR_T:
+    case STR_T:
       *size = 8;
       *align = 8;
       break;
@@ -6437,6 +6440,7 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
       for (int i = 0; i < expr->as.call.arguments.len; i++) {
         struct TypecheckResult arg_res =
             typecheck_expr(&expr->as.call.arguments.data[i], sym_table);
+
         if (!arg_res.is_ok) {
           return arg_res;
         }
@@ -6448,15 +6452,15 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
 
           if (!types_equal(actual_type, expected_type)) {
             bool is_literal =
-                (expr->as.call.arguments.data[i].kind == EXPR_LITERAL &&
-                 expr->as.call.arguments.data[i].as.literal.kind ==
-                     LITERAL_NUM);
+                expr->as.call.arguments.data[i].kind == EXPR_LITERAL &&
+                expr->as.call.arguments.data[i].as.literal.kind == LITERAL_NUM;
+
             bool is_unary_literal =
-                (expr->as.call.arguments.data[i].kind == EXPR_UNARY &&
-                 expr->as.call.arguments.data[i].as.unary.expr->kind ==
-                     EXPR_LITERAL &&
-                 expr->as.call.arguments.data[i]
-                         .as.unary.expr->as.literal.kind == LITERAL_NUM);
+                expr->as.call.arguments.data[i].kind == EXPR_UNARY &&
+                expr->as.call.arguments.data[i].as.unary.expr->kind ==
+                    EXPR_LITERAL &&
+                expr->as.call.arguments.data[i]
+                        .as.unary.expr->as.literal.kind == LITERAL_NUM;
 
             if (is_literal || is_unary_literal) {
               if (!promote_literal(&expr->as.call.arguments.data[i],
@@ -6475,7 +6479,7 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
 
               struct Expr cast_expr;
               cast_expr.kind = EXPR_CAST;
-              cast_expr.type = expected_type;
+              cast_expr.type = clone_type(expected_type);
               cast_expr.as.cast.expr = inner;
 
               expr->as.call.arguments.data[i] = cast_expr;
@@ -6515,9 +6519,9 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
             expr->as.call.arguments.data[i] = cast_expr;
           }
         }
-
-        expr->type = *callee_sym->type.as.func.retval;
       }
+
+      expr->type = clone_type(*callee_sym->type.as.func.retval);
 
       break;
     }
@@ -6615,7 +6619,7 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
 
       for (int i = 0; i < stmt->as.fn.params.len; i++) {
         sym_insert(&fn_sym_table, stmt->as.fn.params.data[i].name,
-                   stmt->as.fn.params.data[i].type);
+                   clone_type(stmt->as.fn.params.data[i].type));
       }
 
       for (int i = 0; i < stmt->as.fn.body.len; i++) {
@@ -6928,7 +6932,7 @@ static inline int asm_type_stack_size(struct AsmType t)
     case AsmType_DOUBLE:
       return 8;
     case AsmType_BYTE_ARRAY:
-      return t.as.bytearray.size;
+      return ((t.as.bytearray.size + 7) / 8) * 8;
   }
 
   assert(0);
@@ -7869,7 +7873,87 @@ bool is_comparison(enum IRInstrBinaryKind kind)
          kind == IRInstrBinary_G || kind == IRInstrBinary_GE;
 }
 
-void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
+enum ABIClass { ABI_NO_CLASS, ABI_INTEGER, ABI_SSE, ABI_MEMORY };
+
+struct ABIClassification {
+  bool is_memory;
+  enum ABIClass eightbytes[2];
+};
+
+struct ABIClassification classify_type(Type *type)
+{
+  struct ABIClassification result = {
+      .is_memory = false, .eightbytes = {ABI_NO_CLASS, ABI_NO_CLASS}};
+
+  int size, align;
+  get_type_size_and_align(type, &size, &align);
+
+  /* System V ABI: If size is > 16 (2 eightbytes), it goes to memory. */
+  if (size > 16) {
+    result.is_memory = true;
+    return result;
+  }
+
+  /* Base case: primitives and pointers */
+  if (type->kind != STRUCT_T) {
+    if (type->kind == F32_T || type->kind == F64_T) {
+      result.eightbytes[0] = ABI_SSE;
+    } else {
+      result.eightbytes[0] = ABI_INTEGER;
+    }
+    return result;
+  }
+
+  /* Recursive case: Structs */
+  struct StructDef *def = struct_get(struct_table, type->as.struct_name);
+  assert(def && "Tried to classify unknown struct");
+
+  for (int i = 0; i < def->fields.len; i++) {
+    struct StructField *field = &def->fields.data[i];
+    int offset = field->offset;
+
+    struct ABIClassification field_class = classify_type(&field->type);
+    if (field_class.is_memory) {
+      result.is_memory = true;
+      return result;
+    }
+
+    int field_size, field_align;
+    get_type_size_and_align(&field->type, &field_size, &field_align);
+
+    /* Determine which eightbytes this field overlaps */
+    int start_eightbyte = offset / 8;
+    int end_eightbyte = (offset + field_size - 1) / 8;
+
+    for (int eb = start_eightbyte; eb <= end_eightbyte; eb++) {
+      int field_eb = eb - start_eightbyte;
+      enum ABIClass c = field_class.eightbytes[field_eb];
+
+      /* Merge rules: INTEGER beats SSE. */
+      if (c == ABI_INTEGER) {
+        result.eightbytes[eb] = ABI_INTEGER;
+      } else if (c == ABI_SSE && result.eightbytes[eb] == ABI_NO_CLASS) {
+        result.eightbytes[eb] = ABI_SSE;
+      }
+    }
+  }
+
+  return result;
+}
+
+bool is_sret(Type *retval)
+{
+  if (retval->kind != STRUCT_T) {
+    return false;
+  }
+
+  int size, align;
+  get_type_size_and_align(retval, &size, &align);
+  return size > 16;
+}
+
+void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
+                   Type *fn_retval)
 {
   switch (ir_instr->kind) {
     case IRInstr_BIN: {
@@ -8040,37 +8124,140 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         vec_insert(instrs, i1);
         vec_insert(instrs, i2);
       }
+
       break;
     }
     case IRInstr_RET: {
       struct AsmInstrPop pop;
       struct AsmInstrMov mov;
       struct AsmInstrRet ret;
-      struct AsmOperand retval;
-      struct AsmInstr i1 = {0}, e1 = {0}, e2 = {0}, i2 = {0};
+      struct AsmInstr e1 = {0}, e2 = {0}, i2 = {0};
 
       ret.__dummy = 0;
 
       if (ir_instr->as.ret.val) {
-        retval = codegen_irvalue(ir_instr->as.ret.val);
-      } else {
-        retval = (struct AsmOperand){.kind = AsmOperand_IMM, .as.imm = 0};
+        struct AsmOperand retval = codegen_irvalue(ir_instr->as.ret.val);
+
+        if (fn_retval && fn_retval->kind == STRUCT_T) {
+          struct ABIClassification cls = classify_type(fn_retval);
+          int size, align;
+          get_type_size_and_align(fn_retval, &size, &align);
+
+          if (is_sret(fn_retval)) {
+            struct AsmOperand sret_slot = {
+                .kind = AsmOperand_PSEUDO,
+                .as.pseudo = "$__sret_ptr",
+                .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
+            struct AsmOperand rsi = {
+                .kind = AsmOperand_REG,
+                .as.reg = SI,
+                .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
+            struct AsmOperand rdi = {
+                .kind = AsmOperand_REG,
+                .as.reg = DI,
+                .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
+            struct AsmOperand rcx = {
+                .kind = AsmOperand_REG,
+                .as.reg = CX,
+                .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
+            struct AsmOperand rax = {
+                .kind = AsmOperand_REG,
+                .as.reg = AX,
+                .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
+            vec_insert(instrs, ((struct AsmInstr){
+                                   .kind = AsmInstr_LEA,
+                                   .as.lea = {.src = retval, .dst = rsi}}));
+
+            vec_insert(
+                instrs,
+                ((struct AsmInstr){
+                    .kind = AsmInstr_MOV,
+                    .asm_type = (struct AsmType){.kind = AsmType_QUADWORD},
+                    .as.mov = {.src = sret_slot, .dst = rdi}}));
+
+            vec_insert(
+                instrs,
+                ((struct AsmInstr){
+                    .kind = AsmInstr_MOV,
+                    .asm_type = (struct AsmType){.kind = AsmType_QUADWORD},
+                    .as.mov = {.src = {.kind = AsmOperand_IMM, .as.imm = size},
+                               .dst = rcx}}));
+
+            vec_insert(instrs, ((struct AsmInstr){.kind = AsmInstr_REP_MOVSB}));
+
+            vec_insert(
+                instrs,
+                ((struct AsmInstr){
+                    .kind = AsmInstr_MOV,
+                    .asm_type = (struct AsmType){.kind = AsmType_QUADWORD},
+                    .as.mov = {.src = sret_slot, .dst = rax}}));
+          } else {
+            enum AsmRegister int_ret_regs[] = {AX, DX};
+            enum AsmRegister xmm_ret_regs[] = {XMM0, XMM1};
+
+            int int_ret_idx = 0;
+            int xmm_ret_idx = 0;
+            int num_eb = (size + 7) / 8;
+
+            struct AsmOperand r10 = {
+                .kind = AsmOperand_REG,
+                .as.reg = R10,
+                .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
+            vec_insert(instrs, ((struct AsmInstr){
+                                   .kind = AsmInstr_LEA,
+                                   .as.lea = {.src = retval, .dst = r10}}));
+
+            for (int eb = 0; eb < num_eb; eb++) {
+              bool is_sse = cls.eightbytes[eb] == ABI_SSE;
+
+              struct AsmType eb_type =
+                  is_sse ? (struct AsmType){.kind = AsmType_DOUBLE}
+                         : (struct AsmType){.kind = AsmType_QUADWORD};
+
+              enum AsmRegister reg = is_sse ? xmm_ret_regs[xmm_ret_idx++]
+                                            : int_ret_regs[int_ret_idx++];
+
+              struct AsmOperand mem_src = {
+                  .kind = AsmOperand_MEMORY,
+                  .as.mem = {.base = R10, .offset = eb * 8},
+                  .asm_type = eb_type};
+
+              struct AsmOperand dst_reg = {
+                  .kind = AsmOperand_REG, .as.reg = reg, .asm_type = eb_type};
+
+              vec_insert(instrs,
+                         ((struct AsmInstr){
+                             .kind = AsmInstr_MOV,
+                             .asm_type = eb_type,
+                             .as.mov = {.src = mem_src, .dst = dst_reg}}));
+            }
+          }
+        } else {
+          bool is_ret_float = retval.asm_type.kind == AsmType_FLOAT ||
+                              retval.asm_type.kind == AsmType_DOUBLE;
+
+          struct AsmOperand dst_reg = {.kind = AsmOperand_REG,
+                                       .as.reg = is_ret_float ? XMM0 : AX,
+                                       .asm_type = retval.asm_type};
+
+          vec_insert(instrs, ((struct AsmInstr){
+                                 .kind = AsmInstr_MOV,
+                                 .asm_type = retval.asm_type,
+                                 .as.mov = {.src = retval, .dst = dst_reg}}));
+        }
       }
-
-      bool is_ret_float = (retval.asm_type.kind == AsmType_FLOAT ||
-                           retval.asm_type.kind == AsmType_DOUBLE);
-
-      i1.kind = AsmInstr_MOV;
-      i1.asm_type = retval.asm_type;
-      i1.as.mov.src = retval;
-      i1.as.mov.dst = (struct AsmOperand){.kind = AsmOperand_REG,
-                                          .as.reg = is_ret_float ? XMM0 : AX,
-                                          .asm_type = retval.asm_type};
 
       mov.src = (struct AsmOperand){
           .kind = AsmOperand_REG,
           .as.reg = BP,
           .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
       mov.dst = (struct AsmOperand){
           .kind = AsmOperand_REG,
           .as.reg = SP,
@@ -8091,7 +8278,6 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       i2.kind = AsmInstr_RET;
       i2.as.ret = ret;
 
-      vec_insert(instrs, i1);
       vec_insert(instrs, e1);
       vec_insert(instrs, e2);
       vec_insert(instrs, i2);
@@ -8105,21 +8291,22 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       int size, align;
       get_type_size_and_align(&ir_instr->as.copy.src->type, &size, &align);
 
-      if (size <= 8) {
+      if (ir_instr->as.copy.src->type.kind != STRUCT_T && size <= 8) {
         vec_insert(instrs,
                    ((struct AsmInstr){.kind = AsmInstr_MOV,
                                       .asm_type = src.asm_type,
                                       .as.mov = {.src = src, .dst = dst}}));
       } else {
-        /* Block copy for structs > 8 bytes */
         struct AsmOperand rsi = {
             .kind = AsmOperand_REG,
             .as.reg = SI,
             .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
         struct AsmOperand rdi = {
             .kind = AsmOperand_REG,
             .as.reg = DI,
             .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
         struct AsmOperand rcx = {
             .kind = AsmOperand_REG,
             .as.reg = CX,
@@ -8128,9 +8315,11 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         vec_insert(instrs,
                    ((struct AsmInstr){.kind = AsmInstr_LEA,
                                       .as.lea = {.src = src, .dst = rsi}}));
+
         vec_insert(instrs,
                    ((struct AsmInstr){.kind = AsmInstr_LEA,
                                       .as.lea = {.src = dst, .dst = rdi}}));
+
         vec_insert(
             instrs,
             ((struct AsmInstr){
@@ -8138,67 +8327,109 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
                 .asm_type = (struct AsmType){.kind = AsmType_QUADWORD},
                 .as.mov = {.src = {.kind = AsmOperand_IMM, .as.imm = size},
                            .dst = rcx}}));
+
         vec_insert(instrs, ((struct AsmInstr){.kind = AsmInstr_REP_MOVSB}));
       }
+
       break;
     }
     case IRInstr_CALL: {
+      /* According to the SystemV ABI, the first six int arguments and pointers
+       * are passed via the int regs, and the first eight floating point
+       * arguments are passed via the SSE registers. */
       enum AsmRegister int_arg_regs[] = {DI, SI, DX, CX, R8, R9};
       enum AsmRegister xmm_arg_regs[] = {XMM0, XMM1, XMM2, XMM3,
                                          XMM4, XMM5, XMM6, XMM7};
 
       int num_args = ir_instr->as.call.args.len;
-      int int_reg_idx = 0;
+
+      /* If the function we are calling returns a large struct by value,
+       * we must pass a hidden pointer to allocated memory as the first
+       * argument. */
+      bool call_has_sret =
+          ir_instr->as.call.dst && is_sret(&ir_instr->as.call.dst->type);
+
+      /* If there is an sret, it uses up %rdi, so normal integer arguments
+       * start at index 1 instead of 0. */
+      int int_reg_idx = call_has_sret ? 1 : 0;
       int xmm_reg_idx = 0;
-      int num_stack_args = 0;
+      int num_stack_bytes = 0;
 
-      struct AsmOperand *arg_dsts =
-          malloc(sizeof(struct AsmOperand) * num_args);
+      struct ArgLocation {
+        bool is_memory;
+        int num_eightbytes;
+        enum AsmRegister regs[2];
+        struct AsmType asm_types[2];
+      } *arg_locs = malloc(sizeof(struct ArgLocation) * num_args);
 
+      /* First pass: Loop through every argument to classify it.
+       * We need to figure out which arguments go into registers, which fall
+       * to the stack, and how much total stack space we need to allocate. */
       for (int i = 0; i < num_args; i++) {
         struct IRValue *arg_val = ir_instr->as.call.args.data[i];
-        bool is_float =
-            (arg_val->type.kind == F32_T || arg_val->type.kind == F64_T);
+        struct ABIClassification cls = classify_type(&arg_val->type);
 
-        if (is_float) {
-          if (xmm_reg_idx < 8) {
-            arg_dsts[i].kind = AsmOperand_REG;
-            arg_dsts[i].as.reg = xmm_arg_regs[xmm_reg_idx++];
-            arg_dsts[i].asm_type = type_to_asm_type(arg_val->type);
-          } else {
-            arg_dsts[i].kind = AsmOperand_STACK;
-            num_stack_args++;
+        int type_size, type_align;
+        get_type_size_and_align(&arg_val->type, &type_size, &type_align);
+
+        int num_eb = (type_size + 7) / 8;
+        bool falls_to_memory = cls.is_memory;
+        int needed_int = 0;
+        int needed_xmm = 0;
+
+        if (!falls_to_memory) {
+          for (int eb = 0; eb < num_eb; eb++) {
+            if (cls.eightbytes[eb] == ABI_INTEGER) {
+              needed_int++;
+            }
+
+            if (cls.eightbytes[eb] == ABI_SSE) {
+              needed_xmm++;
+            }
           }
+
+          if (int_reg_idx + needed_int > 6 || xmm_reg_idx + needed_xmm > 8) {
+            falls_to_memory = true;
+          }
+        }
+
+        arg_locs[i].is_memory = falls_to_memory;
+        arg_locs[i].num_eightbytes = num_eb;
+
+        if (falls_to_memory) {
+          num_stack_bytes += align_up_int(type_size, 8);
         } else {
-          if (int_reg_idx < 6) {
-            arg_dsts[i].kind = AsmOperand_REG;
-            arg_dsts[i].as.reg = int_arg_regs[int_reg_idx++];
-            arg_dsts[i].asm_type = type_to_asm_type(arg_val->type);
-          } else {
-            arg_dsts[i].kind = AsmOperand_STACK;
-            num_stack_args++;
+          for (int eb = 0; eb < num_eb; eb++) {
+            if (cls.eightbytes[eb] == ABI_INTEGER) {
+              arg_locs[i].regs[eb] = int_arg_regs[int_reg_idx++];
+              arg_locs[i].asm_types[eb] =
+                  (struct AsmType){.kind = AsmType_QUADWORD};
+            } else if (cls.eightbytes[eb] == ABI_SSE) {
+              arg_locs[i].regs[eb] = xmm_arg_regs[xmm_reg_idx++];
+              arg_locs[i].asm_types[eb] =
+                  (struct AsmType){.kind = AsmType_DOUBLE};
+            }
           }
         }
       }
 
-      /* System V AMD64 ABI requires that the stack be aligned to 16 bytes
-       * before the call instruction.
-       *
-       * In case we pushed an odd number of stack arguments, the stack will be
-       * misaligned by 8 bytes, since each argument on the stack (`pushq
-       * arg7`) occupies 8 bytes.  The stack will NOT be misaligned if the
-       * number of pushed arguments is even.  */
-      int stack_padding = (num_stack_args % 2 != 0) ? 8 : 0;
+      /* The SystemV ABI requires the stack pointer (%rsp) to be 16-byte aligned
+       * right before the `call` instruction is executed.
+       * We calculate the padding needed to satisfy this requirement. */
+      int stack_padding =
+          num_stack_bytes % 16 != 0 ? 16 - (num_stack_bytes % 16) : 0;
 
-      if (stack_padding != 0) {
+      int total_stack_adjustment = num_stack_bytes + stack_padding;
+
+      /* Allocate space on the stack for memory arguments and padding. */
+      if (total_stack_adjustment != 0) {
         struct AsmInstr padding_instr = {0};
 
         padding_instr.kind = AsmInstr_BIN;
         padding_instr.asm_type = (struct AsmType){.kind = AsmType_QUADWORD};
-
         padding_instr.as.binary.kind = AsmInstrBinary_SUB;
         padding_instr.as.binary.lhs = (struct AsmOperand){
-            .kind = AsmOperand_IMM, .as.imm = stack_padding};
+            .kind = AsmOperand_IMM, .as.imm = total_stack_adjustment};
         padding_instr.as.binary.rhs = (struct AsmOperand){
             .kind = AsmOperand_REG,
             .as.reg = SP,
@@ -8207,34 +8438,192 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         vec_insert(instrs, padding_instr);
       }
 
-      /* Move the register arguments */
-      for (int i = 0; i < num_args; i++) {
-        if (arg_dsts[i].kind == AsmOperand_REG) {
-          struct AsmOperand arg_op =
-              codegen_irvalue(ir_instr->as.call.args.data[i]);
-          struct AsmInstr mov_instr = {0};
-          mov_instr.kind = AsmInstr_MOV;
-          mov_instr.as.mov.src = arg_op;
-          mov_instr.as.mov.dst = arg_dsts[i];
-          mov_instr.asm_type = arg_op.asm_type;
+      int current_stack_offset = 0;
 
-          vec_insert(instrs, mov_instr);
+      /* Second pass: Push the stack-bound arguments into the space we just
+       * allocated. We do this before loading register arguments to avoid
+       * accidentally clobbering the argument registers if evaluating these
+       * expressions is complex. */
+      for (int i = 0; i < num_args; i++) {
+        if (!arg_locs[i].is_memory) {
+          continue;
+        }
+
+        struct AsmOperand src_op =
+            codegen_irvalue(ir_instr->as.call.args.data[i]);
+
+        int size, align;
+        get_type_size_and_align(&ir_instr->as.call.args.data[i]->type, &size,
+                                &align);
+
+        struct AsmOperand dst_op = {
+            .kind = AsmOperand_MEMORY,
+            .as.mem = {.base = SP, .offset = current_stack_offset},
+            .asm_type = src_op.asm_type};
+
+        /* If it is a primitive or small struct (<= 8 bytes), we can just
+         * use a mov via a scratch register. */
+        if (ir_instr->as.call.args.data[i]->type.kind != STRUCT_T &&
+            size <= 8) {
+          struct AsmOperand scratch_reg = {.kind = AsmOperand_REG,
+                                           .as.reg = R10,
+                                           .asm_type = src_op.asm_type};
+
+          vec_insert(instrs, ((struct AsmInstr){
+                                 .kind = AsmInstr_MOV,
+                                 .as.mov = {.src = src_op, .dst = scratch_reg},
+                                 .asm_type = src_op.asm_type}));
+
+          vec_insert(instrs, ((struct AsmInstr){
+                                 .kind = AsmInstr_MOV,
+                                 .as.mov = {.src = scratch_reg, .dst = dst_op},
+                                 .asm_type = dst_op.asm_type}));
+        } else {
+          /* If it is a large struct, we need rep movsb to copy it to the stack.
+           */
+          struct AsmOperand rsi = {
+              .kind = AsmOperand_REG,
+              .as.reg = SI,
+              .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
+          struct AsmOperand rdi = {
+              .kind = AsmOperand_REG,
+              .as.reg = DI,
+              .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
+          struct AsmOperand rcx = {
+              .kind = AsmOperand_REG,
+              .as.reg = CX,
+              .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
+          vec_insert(instrs, ((struct AsmInstr){
+                                 .kind = AsmInstr_LEA,
+                                 .as.lea = {.src = src_op, .dst = rsi}}));
+
+          vec_insert(instrs, ((struct AsmInstr){
+                                 .kind = AsmInstr_LEA,
+                                 .as.lea = {.src = dst_op, .dst = rdi}}));
+
+          vec_insert(
+              instrs,
+              ((struct AsmInstr){
+                  .kind = AsmInstr_MOV,
+                  .asm_type = (struct AsmType){.kind = AsmType_QUADWORD},
+                  .as.mov = {.src = {.kind = AsmOperand_IMM, .as.imm = size},
+                             .dst = rcx}}));
+
+          vec_insert(instrs, ((struct AsmInstr){.kind = AsmInstr_REP_MOVSB}));
+        }
+
+        current_stack_offset += align_up_int(size, 8);
+      }
+
+      /* If the function has an sret, load the address of our local memory
+       * destination into %rdi (the hidden first argument). */
+      if (call_has_sret) {
+        struct AsmOperand dst_op = codegen_irvalue(ir_instr->as.call.dst);
+
+        struct AsmOperand rdi = {
+            .kind = AsmOperand_REG,
+            .as.reg = DI,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
+        vec_insert(instrs,
+                   ((struct AsmInstr){.kind = AsmInstr_LEA,
+                                      .as.lea = {.src = dst_op, .dst = rdi}}));
+      }
+
+      /* Third pass: Load the arguments that fit into hardware registers. */
+      for (int i = 0; i < num_args; i++) {
+        if (arg_locs[i].is_memory) {
+          continue;
+        }
+
+        struct AsmOperand src_op =
+            codegen_irvalue(ir_instr->as.call.args.data[i]);
+
+        if (arg_locs[i].num_eightbytes == 1) {
+          if (ir_instr->as.call.args.data[i]->type.kind == STRUCT_T) {
+            /* Small struct passed in a single register: move it from memory. */
+            struct AsmOperand r10 = {
+                .kind = AsmOperand_REG,
+                .as.reg = R10,
+                .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
+            struct AsmOperand mem0 = {.kind = AsmOperand_MEMORY,
+                                      .as.mem = {.base = R10, .offset = 0},
+                                      .asm_type = arg_locs[i].asm_types[0]};
+
+            struct AsmOperand dst_reg = {.kind = AsmOperand_REG,
+                                         .as.reg = arg_locs[i].regs[0],
+                                         .asm_type = arg_locs[i].asm_types[0]};
+
+            vec_insert(instrs, ((struct AsmInstr){
+                                   .kind = AsmInstr_LEA,
+                                   .as.lea = {.src = src_op, .dst = r10}}));
+
+            vec_insert(instrs, ((struct AsmInstr){
+                                   .kind = AsmInstr_MOV,
+                                   .asm_type = mem0.asm_type,
+                                   .as.mov = {.src = mem0, .dst = dst_reg}}));
+          } else {
+            /* Normal primitive: move directly into the target register. */
+            struct AsmOperand dst_reg = {.kind = AsmOperand_REG,
+                                         .as.reg = arg_locs[i].regs[0],
+                                         .asm_type = src_op.asm_type};
+
+            vec_insert(instrs, ((struct AsmInstr){
+                                   .kind = AsmInstr_MOV,
+                                   .as.mov = {.src = src_op, .dst = dst_reg},
+                                   .asm_type = src_op.asm_type}));
+          }
+        } else {
+          /* Medium struct (9-16 bytes) passed split across two registers:
+           * Load the first 8 bytes into the first reg, and the rest into the
+           * second. */
+          struct AsmOperand scratch_ptr = {
+              .kind = AsmOperand_REG,
+              .as.reg = R10,
+              .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
+          struct AsmOperand mem0 = {.kind = AsmOperand_MEMORY,
+                                    .as.mem = {.base = R10, .offset = 0},
+                                    .asm_type = arg_locs[i].asm_types[0]};
+
+          struct AsmOperand dst_reg0 = {.kind = AsmOperand_REG,
+                                        .as.reg = arg_locs[i].regs[0],
+                                        .asm_type = arg_locs[i].asm_types[0]};
+
+          struct AsmOperand mem1 = {.kind = AsmOperand_MEMORY,
+                                    .as.mem = {.base = R10, .offset = 8},
+                                    .asm_type = arg_locs[i].asm_types[1]};
+
+          struct AsmOperand dst_reg1 = {.kind = AsmOperand_REG,
+                                        .as.reg = arg_locs[i].regs[1],
+                                        .asm_type = arg_locs[i].asm_types[1]};
+
+          vec_insert(instrs,
+                     ((struct AsmInstr){
+                         .kind = AsmInstr_LEA,
+                         .as.lea = {.src = src_op, .dst = scratch_ptr}}));
+
+          vec_insert(instrs, ((struct AsmInstr){
+                                 .kind = AsmInstr_MOV,
+                                 .as.mov = {.src = mem0, .dst = dst_reg0},
+                                 .asm_type = mem0.asm_type}));
+
+          vec_insert(instrs, ((struct AsmInstr){
+                                 .kind = AsmInstr_MOV,
+                                 .as.mov = {.src = mem1, .dst = dst_reg1},
+                                 .asm_type = mem1.asm_type}));
         }
       }
 
-      /* ...the rest of the arguments goes on the stack, in reverse order. */
-      for (int i = num_args - 1; i >= 6; i--) {
-        struct AsmOperand arg_op =
-            codegen_irvalue(ir_instr->as.call.args.data[i]);
-        struct AsmInstr push_instr = {0};
-        push_instr.kind = AsmInstr_PUSH;
-        push_instr.as.push.op = arg_op;
-        vec_insert(instrs, push_instr);
-      }
-
-      /* Set %eax to the number of XMM registers used (needed for variadic
-       * functions) */
+      /* For functions with variable arguments (varargs), the System V ABI
+       * requires that the %al register contains the number of vector (SSE)
+       * registers used. */
       struct AsmInstr eax_instr = {0};
+
       eax_instr.kind = AsmInstr_MOV;
       eax_instr.asm_type = (struct AsmType){.kind = AsmType_LONGWORD};
       eax_instr.as.mov.src =
@@ -8243,54 +8632,108 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
           .kind = AsmOperand_REG,
           .as.reg = AX,
           .asm_type = (struct AsmType){.kind = AsmType_LONGWORD}};
+
       vec_insert(instrs, eax_instr);
 
+      /* Emit the actual CALL instruction. */
       struct AsmInstr call_instr = {0};
       call_instr.kind = AsmInstr_CALL;
-
       call_instr.as.call.target = ir_instr->as.call.target.as.var.name;
+
       vec_insert(instrs, call_instr);
 
-      /* The caller is responsible for cleaning up the stack after the call
-       * instruction. Since the stack on x86 grows downward, we need to ADD
-       * (not SUB).  */
-      int bytes_to_remove = (num_stack_args * 8) + stack_padding;
-      if (bytes_to_remove != 0) {
+      /* After the function returns, clean up the stack space we allocated
+       * for the stack arguments and alignment padding. */
+      if (total_stack_adjustment != 0) {
         struct AsmInstr cleanup_instr = {0};
+
         cleanup_instr.kind = AsmInstr_BIN;
         cleanup_instr.asm_type = (struct AsmType){.kind = AsmType_QUADWORD};
-
         cleanup_instr.as.binary.kind = AsmInstrBinary_ADD;
         cleanup_instr.as.binary.lhs = (struct AsmOperand){
-            .kind = AsmOperand_IMM, .as.imm = bytes_to_remove};
+            .kind = AsmOperand_IMM, .as.imm = total_stack_adjustment};
         cleanup_instr.as.binary.rhs = (struct AsmOperand){
             .kind = AsmOperand_REG,
             .as.reg = SP,
             .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
         vec_insert(instrs, cleanup_instr);
       }
 
-      /* The caller is responsible for moving the return value from AX to a
-       * safe destination if it wants to keep it, because AX is easily
-       * clobbered.  */
-      if (ir_instr->as.call.dst) {
+      /* Handle the return value (if there is one, and it wasn't an sret). */
+      if (ir_instr->as.call.dst && !call_has_sret) {
         struct AsmOperand dst_op = codegen_irvalue(ir_instr->as.call.dst);
-        struct AsmInstr mov_instr = {0};
 
-        bool is_dst_float = (dst_op.asm_type.kind == AsmType_FLOAT ||
-                             dst_op.asm_type.kind == AsmType_DOUBLE);
+        if (ir_instr->as.call.dst->type.kind == STRUCT_T) {
+          /* If a struct is returned in registers, the ABI says it will be split
+           * across %rax and %rdx (or %xmm0 and %xmm1). We must piece it back
+           * together into our local memory destination. */
+          struct ABIClassification cls =
+              classify_type(&ir_instr->as.call.dst->type);
 
-        mov_instr.kind = AsmInstr_MOV;
-        mov_instr.as.mov.src =
-            (struct AsmOperand){.kind = AsmOperand_REG,
-                                .as.reg = is_dst_float ? XMM0 : AX,
-                                .asm_type = dst_op.asm_type};
-        mov_instr.as.mov.dst = dst_op;
-        mov_instr.asm_type = dst_op.asm_type;
-        vec_insert(instrs, mov_instr);
+          int size, align;
+          get_type_size_and_align(&ir_instr->as.call.dst->type, &size, &align);
+
+          int num_eb = (size + 7) / 8;
+
+          enum AsmRegister int_ret_regs[] = {AX, DX};
+          enum AsmRegister xmm_ret_regs[] = {XMM0, XMM1};
+
+          int int_ret_idx = 0;
+          int xmm_ret_idx = 0;
+
+          struct AsmOperand r10 = {
+              .kind = AsmOperand_REG,
+              .as.reg = R10,
+              .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
+          vec_insert(instrs, ((struct AsmInstr){
+                                 .kind = AsmInstr_LEA,
+                                 .as.lea = {.src = dst_op, .dst = r10}}));
+
+          for (int eb = 0; eb < num_eb; eb++) {
+            bool is_sse = cls.eightbytes[eb] == ABI_SSE;
+
+            struct AsmType eb_type =
+                is_sse ? (struct AsmType){.kind = AsmType_DOUBLE}
+                       : (struct AsmType){.kind = AsmType_QUADWORD};
+
+            enum AsmRegister reg = is_sse ? xmm_ret_regs[xmm_ret_idx++]
+                                          : int_ret_regs[int_ret_idx++];
+
+            struct AsmOperand src_reg = {
+                .kind = AsmOperand_REG, .as.reg = reg, .asm_type = eb_type};
+
+            struct AsmOperand mem_dst = {
+                .kind = AsmOperand_MEMORY,
+                .as.mem = {.base = R10, .offset = eb * 8},
+                .asm_type = eb_type};
+
+            vec_insert(instrs, ((struct AsmInstr){.kind = AsmInstr_MOV,
+                                                  .asm_type = eb_type,
+                                                  .as.mov = {.src = src_reg,
+                                                             .dst = mem_dst}}));
+          }
+        } else {
+          /* Standard primitive return: grab it from %rax (int) or %xmm0
+           * (float). */
+          struct AsmInstr mov_instr = {0};
+
+          bool is_dst_float = dst_op.asm_type.kind == AsmType_FLOAT ||
+                              dst_op.asm_type.kind == AsmType_DOUBLE;
+
+          mov_instr.kind = AsmInstr_MOV;
+          mov_instr.as.mov.src =
+              (struct AsmOperand){.kind = AsmOperand_REG,
+                                  .as.reg = is_dst_float ? XMM0 : AX,
+                                  .asm_type = dst_op.asm_type};
+          mov_instr.as.mov.dst = dst_op;
+          mov_instr.asm_type = dst_op.asm_type;
+
+          vec_insert(instrs, mov_instr);
+        }
       }
 
-      free(arg_dsts);
       break;
     }
     case IRInstr_JMP: {
@@ -8324,6 +8767,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
 
       vec_insert(instrs, i1);
       vec_insert(instrs, i2);
+
       break;
     }
     case IRInstr_LBL: {
@@ -8331,6 +8775,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       struct AsmInstrLabel lbl;
 
       lbl.name = ir_instr->as.label.name;
+
       i.kind = AsmInstr_LBL;
       i.as.lbl = lbl;
 
@@ -8339,10 +8784,12 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
     }
     case IRInstr_GETADDR: {
       struct AsmInstr i = {0};
+
       i.kind = AsmInstr_LEA;
       i.asm_type = (struct AsmType){.kind = AsmType_QUADWORD};
       i.as.lea.src = codegen_irvalue(ir_instr->as.getaddr.src);
       i.as.lea.dst = codegen_irvalue(ir_instr->as.getaddr.dst);
+
       vec_insert(instrs, i);
       break;
     }
@@ -8353,12 +8800,12 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       int size, align;
       get_type_size_and_align(&ir_instr->as.load.dst->type, &size, &align);
 
-      if (size <= 8) {
-        // Standard load
+      if (ir_instr->as.load.dst->type.kind != STRUCT_T && size <= 8) {
         struct AsmOperand scratch_ptr = {
             .kind = AsmOperand_REG,
             .as.reg = R10,
             .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
         vec_insert(
             instrs,
             ((struct AsmInstr){
@@ -8369,21 +8816,22 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         struct AsmOperand mem_op = {.kind = AsmOperand_MEMORY,
                                     .as.mem = {.base = R10, .offset = 0},
                                     .asm_type = dst_val.asm_type};
+
         vec_insert(instrs,
                    ((struct AsmInstr){.kind = AsmInstr_MOV,
                                       .as.mov = {.src = mem_op, .dst = dst_val},
                                       .asm_type = dst_val.asm_type}));
       } else {
-        // Block load (Copy from memory address held in src_ptr to dst_val
-        // memory)
         struct AsmOperand rsi = {
             .kind = AsmOperand_REG,
             .as.reg = SI,
             .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
         struct AsmOperand rdi = {
             .kind = AsmOperand_REG,
             .as.reg = DI,
             .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
         struct AsmOperand rcx = {
             .kind = AsmOperand_REG,
             .as.reg = CX,
@@ -8394,9 +8842,11 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
                                       .as.mov = {.src = src_ptr, .dst = rsi},
                                       .asm_type = (struct AsmType){
                                           .kind = AsmType_QUADWORD}}));
+
         vec_insert(instrs,
                    ((struct AsmInstr){.kind = AsmInstr_LEA,
                                       .as.lea = {.src = dst_val, .dst = rdi}}));
+
         vec_insert(
             instrs,
             ((struct AsmInstr){
@@ -8404,8 +8854,10 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
                 .as.mov = {.src = {.kind = AsmOperand_IMM, .as.imm = size},
                            .dst = rcx},
                 .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}}));
+
         vec_insert(instrs, ((struct AsmInstr){.kind = AsmInstr_REP_MOVSB}));
       }
+
       break;
     }
     case IRInstr_STORE: {
@@ -8415,9 +8867,10 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       int size, align;
       get_type_size_and_align(&ir_instr->as.store.val->type, &size, &align);
 
-      if (size <= 8) {
+      if (ir_instr->as.store.val->type.kind != STRUCT_T && size <= 8) {
         struct AsmOperand scratch_val = {
             .kind = AsmOperand_REG, .as.reg = R9, .asm_type = src_val.asm_type};
+
         vec_insert(instrs, ((struct AsmInstr){
                                .kind = AsmInstr_MOV,
                                .as.mov = {.src = src_val, .dst = scratch_val},
@@ -8427,6 +8880,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
             .kind = AsmOperand_REG,
             .as.reg = R10,
             .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
         vec_insert(
             instrs,
             ((struct AsmInstr){
@@ -8437,20 +8891,22 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         struct AsmOperand mem_op = {.kind = AsmOperand_MEMORY,
                                     .as.mem = {.base = R10, .offset = 0},
                                     .asm_type = src_val.asm_type};
+
         vec_insert(instrs, ((struct AsmInstr){
                                .kind = AsmInstr_MOV,
                                .as.mov = {.src = scratch_val, .dst = mem_op},
                                .asm_type = src_val.asm_type}));
       } else {
-        // Block store (Copy from src_val memory to address held in dst_ptr)
         struct AsmOperand rsi = {
             .kind = AsmOperand_REG,
             .as.reg = SI,
             .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
         struct AsmOperand rdi = {
             .kind = AsmOperand_REG,
             .as.reg = DI,
             .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
         struct AsmOperand rcx = {
             .kind = AsmOperand_REG,
             .as.reg = CX,
@@ -8459,11 +8915,13 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         vec_insert(instrs,
                    ((struct AsmInstr){.kind = AsmInstr_LEA,
                                       .as.lea = {.src = src_val, .dst = rsi}}));
+
         vec_insert(instrs,
                    ((struct AsmInstr){.kind = AsmInstr_MOV,
                                       .as.mov = {.src = dst_ptr, .dst = rdi},
                                       .asm_type = (struct AsmType){
                                           .kind = AsmType_QUADWORD}}));
+
         vec_insert(
             instrs,
             ((struct AsmInstr){
@@ -8471,8 +8929,10 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
                 .as.mov = {.src = {.kind = AsmOperand_IMM, .as.imm = size},
                            .dst = rcx},
                 .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}}));
+
         vec_insert(instrs, ((struct AsmInstr){.kind = AsmInstr_REP_MOVSB}));
       }
+
       break;
     }
     case IRInstr_CAST: {
@@ -8481,6 +8941,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
 
       if (src.kind == AsmOperand_IMM) {
         struct AsmInstr i = {0};
+
         i.kind = AsmInstr_MOV;
         i.as.mov.src = src;
         i.as.mov.dst = dst;
@@ -8489,14 +8950,32 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         vec_insert(instrs, i);
       } else if (src.asm_type.kind == dst.asm_type.kind) {
         struct AsmInstr i = {0};
+
         i.kind = AsmInstr_MOV;
         i.as.mov.src = src;
         i.as.mov.dst = dst;
         i.asm_type = dst.asm_type;
 
         vec_insert(instrs, i);
+      } else if (src.asm_type.kind == AsmType_QUADWORD &&
+                 dst.asm_type.kind == AsmType_LONGWORD) {
+        /*
+         * Truncating 64-bit integer/pointer to 32-bit integer.
+         * Emit a 32-bit move of the low 32 bits.
+         */
+        struct AsmOperand narrowed_src = src;
+        narrowed_src.asm_type = (struct AsmType){.kind = AsmType_LONGWORD};
+
+        struct AsmInstr i = {0};
+        i.kind = AsmInstr_MOV;
+        i.as.mov.src = narrowed_src;
+        i.as.mov.dst = dst;
+        i.asm_type = (struct AsmType){.kind = AsmType_LONGWORD};
+
+        vec_insert(instrs, i);
       } else {
         struct AsmInstr i = {0};
+
         i.kind = AsmInstr_CVT;
         i.as.cvt.is_unsigned = is_unsigned(ir_instr->as.cast.src->type.kind) ||
                                ir_instr->as.cast.src->type.kind == BOOL_T;
@@ -8506,6 +8985,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
 
         vec_insert(instrs, i);
       }
+
       break;
     }
     case IRInstr_ADD_PTR: {
@@ -8513,6 +8993,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       struct AsmOperand dst = codegen_irvalue(ir_instr->as.add_ptr.dst);
 
       struct AsmInstr i1 = {0}, i2 = {0};
+
       i1.kind = AsmInstr_MOV;
       i1.as.mov.src = ptr;
       i1.as.mov.dst = dst;
@@ -8527,9 +9008,9 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
 
       vec_insert(instrs, i1);
       vec_insert(instrs, i2);
+
       break;
     }
-
     case IRInstr_CPY_FROM_OFFSET: {
       struct AsmOperand src = codegen_irvalue(ir_instr->as.cpy_from_offset.src);
       struct AsmOperand dst = codegen_irvalue(ir_instr->as.cpy_from_offset.dst);
@@ -8538,24 +9019,24 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       get_type_size_and_align(&ir_instr->as.cpy_from_offset.dst->type, &size,
                               &align);
 
-      if (size <= 8) {
+      if (ir_instr->as.cpy_from_offset.dst->type.kind != STRUCT_T &&
+          size <= 8) {
         struct AsmOperand scratch_reg = {
             .kind = AsmOperand_REG,
             .as.reg = R10,
             .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
 
-        /* leaq src, %r10 */
         struct AsmInstr i1 = {0};
         i1.kind = AsmInstr_LEA;
         i1.as.lea.src = src;
         i1.as.lea.dst = scratch_reg;
 
-        /* movq offset(%r10), dst */
         struct AsmOperand mem_op = {
             .kind = AsmOperand_MEMORY,
             .as.mem = {.base = R10,
                        .offset = ir_instr->as.cpy_from_offset.offset},
             .asm_type = dst.asm_type};
+
         struct AsmInstr i2 = {0};
         i2.kind = AsmInstr_MOV;
         i2.as.mov.src = mem_op;
@@ -8565,25 +9046,21 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         vec_insert(instrs, i1);
         vec_insert(instrs, i2);
       } else {
-        /* Block Copy:
-         * leaq src, %r10
-         * leaq offset(%r10), %rsi
-         * leaq dst, %rdi
-         * movq $size, %rcx
-         * rep movsb
-         */
         struct AsmOperand r10 = {
             .kind = AsmOperand_REG,
             .as.reg = R10,
             .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
         struct AsmOperand rsi = {
             .kind = AsmOperand_REG,
             .as.reg = SI,
             .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
         struct AsmOperand rdi = {
             .kind = AsmOperand_REG,
             .as.reg = DI,
             .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
         struct AsmOperand rcx = {
             .kind = AsmOperand_REG,
             .as.reg = CX,
@@ -8597,12 +9074,15 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
             .kind = AsmOperand_MEMORY,
             .as.mem = {.base = R10,
                        .offset = ir_instr->as.cpy_from_offset.offset}};
+
         vec_insert(instrs, ((struct AsmInstr){
                                .kind = AsmInstr_LEA,
                                .as.lea = {.src = mem_offset, .dst = rsi}}));
+
         vec_insert(instrs,
                    ((struct AsmInstr){.kind = AsmInstr_LEA,
                                       .as.lea = {.src = dst, .dst = rdi}}));
+
         vec_insert(
             instrs,
             ((struct AsmInstr){
@@ -8610,11 +9090,12 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
                 .asm_type = (struct AsmType){.kind = AsmType_QUADWORD},
                 .as.mov = {.src = {.kind = AsmOperand_IMM, .as.imm = size},
                            .dst = rcx}}));
+
         vec_insert(instrs, ((struct AsmInstr){.kind = AsmInstr_REP_MOVSB}));
       }
+
       break;
     }
-
     case IRInstr_CPY_TO_OFFSET: {
       struct AsmOperand dst = codegen_irvalue(ir_instr->as.cpy_to_offset.dst);
       struct AsmOperand src = codegen_irvalue(ir_instr->as.cpy_to_offset.src);
@@ -8623,41 +9104,42 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
       get_type_size_and_align(&ir_instr->as.cpy_to_offset.src->type, &size,
                               &align);
 
-      if (size <= 8) {
+      if (ir_instr->as.cpy_to_offset.src->type.kind != STRUCT_T && size <= 8) {
         struct AsmOperand scratch_reg = {
             .kind = AsmOperand_REG,
             .as.reg = R10,
             .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
 
-        /* leaq dst, %r10 */
         vec_insert(instrs, ((struct AsmInstr){
                                .kind = AsmInstr_LEA,
                                .as.lea = {.src = dst, .dst = scratch_reg}}));
 
-        /* movq src, offset(%r10) */
         struct AsmOperand mem_op = {
             .kind = AsmOperand_MEMORY,
             .as.mem = {.base = R10,
                        .offset = ir_instr->as.cpy_to_offset.offset},
             .asm_type = src.asm_type};
+
         vec_insert(instrs,
                    ((struct AsmInstr){.kind = AsmInstr_MOV,
                                       .asm_type = src.asm_type,
                                       .as.mov = {.src = src, .dst = mem_op}}));
       } else {
-        /* Block Copy */
         struct AsmOperand r10 = {
             .kind = AsmOperand_REG,
             .as.reg = R10,
             .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
         struct AsmOperand rsi = {
             .kind = AsmOperand_REG,
             .as.reg = SI,
             .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
         struct AsmOperand rdi = {
             .kind = AsmOperand_REG,
             .as.reg = DI,
             .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
         struct AsmOperand rcx = {
             .kind = AsmOperand_REG,
             .as.reg = CX,
@@ -8666,6 +9148,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
         vec_insert(instrs,
                    ((struct AsmInstr){.kind = AsmInstr_LEA,
                                       .as.lea = {.src = src, .dst = rsi}}));
+
         vec_insert(instrs,
                    ((struct AsmInstr){.kind = AsmInstr_LEA,
                                       .as.lea = {.src = dst, .dst = r10}}));
@@ -8674,6 +9157,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
             .kind = AsmOperand_MEMORY,
             .as.mem = {.base = R10,
                        .offset = ir_instr->as.cpy_to_offset.offset}};
+
         vec_insert(instrs, ((struct AsmInstr){
                                .kind = AsmInstr_LEA,
                                .as.lea = {.src = mem_offset, .dst = rdi}}));
@@ -8685,8 +9169,10 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs)
                 .asm_type = (struct AsmType){.kind = AsmType_QUADWORD},
                 .as.mov = {.src = {.kind = AsmOperand_IMM, .as.imm = size},
                            .dst = rcx}}));
+
         vec_insert(instrs, ((struct AsmInstr){.kind = AsmInstr_REP_MOVSB}));
       }
+
       break;
     }
     default:
@@ -8709,9 +9195,11 @@ struct AsmFunction codegen_fn(struct IRFunction *ir_func)
       .kind = AsmOperand_REG,
       .as.reg = BP,
       .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
   p1.kind = AsmInstr_PUSH;
   p1.as.push = push;
-  /*  ...and place ours SP into BP.  */
+
+  /*  ...and place our SP into BP.  */
   mov.src = (struct AsmOperand){
       .kind = AsmOperand_REG,
       .as.reg = SP,
@@ -8720,12 +9208,11 @@ struct AsmFunction codegen_fn(struct IRFunction *ir_func)
       .kind = AsmOperand_REG,
       .as.reg = BP,
       .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
   p2.kind = AsmInstr_MOV;
   p2.as.mov = mov;
   p2.asm_type = (struct AsmType){.kind = AsmType_QUADWORD};
 
-  /* We will need to reserve the stack space for our local variables.
-   * NOTE: 0 for now is a placeholder that is patched up later on.  */
   sub.kind = AsmInstrBinary_SUB;
   sub.lhs = (struct AsmOperand){.kind = AsmOperand_IMM, .as.imm = 0};
   sub.rhs = (struct AsmOperand){
@@ -8741,64 +9228,258 @@ struct AsmFunction codegen_fn(struct IRFunction *ir_func)
   vec_insert(&func.body, p2);
   vec_insert(&func.body, p3);
 
+  /* When a function needs to return a large struct by value,
+   * the struct wouldn't fit in the two regiters (%rax and %rdi),
+   * which means it needs to be returned via the stack.
+   *
+   * This means that the caller will allocate space on its stack,
+   * and pass the pointer to that space to the callee in %rdi.
+   *
+   * As the callee, we want to hold onto that address */
+  bool fn_has_sret;
+
+  fn_has_sret = is_sret(&ir_func->retval);
+  if (fn_has_sret) {
+    struct AsmOperand sret_slot = {
+        .kind = AsmOperand_PSEUDO,
+        .as.pseudo = "$__sret_ptr",
+        .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
+    struct AsmOperand rdi = {
+        .kind = AsmOperand_REG,
+        .as.reg = DI,
+        .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
+    vec_insert(&func.body,
+               ((struct AsmInstr){
+                   .kind = AsmInstr_MOV,
+                   .asm_type = (struct AsmType){.kind = AsmType_QUADWORD},
+                   .as.mov = {.src = rdi, .dst = sret_slot}}));
+  }
+
+  /* According to the SystemV ABI, the first six int arguments and pointers
+   * are passed via the int regs, and the first eight floating point arguments
+   * are passed via the SSE registers.  */
   enum AsmRegister int_arg_regs[] = {DI, SI, DX, CX, R8, R9};
   enum AsmRegister xmm_arg_regs[] = {XMM0, XMM1, XMM2, XMM3,
                                      XMM4, XMM5, XMM6, XMM7};
 
   int num_params = ir_func->params.len;
-  int int_reg_idx = 0;
+
+  /* If the fn has sret, this means that %rdi will have already been used up,
+   * so we start at index 1.  */
+  int int_reg_idx = fn_has_sret ? 1 : 0;
   int xmm_reg_idx = 0;
+
+  /* In the SystemV ABI, during the call instruction, the CPU
+   * will push the return address on the stack, which means that
+   * this will decrement the stack pointer by 8.  Then an instruction
+   * like `pushq %rbp`, will decrement the stack pointer by another 8.
+   * Then we have `movq %rsp, %rbp`, which means that the return address
+   * is at 8(%rbp), and first stack-passed argument will have been at 16(%rbp).
+   * The locals are starting off at -8(%rbp).  */
   int stack_offset = 16;
 
-  /* Move the values from the registers and from the stack that we had
-   * received previously by the caller, into pseudo registers.  */
+  /* Loop through every parameter and classify it.
+   * - How many 8-byte chunks ("eightbytes") the parameter takes?
+   * - How many Integer vs. SSE registers this specific parameter needs?
+   * - If passing this parameter would exceed the available registers (6 int,
+   *   8 SSE), it forces falls_to_memory = true, meaning this argument must
+   *   be fetched from the stack. */
   for (int i = 0; i < num_params; i++) {
-    struct AsmType param_asm_type =
-        type_to_asm_type(ir_func->params.data[i].type);
-    bool is_float = (ir_func->params.data[i].type.kind == F32_T ||
-                     ir_func->params.data[i].type.kind == F64_T);
+    struct Parameter *param = &ir_func->params.data[i];
+    struct ABIClassification cls = classify_type(&param->type);
 
-    struct AsmOperand dst;
-    dst.kind = AsmOperand_PSEUDO;
-    dst.as.pseudo = ir_func->params.data[i].name;
-    dst.asm_type = param_asm_type;
+    int size, align;
+    get_type_size_and_align(&param->type, &size, &align);
 
-    struct AsmOperand src;
-    if (is_float) {
-      if (xmm_reg_idx < 8) {
-        src.kind = AsmOperand_REG;
-        src.as.reg = xmm_arg_regs[xmm_reg_idx++];
-        src.asm_type = param_asm_type;
-      } else {
-        src.kind = AsmOperand_STACK;
-        src.as.stack_offset = stack_offset;
-        stack_offset += 8;
-        src.asm_type = param_asm_type;
+    /* The math for the ceiling division below works out as follows:
+     *
+     * If size is 1 to 8 bytes: (size + 7) is 8 to 15. Integer division by 8
+     * results in 1 eightbyte.
+     *
+     * If size is 9 to 16 bytes: (size + 7) is 16 to 23. Integer division by 8
+     * results in 2 eightbytes.
+     *
+     * If size is 17 to 24 bytes: (size + 7) is 24 to 31. Integer division by 8
+     * results in 3 eightbytes. */
+    int num_eb = (size + 7) / 8;
+    bool falls_to_memory = cls.is_memory;
+    int needed_int = 0;
+    int needed_xmm = 0;
+
+    if (!falls_to_memory) {
+      for (int eb = 0; eb < num_eb; eb++) {
+        if (cls.eightbytes[eb] == ABI_INTEGER) {
+          needed_int++;
+        }
+
+        if (cls.eightbytes[eb] == ABI_SSE) {
+          needed_xmm++;
+        }
       }
-    } else {
-      if (int_reg_idx < 6) {
-        src.kind = AsmOperand_REG;
-        src.as.reg = int_arg_regs[int_reg_idx++];
-        src.asm_type = param_asm_type;
-      } else {
-        src.kind = AsmOperand_STACK;
-        src.as.stack_offset = stack_offset;
-        stack_offset += 8;
-        src.asm_type = param_asm_type;
+
+      if (int_reg_idx + needed_int > 6 || xmm_reg_idx + needed_xmm > 8) {
+        falls_to_memory = true;
       }
     }
 
-    struct AsmInstr param_mov;
-    param_mov.kind = AsmInstr_MOV;
-    param_mov.as.mov.src = src;
-    param_mov.as.mov.dst = dst;
-    param_mov.asm_type = param_asm_type;
+    struct AsmType param_asm_type = type_to_asm_type(param->type);
 
-    vec_insert(&func.body, param_mov);
+    struct AsmOperand dst;
+    dst.kind = AsmOperand_PSEUDO;
+    dst.as.pseudo = param->name;
+    dst.asm_type = param_asm_type;
+
+    if (falls_to_memory) {
+      struct AsmOperand src_stack = {.kind = AsmOperand_STACK,
+                                     .as.stack_offset = stack_offset,
+                                     .asm_type = param_asm_type};
+
+      /* If it is a struct, but smaller or equal to 8 bytes, then we can just
+       * use mov. */
+      if (param->type.kind != STRUCT_T && size <= 8) {
+        struct AsmOperand scratch_reg = {
+            .kind = AsmOperand_REG, .as.reg = R10, .asm_type = param_asm_type};
+
+        vec_insert(
+            &func.body,
+            ((struct AsmInstr){.kind = AsmInstr_MOV,
+                               .as.mov = {.src = src_stack, .dst = scratch_reg},
+                               .asm_type = param_asm_type}));
+
+        vec_insert(&func.body, ((struct AsmInstr){
+                                   .kind = AsmInstr_MOV,
+                                   .as.mov = {.src = scratch_reg, .dst = dst},
+                                   .asm_type = param_asm_type}));
+      } else {
+        /* If it is a struct, but larger than 8 bytes, we need rep movsb. */
+        struct AsmOperand rsi = {
+            .kind = AsmOperand_REG,
+            .as.reg = SI,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
+        struct AsmOperand rdi = {
+            .kind = AsmOperand_REG,
+            .as.reg = DI,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
+        struct AsmOperand rcx = {
+            .kind = AsmOperand_REG,
+            .as.reg = CX,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
+        vec_insert(&func.body, ((struct AsmInstr){
+                                   .kind = AsmInstr_LEA,
+                                   .as.lea = {.src = src_stack, .dst = rsi}}));
+
+        vec_insert(&func.body,
+                   ((struct AsmInstr){.kind = AsmInstr_LEA,
+                                      .as.lea = {.src = dst, .dst = rdi}}));
+
+        vec_insert(
+            &func.body,
+            ((struct AsmInstr){
+                .kind = AsmInstr_MOV,
+                .asm_type = (struct AsmType){.kind = AsmType_QUADWORD},
+                .as.mov = {.src = {.kind = AsmOperand_IMM, .as.imm = size},
+                           .dst = rcx}}));
+
+        vec_insert(&func.body, ((struct AsmInstr){.kind = AsmInstr_REP_MOVSB}));
+      }
+
+      stack_offset += align_up_int(size, 8);
+    } else {
+      /* If it does NOT fall to memory */
+      if (num_eb <= 1) {
+        /* ...and there is at most a single eightbyte, */
+        if (param->type.kind == STRUCT_T) {
+          /* ...but it's still a struct. */
+          bool is_sse = cls.eightbytes[0] == ABI_SSE;
+
+          enum AsmRegister reg = is_sse ? xmm_arg_regs[xmm_reg_idx++]
+                                        : int_arg_regs[int_reg_idx++];
+
+          struct AsmType eb_type =
+              is_sse ? (struct AsmType){.kind = AsmType_DOUBLE}
+                     : (struct AsmType){.kind = AsmType_QUADWORD};
+
+          struct AsmOperand r10 = {
+              .kind = AsmOperand_REG,
+              .as.reg = R10,
+              .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
+          struct AsmOperand src_reg = {
+              .kind = AsmOperand_REG, .as.reg = reg, .asm_type = eb_type};
+
+          struct AsmOperand mem_dst = {.kind = AsmOperand_MEMORY,
+                                       .as.mem = {.base = R10, .offset = 0},
+                                       .asm_type = eb_type};
+
+          vec_insert(&func.body,
+                     ((struct AsmInstr){.kind = AsmInstr_LEA,
+                                        .as.lea = {.src = dst, .dst = r10}}));
+
+          vec_insert(
+              &func.body,
+              ((struct AsmInstr){.kind = AsmInstr_MOV,
+                                 .asm_type = eb_type,
+                                 .as.mov = {.src = src_reg, .dst = mem_dst}}));
+        } else {
+          /* not a struct */
+          enum AsmRegister reg = cls.eightbytes[0] == ABI_SSE
+                                     ? xmm_arg_regs[xmm_reg_idx++]
+                                     : int_arg_regs[int_reg_idx++];
+
+          struct AsmOperand src_reg = {.kind = AsmOperand_REG,
+                                       .as.reg = reg,
+                                       .asm_type = param_asm_type};
+
+          vec_insert(&func.body,
+                     ((struct AsmInstr){.kind = AsmInstr_MOV,
+                                        .as.mov = {.src = src_reg, .dst = dst},
+                                        .asm_type = param_asm_type}));
+        }
+      } else {
+        /* there is more than 1 eightbyte */
+        struct AsmOperand r10 = {
+            .kind = AsmOperand_REG,
+            .as.reg = R10,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+
+        vec_insert(&func.body,
+                   ((struct AsmInstr){.kind = AsmInstr_LEA,
+                                      .as.lea = {.src = dst, .dst = r10}}));
+
+        for (int eb = 0; eb < num_eb; eb++) {
+          enum AsmRegister reg = cls.eightbytes[eb] == ABI_SSE
+                                     ? xmm_arg_regs[xmm_reg_idx++]
+                                     : int_arg_regs[int_reg_idx++];
+
+          struct AsmType eb_type =
+              cls.eightbytes[eb] == ABI_SSE
+                  ? (struct AsmType){.kind = AsmType_DOUBLE}
+                  : (struct AsmType){.kind = AsmType_QUADWORD};
+
+          struct AsmOperand src_reg = {
+              .kind = AsmOperand_REG, .as.reg = reg, .asm_type = eb_type};
+
+          struct AsmOperand mem_dst = {
+              .kind = AsmOperand_MEMORY,
+              .as.mem = {.base = R10, .offset = eb * 8},
+              .asm_type = eb_type};
+
+          vec_insert(&func.body, ((struct AsmInstr){
+                                     .kind = AsmInstr_MOV,
+                                     .as.mov = {.src = src_reg, .dst = mem_dst},
+                                     .asm_type = eb_type}));
+        }
+      }
+    }
   }
 
   for (int i = 0; i < ir_func->body.len; i++) {
-    codegen_instr(&ir_func->body.data[i], &func.body);
+    codegen_instr(&ir_func->body.data[i], &func.body, &ir_func->retval);
   }
 
   return func;
