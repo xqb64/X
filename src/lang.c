@@ -2711,7 +2711,7 @@ Type parse_type(struct Parser *parser)
       field.offset = 0;
       vec_insert(&fields, field);
 
-      if (check(parser, TOKEN_COMMA) || check(parser, TOKEN_SEMICOLON)) {
+      if (check(parser, TOKEN_COMMA)) {
         advance_parser(parser);
       }
     }
@@ -3463,14 +3463,6 @@ struct ParseFnResult parse_struct_stmt(struct Parser *parser)
       consume(parser, TOKEN_COLON);
       field_type = parse_type(parser);
       field_name = strndup(name_tok->start, name_tok->len);
-    } else {
-      field_type = parse_type(parser);
-      struct Token *name_tok = consume(parser, TOKEN_IDENTIFIER);
-      if (name_tok) {
-        field_name = strndup(name_tok->start, name_tok->len);
-      } else {
-        field_name = strdup("");
-      }
     }
 
     struct StructField field;

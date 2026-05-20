@@ -4,10 +4,10 @@ struct Point {
   a: i8,
   b: i32,
   c: i64,
-  union {
+  as: union {
     mem: i32,
     cpu: i64,
-  } as,
+  },
 }
 
 fn main(void) -> i32 {
