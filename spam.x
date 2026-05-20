@@ -21,5 +21,7 @@ fn main(void) -> i32 {
 
   let mem: i32 = ptr->as.mem;
 
-  ret BLUE;
+  mem += 10;
+
+  ret BLUE + mem;
 }

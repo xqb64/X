@@ -229,6 +229,10 @@ enum TokenKind {
   TOKEN_PIPE_PIPE,
   TOKEN_AMPERSAND_AMPERSAND,
   TOKEN_ARROW,
+  TOKEN_PLUS_EQUAL,
+  TOKEN_MINUS_EQUAL,
+  TOKEN_STAR_EQUAL,
+  TOKEN_SLASH_EQUAL,
 
   /* three chars */
   TOKEN_ELLIPSIS,
@@ -550,23 +554,37 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
         break;
       }
       case '+': {
-        vec_insert(&tokens, mktoken(tokenizer, TOKEN_PLUS, 1));
+        if (lookahead(tokenizer, 1, "=") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_PLUS_EQUAL, 2));
+        } else {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_PLUS, 1));
+        }
         break;
       }
       case '-': {
         if (lookahead(tokenizer, 1, ">") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_ARROW, 2));
+        } else if (lookahead(tokenizer, 1, "=") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_MINUS_EQUAL, 2));
         } else {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_MINUS, 1));
         }
         break;
       }
       case '*': {
-        vec_insert(&tokens, mktoken(tokenizer, TOKEN_STAR, 1));
+        if (lookahead(tokenizer, 1, "=") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_STAR_EQUAL, 2));
+        } else {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_STAR, 1));
+        }
         break;
       }
       case '/': {
-        vec_insert(&tokens, mktoken(tokenizer, TOKEN_SLASH, 1));
+        if (lookahead(tokenizer, 1, "=") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_SLASH_EQUAL, 2));
+        } else {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_SLASH, 1));
+        }
         break;
       }
       case '.': {
@@ -834,6 +852,18 @@ void print_token(struct Token *token)
       break;
     case TOKEN_ARROW:
       printf("arrow");
+      break;
+    case TOKEN_PLUS_EQUAL:
+      printf("plus equal");
+      break;
+    case TOKEN_MINUS_EQUAL:
+      printf("minus equal");
+      break;
+    case TOKEN_STAR_EQUAL:
+      printf("star equal");
+      break;
+    case TOKEN_SLASH_EQUAL:
+      printf("slash equal");
       break;
     case TOKEN_ELLIPSIS:
       printf("ellipsis");
@@ -1107,6 +1137,7 @@ enum ExprKind {
   EXPR_UNARY,
   EXPR_BINARY,
   EXPR_ASSIGN,
+  EXPR_COMPOUND_ASSIGN,
   EXPR_CALL,
   EXPR_ADDROF,
   EXPR_DEREF,
@@ -1195,6 +1226,12 @@ struct ExprAssign {
   struct Expr *rhs;
 };
 
+struct ExprCompoundAssign {
+  enum ExprBinKind kind;
+  struct Expr *lhs;
+  struct Expr *rhs;
+};
+
 typedef Vector(struct Expr) VecExpr;
 
 struct ExprCall {
@@ -1240,6 +1277,7 @@ struct Expr {
     struct ExprVar var;
     struct ExprCall call;
     struct ExprAssign assign;
+    struct ExprCompoundAssign compound_assign;
     struct ExprUnary unary;
     struct ExprAddrOf addrof;
     struct ExprDeref deref;
@@ -1436,6 +1474,24 @@ void print_expr(struct Expr *expr, int spaces)
       printf(")");
       break;
     }
+    case EXPR_COMPOUND_ASSIGN: {
+      printf("CompoundAssign(\n");
+      print_indent(spaces + 2);
+      printf("op = ");
+      print_binary_op(expr->as.compound_assign.kind);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("lhs = ");
+      print_expr(expr->as.compound_assign.lhs, spaces + 4);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("rhs = ");
+      print_expr(expr->as.compound_assign.rhs, spaces + 4);
+      printf(",\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
     case EXPR_CALL: {
       printf("Call(\n");
 
@@ -1557,6 +1613,13 @@ void free_expr(struct Expr *expr)
       free_expr(expr->as.assign.rhs);
       free(expr->as.assign.lhs);
       free(expr->as.assign.rhs);
+      break;
+    }
+    case EXPR_COMPOUND_ASSIGN: {
+      free_expr(expr->as.compound_assign.lhs);
+      free_expr(expr->as.compound_assign.rhs);
+      free(expr->as.compound_assign.lhs);
+      free(expr->as.compound_assign.rhs);
       break;
     }
     case EXPR_CALL: {
@@ -2731,10 +2794,9 @@ struct ParseFnResult assignment(struct Parser *parser)
 
   expr = expr_result.as.expr;
 
-  if (match(parser, 1, TOKEN_EQUAL)) {
-    char *op = parser->prev->start;
-
-    (void) op;
+  if (match(parser, 5, TOKEN_EQUAL, TOKEN_PLUS_EQUAL, TOKEN_MINUS_EQUAL,
+            TOKEN_STAR_EQUAL, TOKEN_SLASH_EQUAL)) {
+    enum TokenKind op_kind = parser->prev->kind;
 
     right_result = assignment(parser);
     if (!right_result.is_ok) {
@@ -2744,8 +2806,27 @@ struct ParseFnResult assignment(struct Parser *parser)
 
     right = right_result.as.expr;
 
-    struct ExprAssign assignexp = {.lhs = ALLOC(expr), .rhs = ALLOC(right)};
-    expr = (struct Expr){.kind = EXPR_ASSIGN, .as.assign = assignexp};
+    if (op_kind == TOKEN_EQUAL) {
+      struct ExprAssign assignexp = {.lhs = ALLOC(expr), .rhs = ALLOC(right)};
+      expr = (struct Expr){.kind = EXPR_ASSIGN, .as.assign = assignexp};
+    } else {
+      enum ExprBinKind bin_kind;
+
+      if (op_kind == TOKEN_PLUS_EQUAL) {
+        bin_kind = EXPR_BIN_ADD;
+      } else if (op_kind == TOKEN_MINUS_EQUAL) {
+        bin_kind = EXPR_BIN_SUB;
+      } else if (op_kind == TOKEN_STAR_EQUAL) {
+        bin_kind = EXPR_BIN_MUL;
+      } else {
+        bin_kind = EXPR_BIN_DIV;
+      }
+
+      struct ExprCompoundAssign comp = {
+          .kind = bin_kind, .lhs = ALLOC(expr), .rhs = ALLOC(right)};
+      expr = (struct Expr){.kind = EXPR_COMPOUND_ASSIGN,
+                           .as.compound_assign = comp};
+    }
   }
 
   return (struct ParseFnResult){.as.expr = expr, .is_ok = true, .msg = NULL};
@@ -5119,6 +5200,85 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
 
       break;
     }
+    case EXPR_COMPOUND_ASSIGN: {
+      struct ExpResult lhs_res;
+      struct IRValue *rhs_val;
+
+      /* Keep lhs as lvalue. */
+      lhs_res = irfy_expr(instrs, expr->as.compound_assign.lhs);
+
+      /* Force lvalue-to-rvalue conversion for rhs. */
+      rhs_val = irfy_expr_and_convert(instrs, expr->as.compound_assign.rhs);
+
+      /* 1. Load the current value of LHS into a temporary */
+      struct IRValue *lhs_val = NULL;
+      if (lhs_res.kind == EXPRESULT_PLAIN) {
+        lhs_val = lhs_res.as.plain;
+      } else if (lhs_res.kind == EXPRESULT_DEREF) {
+        lhs_val = mkirvar();
+        lhs_val->type = expr->type;
+        struct IRInstr load = {
+            .kind = IRInstr_LOAD,
+            .as.load = {.src = lhs_res.as.ptr, .dst = clone_irval(lhs_val)}};
+        vec_insert(instrs, load);
+      } else if (lhs_res.kind == EXPRESULT_SUBOBJECT) {
+        lhs_val = mkirvar();
+        lhs_val->type = expr->type;
+        struct IRValue *base_var = malloc(sizeof(struct IRValue));
+        base_var->kind = IRValue_VAR;
+        base_var->as.var = strdup(lhs_res.as.subobject.base);
+        base_var->type = lhs_res.as.subobject.base_type;
+
+        struct IRInstr_CopyFromOffset copy_from = {
+            .src = base_var,
+            .offset = lhs_res.as.subobject.offset,
+            .dst = clone_irval(lhs_val)};
+        struct IRInstr instr = {.kind = IRInstr_CPY_FROM_OFFSET,
+                                .as.cpy_from_offset = copy_from};
+        vec_insert(instrs, instr);
+      }
+
+      /* 2. Perform the arithmetic operation */
+      struct IRValue *bin_res = mkirvar();
+      bin_res->type = expr->type;
+
+      struct IRInstr bin_instr = {
+          .kind = IRInstr_BIN,
+          .as.binary = {.kind = expr->as.compound_assign.kind,
+                        .lhs = clone_irval(lhs_val),
+                        .rhs = rhs_val,
+                        .dst = clone_irval(bin_res)}};
+      vec_insert(instrs, bin_instr);
+
+      /* 3. Store the result back into the LHS location */
+      if (lhs_res.kind == EXPRESULT_PLAIN) {
+        struct IRInstr cpy = {
+            .kind = IRInstr_CPY,
+            .as.copy = {.src = clone_irval(bin_res),
+                        .dst = clone_irval(lhs_res.as.plain)}};
+        vec_insert(instrs, cpy);
+      } else if (lhs_res.kind == EXPRESULT_DEREF) {
+        struct IRInstr store = {
+            .kind = IRInstr_STORE,
+            .as.store = {.val = clone_irval(bin_res), .dst = lhs_res.as.ptr}};
+        vec_insert(instrs, store);
+      } else if (lhs_res.kind == EXPRESULT_SUBOBJECT) {
+        struct IRValue *base_var = malloc(sizeof(struct IRValue));
+        base_var->kind = IRValue_VAR;
+        base_var->as.var = strdup(lhs_res.as.subobject.base);
+        base_var->type = lhs_res.as.subobject.base_type;
+
+        struct IRInstr_CopyToOffset copy_to = {
+            .dst = base_var,
+            .offset = lhs_res.as.subobject.offset,
+            .src = clone_irval(bin_res)};
+        struct IRInstr instr = {.kind = IRInstr_CPY_TO_OFFSET,
+                                .as.cpy_to_offset = copy_to};
+        vec_insert(instrs, instr);
+      }
+
+      return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = bin_res};
+    }
     case EXPR_CALL: {
       /* Force lvalue-to-rvalue conversion upon the arguments.  */
       VecIRValuePtr args = {0};
@@ -5788,6 +5948,22 @@ struct ResolveResult resolve_expr(struct VariableMap **varmap,
 
       break;
     }
+    case EXPR_COMPOUND_ASSIGN: {
+      struct ResolveResult rlhs, rrhs;
+
+      rlhs = resolve_expr(varmap, expr->as.compound_assign.lhs);
+      if (!rlhs.is_ok) {
+        return rlhs;
+      }
+
+      rrhs = resolve_expr(varmap, expr->as.compound_assign.rhs);
+      if (!rrhs.is_ok) {
+        return rrhs;
+      }
+
+      break;
+    }
+
     case EXPR_UNARY: {
       struct ResolveResult r;
 
@@ -6762,7 +6938,8 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
       }
 
       if (expr->as.assign.lhs->kind != EXPR_VARIABLE &&
-          expr->as.assign.lhs->kind != EXPR_DEREF) {
+          expr->as.assign.lhs->kind != EXPR_DEREF &&
+          expr->as.assign.lhs->kind != EXPR_MEMBER) {
         return (struct TypecheckResult){
             .is_ok = false,
             .msg = "Invalid assignment target: left side must be a variable",
@@ -6801,6 +6978,67 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
       }
 
       expr->type = expr->as.assign.lhs->type;
+      break;
+    }
+    case EXPR_COMPOUND_ASSIGN: {
+      struct TypecheckResult lhs_res =
+          typecheck_expr(expr->as.compound_assign.lhs, sym_table);
+      if (!lhs_res.is_ok) {
+        return lhs_res;
+      }
+
+      struct TypecheckResult rhs_res =
+          typecheck_expr(expr->as.compound_assign.rhs, sym_table);
+      if (!rhs_res.is_ok) {
+        return rhs_res;
+      }
+
+      if (expr->as.compound_assign.lhs->kind != EXPR_VARIABLE &&
+          expr->as.compound_assign.lhs->kind != EXPR_DEREF &&
+          expr->as.compound_assign.lhs->kind != EXPR_MEMBER) {
+        return (struct TypecheckResult){
+            .is_ok = false,
+            .msg =
+                "Invalid compound assignment target: left side must be a "
+                "variable",
+            .ast = NULL};
+      }
+
+      Type actual_type = expr->as.compound_assign.rhs->type;
+      Type expected_type = expr->as.compound_assign.lhs->type;
+
+      if (!types_equal(actual_type, expected_type)) {
+        bool is_literal =
+            (expr->as.compound_assign.rhs->kind == EXPR_LITERAL &&
+             expr->as.compound_assign.rhs->as.literal.kind == LITERAL_NUM);
+        bool is_unary_literal =
+            (expr->as.compound_assign.rhs->kind == EXPR_UNARY &&
+             expr->as.compound_assign.rhs->as.unary.expr->kind ==
+                 EXPR_LITERAL &&
+             expr->as.compound_assign.rhs->as.unary.expr->as.literal.kind ==
+                 LITERAL_NUM);
+
+        if (is_literal || is_unary_literal) {
+          if (!promote_literal(expr->as.compound_assign.rhs, expected_type)) {
+            return (struct TypecheckResult){
+                .is_ok = false,
+                .msg =
+                    "Type error: compound assignment does not fit in the "
+                    "expected type",
+                .ast = NULL,
+            };
+          }
+        } else {
+          struct Expr *inner = malloc(sizeof(struct Expr));
+          *inner = *expr->as.compound_assign.rhs;
+
+          expr->as.compound_assign.rhs->kind = EXPR_CAST;
+          expr->as.compound_assign.rhs->type = expected_type;
+          expr->as.compound_assign.rhs->as.cast.expr = inner;
+        }
+      }
+
+      expr->type = expr->as.compound_assign.lhs->type;
       break;
     }
     case EXPR_CALL: {
