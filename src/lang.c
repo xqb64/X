@@ -184,6 +184,7 @@ enum TokenKind {
   TOKEN_EXTERN,
   TOKEN_VOID,
   TOKEN_STRUCT,
+  TOKEN_UNION,
   TOKEN_BOOL,
   TOKEN_TRUE,
   TOKEN_FALSE,
@@ -511,7 +512,9 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
         break;
       }
       case 'u': {
-        if (lookahead(tokenizer, 1, "8") == 0) {
+        if (lookahead(tokenizer, 4, "nion") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_UNION, 5));
+        } else if (lookahead(tokenizer, 1, "8") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_U8, 2));
         } else if (lookahead(tokenizer, 2, "16") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_U16, 3));
@@ -705,6 +708,9 @@ void print_token(struct Token *token)
       break;
     case TOKEN_STRUCT:
       printf("struct");
+      break;
+    case TOKEN_UNION:
+      printf("union");
       break;
     case TOKEN_BOOL:
       printf("bool");
@@ -909,6 +915,7 @@ struct StructDef {
   VecStructField fields;
   int size;
   int alignment;
+  bool is_union;
 };
 
 struct StructTable {
@@ -1138,9 +1145,16 @@ struct ExprCast {
   struct Expr *expr;
 };
 
+struct StructInitItem {
+  char *designator; /* e.g., "a" or "as.mem" (NULL if positional) */
+  struct Expr *expr;
+  int resolved_offset; /* Calculated later by the typechecker */
+};
+typedef Vector(struct StructInitItem) VecStructInitItem;
+
 struct ExprStructInit {
   char *struct_name;
-  VecExpr values;
+  VecStructInitItem values;
 };
 
 struct ExprMember {
@@ -1412,7 +1426,7 @@ void print_expr(struct Expr *expr, int spaces)
       printf("values = [\n");
       for (int i = 0; i < expr->as.struct_init.values.len; i++) {
         print_indent(spaces + 4);
-        print_expr(&expr->as.struct_init.values.data[i], spaces + 4);
+        print_expr(expr->as.struct_init.values.data[i].expr, spaces + 4);
         printf(",\n");
       }
       print_indent(spaces + 2);
@@ -1503,7 +1517,10 @@ void free_expr(struct Expr *expr)
     case EXPR_STRUCT_INIT: {
       free(expr->as.struct_init.struct_name);
       for (int i = 0; i < expr->as.struct_init.values.len; i++) {
-        free_expr(&expr->as.struct_init.values.data[i]);
+        if (expr->as.struct_init.values.data[i].designator) {
+          free(expr->as.struct_init.values.data[i].designator);
+        }
+        free_expr(expr->as.struct_init.values.data[i].expr);
       }
       vec_free(&expr->as.struct_init.values);
       break;
@@ -1594,6 +1611,7 @@ struct StmtExpr {
 struct StmtStruct {
   char *name;
   VecStructField fields;
+  bool is_union;
 };
 
 struct Stmt {
@@ -1821,7 +1839,8 @@ void print_stmt(struct Stmt *stmt, int spaces)
     }
     case STMT_STRUCT: {
       print_indent(spaces);
-      printf("STMT_STRUCT(\n");
+      printf("%s(\n",
+             stmt->as.struct_stmt.is_union ? "STMT_UNION" : "STMT_STRUCT");
 
       print_indent(spaces + 2);
       printf("name = %s,\n", stmt->as.struct_stmt.name);
@@ -1966,6 +1985,7 @@ struct Parser {
   struct Token *prev;
   VecToken *tokens;
   int idx;
+  VecStmt *global_stmts;
 };
 
 struct Token *advance_parser(struct Parser *parser);
@@ -2148,16 +2168,45 @@ struct ParseFnResult primary(struct Parser *parser)
           .is_ok = false, .as.expr = {0}, .msg = "Expected identifier"};
     }
 
-    /* Lookahead: If it's a brace, this is a struct initialization */
     if (match(parser, 1, TOKEN_LBRACE)) {
-      VecExpr values = {0};
+      VecStructInitItem values = {0};
 
       while (!check(parser, TOKEN_RBRACE)) {
-        if (check(parser, TOKEN_IDENTIFIER) &&
-            parser->idx < parser->tokens->len &&
-            parser->tokens->data[parser->idx].kind == TOKEN_COLON) {
+        char *designator = NULL;
+
+        /* Parse designated initializer chain: .a.b: expr */
+        if (check(parser, TOKEN_DOT)) {
           advance_parser(parser);
-          advance_parser(parser);
+          char buf[256] = {0};
+
+          while (true) {
+            struct Token *id = consume(parser, TOKEN_IDENTIFIER);
+            if (!id) {
+              return (struct ParseFnResult){.is_ok = false,
+                                            .msg = "Expected identifier"};
+            }
+
+            if (buf[0] != '\0') {
+              strcat(buf, ".");
+            }
+            strncat(buf, id->start, id->len);
+
+            if (check(parser, TOKEN_DOT)) {
+              advance_parser(parser);
+            } else {
+              break;
+            }
+          }
+          consume(parser, TOKEN_COLON);
+          designator = strdup(buf);
+        }
+        /* Fallback: positional or legacy `ident: expr` */
+        else if (check(parser, TOKEN_IDENTIFIER) &&
+                 parser->idx < parser->tokens->len &&
+                 parser->tokens->data[parser->idx].kind == TOKEN_COLON) {
+          struct Token *id = consume(parser, TOKEN_IDENTIFIER);
+          consume(parser, TOKEN_COLON);
+          designator = strndup(id->start, id->len);
         }
 
         struct ParseFnResult val_res = parse_expr(parser);
@@ -2165,25 +2214,22 @@ struct ParseFnResult primary(struct Parser *parser)
           return val_res;
         }
 
-        vec_insert(&values, val_res.as.expr);
+        struct StructInitItem item;
+        item.designator = designator;
+        item.expr = ALLOC(val_res.as.expr);
+        item.resolved_offset = 0;
+        vec_insert(&values, item);
 
         if (check(parser, TOKEN_COMMA)) {
           advance_parser(parser);
         }
       }
 
-      struct Token *token_rbrace = consume(parser, TOKEN_RBRACE);
-      if (!token_rbrace) {
-        return (struct ParseFnResult){
-            .is_ok = false,
-            .as.expr = {0},
-            .msg = "Expected '}' after struct values"};
-      }
+      consume(parser, TOKEN_RBRACE);
 
       struct ExprStructInit init;
       init.struct_name = strndup(token_id->start, token_id->len);
       init.values = values;
-
       res.as.expr =
           (struct Expr){.kind = EXPR_STRUCT_INIT, .as.struct_init = init};
     } else {
@@ -2625,6 +2671,70 @@ Type parse_type(struct Parser *parser)
   if (check(parser, TOKEN_VOID)) {
     advance_parser(parser);
     return (Type){.kind = VOID_T};
+  }
+
+  if (check(parser, TOKEN_UNION) || check(parser, TOKEN_STRUCT)) {
+    bool is_union = check(parser, TOKEN_UNION);
+    advance_parser(parser);
+
+    /* Generate a unique name for the typechecker/IR */
+    char *anon_name = mkuniq(is_union ? "anon_union" : "anon_struct");
+
+    consume(parser, TOKEN_LBRACE);
+    VecStructField fields = {0};
+
+    while (!check(parser, TOKEN_RBRACE)) {
+      char *field_name = NULL;
+      Type field_type;
+
+      /* Support native `name: type` or C-style `type name` */
+      if (check(parser, TOKEN_IDENTIFIER) &&
+          parser->idx < parser->tokens->len &&
+          parser->tokens->data[parser->idx].kind == TOKEN_COLON) {
+        struct Token *name_tok = consume(parser, TOKEN_IDENTIFIER);
+        consume(parser, TOKEN_COLON);
+        field_type = parse_type(parser);
+        field_name = strndup(name_tok->start, name_tok->len);
+      } else {
+        field_type = parse_type(parser);
+        struct Token *name_tok = consume(parser, TOKEN_IDENTIFIER);
+        if (name_tok) {
+          field_name = strndup(name_tok->start, name_tok->len);
+        } else {
+          field_name = strdup(""); /* True anonymous field */
+        }
+      }
+
+      struct StructField field;
+      field.name = field_name;
+      field.type = field_type;
+      field.offset = 0;
+      vec_insert(&fields, field);
+
+      if (check(parser, TOKEN_COMMA) || check(parser, TOKEN_SEMICOLON)) {
+        advance_parser(parser);
+      }
+    }
+    consume(parser, TOKEN_RBRACE);
+
+    /* Create the STMT_STRUCT and inject it globally */
+    struct StmtStruct struct_stmt;
+    struct_stmt.name = strdup(anon_name);
+    struct_stmt.fields = fields;
+    struct_stmt.is_union = is_union;
+
+    struct Stmt s;
+    s.kind = STMT_STRUCT;
+    s.as.struct_stmt = struct_stmt;
+
+    if (parser->global_stmts) {
+      vec_insert(parser->global_stmts, s);
+    }
+
+    Type custom_type;
+    custom_type.kind = STRUCT_T;
+    custom_type.as.struct_name = anon_name;
+    return custom_type;
   }
 
   struct Token *type_token =
@@ -3311,17 +3421,19 @@ struct ParseFnResult parse_expr_stmt(struct Parser *parser)
 struct ParseFnResult parse_struct_stmt(struct Parser *parser)
 {
   struct ParseFnResult result;
-  struct Token *token_struct, *token_id, *token_lbrace, *token_rbrace;
+  struct Token *token_struct_or_union, *token_id, *token_lbrace, *token_rbrace;
   VecStructField fields = {0};
 
   result.is_ok = true;
   result.msg = NULL;
 
-  token_struct = consume(parser, TOKEN_STRUCT);
-  if (!token_struct) {
+  token_struct_or_union = consume_any(parser, 2, TOKEN_STRUCT, TOKEN_UNION);
+  if (!token_struct_or_union) {
     return (struct ParseFnResult){
         .is_ok = false, .as.stmt = {0}, .msg = "Expected token 'struct'"};
   }
+
+  bool is_union = (token_struct_or_union->kind == TOKEN_UNION);
 
   token_id = consume(parser, TOKEN_IDENTIFIER);
   if (!token_id) {
@@ -3341,25 +3453,30 @@ struct ParseFnResult parse_struct_stmt(struct Parser *parser)
   }
 
   while (!check(parser, TOKEN_RBRACE)) {
-    struct Token *field_token = consume(parser, TOKEN_IDENTIFIER);
-    if (!field_token) {
-      return (struct ParseFnResult){
-          .is_ok = false, .as.stmt = {0}, .msg = "Expected field name"};
-    }
+    char *field_name = NULL;
+    Type field_type;
 
-    struct Token *colon_token = consume(parser, TOKEN_COLON);
-    if (!colon_token) {
-      return (struct ParseFnResult){.is_ok = false,
-                                    .as.stmt = {0},
-                                    .msg = "Expected ':' after field name"};
+    /* Handle both `a: i8` and `union { ... } as;` gracefully */
+    if (check(parser, TOKEN_IDENTIFIER) && parser->idx < parser->tokens->len &&
+        parser->tokens->data[parser->idx].kind == TOKEN_COLON) {
+      struct Token *name_tok = consume(parser, TOKEN_IDENTIFIER);
+      consume(parser, TOKEN_COLON);
+      field_type = parse_type(parser);
+      field_name = strndup(name_tok->start, name_tok->len);
+    } else {
+      field_type = parse_type(parser);
+      struct Token *name_tok = consume(parser, TOKEN_IDENTIFIER);
+      if (name_tok) {
+        field_name = strndup(name_tok->start, name_tok->len);
+      } else {
+        field_name = strdup("");
+      }
     }
-
-    Type field_type = parse_type(parser);
 
     struct StructField field;
-    field.name = strndup(field_token->start, field_token->len);
+    field.name = field_name;
     field.type = field_type;
-    field.offset = 0; /* To be calculated during typechecking */
+    field.offset = 0;
     vec_insert(&fields, field);
 
     if (check(parser, TOKEN_COMMA)) {
@@ -3377,6 +3494,7 @@ struct ParseFnResult parse_struct_stmt(struct Parser *parser)
   struct StmtStruct struct_stmt;
   struct_stmt.name = name;
   struct_stmt.fields = fields;
+  struct_stmt.is_union = is_union;
 
   result.as.stmt =
       (struct Stmt){.kind = STMT_STRUCT, .as.struct_stmt = struct_stmt};
@@ -3464,7 +3582,8 @@ struct ParseFnResult parse_stmt(struct Parser *parser)
       result.as.stmt = block_res.as.stmt;
       break;
     }
-    case TOKEN_STRUCT: {
+    case TOKEN_STRUCT:
+    case TOKEN_UNION: {
       struct ParseFnResult struct_res = parse_struct_stmt(parser);
       if (!struct_res.is_ok) {
         return struct_res;
@@ -3492,8 +3611,10 @@ struct ParseResult parse(struct Parser *parser)
   result.is_ok = true;
   result.msg = NULL;
 
-  result.ast = malloc(sizeof(VecStmt));
+  result.ast = malloc(sizeof(struct AST));
   result.ast->stmts = (VecStmt){0};
+
+  parser->global_stmts = &result.ast->stmts;
 
   while (parser->curr) {
     struct ParseFnResult r;
@@ -4995,19 +5116,17 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       break;
     }
     case EXPR_STRUCT_INIT: {
-      struct StructDef *def =
-          struct_get(struct_table, expr->as.struct_init.struct_name);
-
-      /* 1. Allocate a temporary variable for the struct */
       struct IRValue *tmp_struct = mkirvar();
       tmp_struct->type.kind = STRUCT_T;
       tmp_struct->type.as.struct_name = expr->as.struct_init.struct_name;
 
-      /* 2. Populate each field directly using CopyToOffset */
       for (int i = 0; i < expr->as.struct_init.values.len; i++) {
-        struct IRValue *val =
-            irfy_expr_and_convert(instrs, &expr->as.struct_init.values.data[i]);
-        int offset = def->fields.data[i].offset;
+        /* Use .expr instead of the array index directly */
+        struct IRValue *val = irfy_expr_and_convert(
+            instrs, expr->as.struct_init.values.data[i].expr);
+
+        /* Use our newly cached flat offset! */
+        int offset = expr->as.struct_init.values.data[i].resolved_offset;
 
         struct IRInstr_CopyToOffset copy_to = {
             .dst = clone_irval(tmp_struct), .offset = offset, .src = val};
@@ -5016,7 +5135,6 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
                                              .as.cpy_to_offset = copy_to}));
       }
 
-      /* Return the temporary struct itself as an rvalue */
       return (struct ExpResult){.kind = EXPRESULT_PLAIN,
                                 .as.plain = tmp_struct};
     }
@@ -5336,7 +5454,7 @@ struct ResolveResult resolve_expr(struct VariableMap **varmap,
       for (int i = 0; i < expr->as.struct_init.values.len; i++) {
         struct ResolveResult r;
 
-        r = resolve_expr(varmap, &expr->as.struct_init.values.data[i]);
+        r = resolve_expr(varmap, expr->as.struct_init.values.data[i].expr);
         if (!r.is_ok) {
           return r;
         }
@@ -6180,52 +6298,61 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
             .is_ok = false, .msg = "Initializing unknown struct", .ast = NULL};
       }
 
-      if (expr->as.struct_init.values.len != def->fields.len) {
-        return (struct TypecheckResult){
-            .is_ok = false,
-            .msg = "Struct initialization field count mismatch",
-            .ast = NULL};
-      }
-
+      int positional_idx = 0;
       for (int i = 0; i < expr->as.struct_init.values.len; i++) {
-        struct Expr *val_expr = &expr->as.struct_init.values.data[i];
+        struct StructInitItem *item = &expr->as.struct_init.values.data[i];
 
-        struct TypecheckResult r = typecheck_expr(val_expr, sym_table);
+        struct TypecheckResult r = typecheck_expr(item->expr, sym_table);
         if (!r.is_ok) {
           return r;
         }
 
-        Type expected_type = def->fields.data[i].type;
-        Type actual_type = val_expr->type;
+        Type expected_type;
+        int resolved_offset = 0;
 
-        /* Validate type match, promoting/casting if necessary */
-        if (!types_equal(actual_type, expected_type)) {
-          bool is_literal = (val_expr->kind == EXPR_LITERAL &&
-                             val_expr->as.literal.kind == LITERAL_NUM);
-          bool is_unary_literal =
-              (val_expr->kind == EXPR_UNARY &&
-               val_expr->as.unary.expr->kind == EXPR_LITERAL &&
-               val_expr->as.unary.expr->as.literal.kind == LITERAL_NUM);
+        if (item->designator) {
+          char *path = strdup(item->designator);
+          char *part = strtok(path, ".");
+          struct StructDef *curr_def = def;
+          Type current_type;
 
-          if (is_literal || is_unary_literal) {
-            if (!promote_literal(val_expr, expected_type)) {
-              return (struct TypecheckResult){
-                  .is_ok = false,
-                  .msg =
-                      "Type error: struct init value does not fit expected "
-                      "field type",
-                  .ast = NULL};
+          while (part) {
+            bool found = false;
+            for (int f = 0; f < curr_def->fields.len; f++) {
+              if (strcmp(curr_def->fields.data[f].name, part) == 0) {
+                found = true;
+                resolved_offset += curr_def->fields.data[f].offset;
+                current_type = curr_def->fields.data[f].type;
+                break;
+              }
             }
-          } else {
-            /* Implicit cast for runtime variables */
-            struct Expr *inner = malloc(sizeof(struct Expr));
-            *inner = *val_expr;
+            if (!found) {
+              free(path);
+              return (struct TypecheckResult){.is_ok = false,
+                                              .msg = "Field not found"};
+            }
 
-            val_expr->kind = EXPR_CAST;
-            val_expr->type = expected_type;
-            val_expr->as.cast.expr = inner;
+            part = strtok(NULL, ".");
+            if (part) {
+              if (current_type.kind != STRUCT_T) {
+                return (struct TypecheckResult){.is_ok = false,
+                                                .msg = "Not a struct"};
+              }
+              curr_def = struct_get(struct_table, current_type.as.struct_name);
+            }
           }
+          free(path);
+          expected_type = current_type;
+
+        } else {
+          /* Handle positional fallback */
+          expected_type = def->fields.data[positional_idx].type;
+          resolved_offset = def->fields.data[positional_idx].offset;
+          positional_idx++;
         }
+
+        /* Save the final flat offset for the IR phase! */
+        item->resolved_offset = resolved_offset;
       }
 
       expr->type.kind = STRUCT_T;
@@ -6554,6 +6681,7 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
       def.fields = stmt->as.struct_stmt.fields; /* sharing the pointer */
       def.size = 0;
       def.alignment = 1;
+      def.is_union = stmt->as.struct_stmt.is_union;
 
       /* Calculate offsets with x86_64 ABI padding */
       for (int i = 0; i < def.fields.len; i++) {
@@ -6563,23 +6691,37 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
 
         if (field_size == -1) {
           return (struct TypecheckResult){
-              .is_ok = false, .msg = "Struct field has invalid type"};
+              .is_ok = false, .msg = "Struct/Union field has invalid type"};
         }
 
-        /* Pad the current size to match the field's required alignment */
-        if (def.size % field_align != 0) {
-          def.size += field_align - (def.size % field_align);
-        }
+        if (def.is_union) {
+          /* Union: All fields start at offset 0 */
+          stmt->as.struct_stmt.fields.data[i].offset = 0;
+          def.fields.data[i].offset = 0;
 
-        /* Write back the calculated offset to the AST */
-        stmt->as.struct_stmt.fields.data[i].offset = def.size;
-        def.fields.data[i].offset = def.size; /* Update our table copy */
+          /* Size and alignment are simply the maximum of all fields */
+          if (field_size > def.size) {
+            def.size = field_size;
+          }
+          if (field_align > def.alignment) {
+            def.alignment = field_align;
+          }
+        } else {
+          /* Pad the current size to match the field's required alignment */
+          if (def.size % field_align != 0) {
+            def.size += field_align - (def.size % field_align);
+          }
 
-        def.size += field_size;
+          /* Write back the calculated offset to the AST */
+          stmt->as.struct_stmt.fields.data[i].offset = def.size;
+          def.fields.data[i].offset = def.size; /* Update our table copy */
 
-        /* Struct alignment is the largest alignment of its fields */
-        if (field_align > def.alignment) {
-          def.alignment = field_align;
+          def.size += field_size;
+
+          /* Struct alignment is the largest alignment of its fields */
+          if (field_align > def.alignment) {
+            def.alignment = field_align;
+          }
         }
       }
 
