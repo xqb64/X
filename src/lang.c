@@ -219,6 +219,8 @@ enum TokenKind {
   TOKEN_BANG,
   TOKEN_PIPE,
   TOKEN_AMPERSAND,
+  TOKEN_CARET,
+  TOKEN_TILDE,
   TOKEN_DOT,
 
   /* two chars */
@@ -233,8 +235,15 @@ enum TokenKind {
   TOKEN_MINUS_EQUAL,
   TOKEN_STAR_EQUAL,
   TOKEN_SLASH_EQUAL,
+  TOKEN_AMPERSAND_EQUAL,
+  TOKEN_PIPE_EQUAL,
+  TOKEN_CARET_EQUAL,
+  TOKEN_LESS_LESS,
+  TOKEN_GREATER_GREATER,
 
   /* three chars */
+  TOKEN_LESS_LESS_EQUAL,
+  TOKEN_GREATER_GREATER_EQUAL,
   TOKEN_ELLIPSIS,
 
   /* variable length */
@@ -631,6 +640,8 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
       case '|': {
         if (lookahead(tokenizer, 1, "|") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_PIPE_PIPE, 2));
+        } else if (lookahead(tokenizer, 1, "=") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_PIPE_EQUAL, 2));
         } else {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_PIPE, 1));
         }
@@ -639,9 +650,23 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
       case '&': {
         if (lookahead(tokenizer, 1, "&") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_AMPERSAND_AMPERSAND, 2));
+        } else if (lookahead(tokenizer, 1, "=") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_AMPERSAND_EQUAL, 2));
         } else {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_AMPERSAND, 1));
         }
+        break;
+      }
+      case '^': {
+        if (lookahead(tokenizer, 1, "=") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_CARET_EQUAL, 2));
+        } else {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_CARET, 1));
+        }
+        break;
+      }
+      case '~': {
+        vec_insert(&tokens, mktoken(tokenizer, TOKEN_TILDE, 1));
         break;
       }
       case ',': {
@@ -661,7 +686,12 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
         break;
       }
       case '>': {
-        if (lookahead(tokenizer, 1, "=") == 0) {
+        if (lookahead(tokenizer, 2, ">=") == 0) {
+          vec_insert(&tokens,
+                     mktoken(tokenizer, TOKEN_GREATER_GREATER_EQUAL, 3));
+        } else if (lookahead(tokenizer, 1, ">") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_GREATER_GREATER, 2));
+        } else if (lookahead(tokenizer, 1, "=") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_GREATER_EQUAL, 2));
         } else {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_GREATER, 1));
@@ -669,7 +699,11 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
         break;
       }
       case '<': {
-        if (lookahead(tokenizer, 1, "=") == 0) {
+        if (lookahead(tokenizer, 2, "<=") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_LESS_LESS_EQUAL, 3));
+        } else if (lookahead(tokenizer, 1, "<") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_LESS_LESS, 2));
+        } else if (lookahead(tokenizer, 1, "=") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_LESS_EQUAL, 2));
         } else {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_LESS, 1));
@@ -829,6 +863,12 @@ void print_token(struct Token *token)
     case TOKEN_AMPERSAND:
       printf("ampersand");
       break;
+    case TOKEN_CARET:
+      printf("caret");
+      break;
+    case TOKEN_TILDE:
+      printf("tilde");
+      break;
     case TOKEN_DOT:
       printf("dot");
       break;
@@ -864,6 +904,27 @@ void print_token(struct Token *token)
       break;
     case TOKEN_SLASH_EQUAL:
       printf("slash equal");
+      break;
+    case TOKEN_AMPERSAND_EQUAL:
+      printf("ampersand equal");
+      break;
+    case TOKEN_PIPE_EQUAL:
+      printf("pipe equal");
+      break;
+    case TOKEN_CARET_EQUAL:
+      printf("caret equal");
+      break;
+    case TOKEN_LESS_LESS:
+      printf("less less");
+      break;
+    case TOKEN_GREATER_GREATER:
+      printf("greater greater");
+      break;
+    case TOKEN_LESS_LESS_EQUAL:
+      printf("less less equal");
+      break;
+    case TOKEN_GREATER_GREATER_EQUAL:
+      printf("greater greater equal");
       break;
     case TOKEN_ELLIPSIS:
       printf("ellipsis");
@@ -1157,6 +1218,11 @@ enum ExprBinKind {
   EXPR_BIN_GREATER_EQUAL,
   EXPR_BIN_EQUAL_EQUAL,
   EXPR_BIN_BANG_EQUAL,
+  EXPR_BIN_BITWISE_AND,
+  EXPR_BIN_BITWISE_XOR,
+  EXPR_BIN_BITWISE_OR,
+  EXPR_BIN_SHIFT_LEFT,
+  EXPR_BIN_SHIFT_RIGHT,
   EXPR_BIN_LOGICAL_AND,
   EXPR_BIN_LOGICAL_OR,
 };
@@ -1193,6 +1259,21 @@ void print_binary_op(enum ExprBinKind kind)
       break;
     case EXPR_BIN_BANG_EQUAL:
       printf("BANG EQUAL");
+      break;
+    case EXPR_BIN_BITWISE_AND:
+      printf("BITWISE AND");
+      break;
+    case EXPR_BIN_BITWISE_XOR:
+      printf("BITWISE XOR");
+      break;
+    case EXPR_BIN_BITWISE_OR:
+      printf("BITWISE OR");
+      break;
+    case EXPR_BIN_SHIFT_LEFT:
+      printf("SHIFT LEFT");
+      break;
+    case EXPR_BIN_SHIFT_RIGHT:
+      printf("SHIFT RIGHT");
       break;
     case EXPR_BIN_LOGICAL_AND:
       printf("LOGICAL AND");
@@ -2509,10 +2590,12 @@ struct ParseFnResult postfix(struct Parser *parser)
 
 struct ParseFnResult unary(struct Parser *parser)
 {
-  if (match(parser, 4, TOKEN_MINUS, TOKEN_BANG, TOKEN_AMPERSAND, TOKEN_STAR)) {
+  if (match(parser, 5, TOKEN_MINUS, TOKEN_BANG, TOKEN_TILDE, TOKEN_AMPERSAND,
+            TOKEN_STAR)) {
     char *op = strndup(parser->prev->start, parser->prev->len);
 
-    if (strncmp(op, "-", 1) == 0 || strncmp(op, "!", 1) == 0) {
+    if (strncmp(op, "-", 1) == 0 || strncmp(op, "!", 1) == 0 ||
+        strncmp(op, "~", 1) == 0) {
       struct ParseFnResult right_result;
 
       right_result = unary(parser);
@@ -2672,7 +2755,7 @@ struct ParseFnResult term(struct Parser *parser)
   return left_res;
 }
 
-struct ParseFnResult comparison(struct Parser *parser)
+struct ParseFnResult shift(struct Parser *parser)
 {
   struct ParseFnResult left_res, right_res;
   struct Expr left, right;
@@ -2683,11 +2766,45 @@ struct ParseFnResult comparison(struct Parser *parser)
   }
 
   left = left_res.as.expr;
+  while (match(parser, 2, TOKEN_LESS_LESS, TOKEN_GREATER_GREATER)) {
+    enum TokenKind op = parser->prev->kind;
+
+    right_res = term(parser);
+    if (!right_res.is_ok) {
+      return right_res;
+    }
+
+    right = right_res.as.expr;
+
+    struct ExprBin binexpr;
+    binexpr.kind =
+        (op == TOKEN_LESS_LESS) ? EXPR_BIN_SHIFT_LEFT : EXPR_BIN_SHIFT_RIGHT;
+    binexpr.lhs = ALLOC(left);
+    binexpr.rhs = ALLOC(right);
+
+    left = (struct Expr){.kind = EXPR_BINARY, .as.binary = binexpr};
+    left_res.as.expr = left;
+  }
+
+  return left_res;
+}
+
+struct ParseFnResult comparison(struct Parser *parser)
+{
+  struct ParseFnResult left_res, right_res;
+  struct Expr left, right;
+
+  left_res = shift(parser);
+  if (!left_res.is_ok) {
+    return left_res;
+  }
+
+  left = left_res.as.expr;
   while (match(parser, 6, TOKEN_LESS, TOKEN_LESS_EQUAL, TOKEN_GREATER,
                TOKEN_GREATER_EQUAL, TOKEN_EQUAL_EQUAL, TOKEN_BANG_EQUAL)) {
     char *op = parser->prev->start;
 
-    right_res = term(parser);
+    right_res = shift(parser);
     if (!right_res.is_ok) {
       return right_res;
     }
@@ -2720,7 +2837,7 @@ struct ParseFnResult comparison(struct Parser *parser)
   return left_res;
 }
 
-struct ParseFnResult logical_and(struct Parser *parser)
+struct ParseFnResult bitwise_and(struct Parser *parser)
 {
   struct ParseFnResult left_res, right_res;
   struct Expr left, right;
@@ -2731,8 +2848,101 @@ struct ParseFnResult logical_and(struct Parser *parser)
   }
 
   left = left_res.as.expr;
-  while (match(parser, 1, TOKEN_AMPERSAND_AMPERSAND)) {
+  while (match(parser, 1, TOKEN_AMPERSAND)) {
     right_res = comparison(parser);
+    if (!right_res.is_ok) {
+      return right_res;
+    }
+
+    right = right_res.as.expr;
+
+    struct ExprBin binexpr;
+    binexpr.kind = EXPR_BIN_BITWISE_AND;
+    binexpr.lhs = ALLOC(left);
+    binexpr.rhs = ALLOC(right);
+
+    left = (struct Expr){.kind = EXPR_BINARY, .as.binary = binexpr};
+    left_res.as.expr = left;
+  }
+
+  return left_res;
+}
+
+struct ParseFnResult bitwise_xor(struct Parser *parser)
+{
+  struct ParseFnResult left_res, right_res;
+  struct Expr left, right;
+
+  left_res = bitwise_and(parser);
+  if (!left_res.is_ok) {
+    return left_res;
+  }
+
+  left = left_res.as.expr;
+  while (match(parser, 1, TOKEN_CARET)) {
+    right_res = bitwise_and(parser);
+    if (!right_res.is_ok) {
+      return right_res;
+    }
+
+    right = right_res.as.expr;
+
+    struct ExprBin binexpr;
+    binexpr.kind = EXPR_BIN_BITWISE_XOR;
+    binexpr.lhs = ALLOC(left);
+    binexpr.rhs = ALLOC(right);
+
+    left = (struct Expr){.kind = EXPR_BINARY, .as.binary = binexpr};
+    left_res.as.expr = left;
+  }
+
+  return left_res;
+}
+
+struct ParseFnResult bitwise_or(struct Parser *parser)
+{
+  struct ParseFnResult left_res, right_res;
+  struct Expr left, right;
+
+  left_res = bitwise_xor(parser);
+  if (!left_res.is_ok) {
+    return left_res;
+  }
+
+  left = left_res.as.expr;
+  while (match(parser, 1, TOKEN_PIPE)) {
+    right_res = bitwise_xor(parser);
+    if (!right_res.is_ok) {
+      return right_res;
+    }
+
+    right = right_res.as.expr;
+
+    struct ExprBin binexpr;
+    binexpr.kind = EXPR_BIN_BITWISE_OR;
+    binexpr.lhs = ALLOC(left);
+    binexpr.rhs = ALLOC(right);
+
+    left = (struct Expr){.kind = EXPR_BINARY, .as.binary = binexpr};
+    left_res.as.expr = left;
+  }
+
+  return left_res;
+}
+
+struct ParseFnResult logical_and(struct Parser *parser)
+{
+  struct ParseFnResult left_res, right_res;
+  struct Expr left, right;
+
+  left_res = bitwise_or(parser);
+  if (!left_res.is_ok) {
+    return left_res;
+  }
+
+  left = left_res.as.expr;
+  while (match(parser, 1, TOKEN_AMPERSAND_AMPERSAND)) {
+    right_res = bitwise_or(parser);
     if (!right_res.is_ok) {
       return right_res;
     }
@@ -2794,8 +3004,10 @@ struct ParseFnResult assignment(struct Parser *parser)
 
   expr = expr_result.as.expr;
 
-  if (match(parser, 5, TOKEN_EQUAL, TOKEN_PLUS_EQUAL, TOKEN_MINUS_EQUAL,
-            TOKEN_STAR_EQUAL, TOKEN_SLASH_EQUAL)) {
+  if (match(parser, 10, TOKEN_EQUAL, TOKEN_PLUS_EQUAL, TOKEN_MINUS_EQUAL,
+            TOKEN_STAR_EQUAL, TOKEN_SLASH_EQUAL, TOKEN_AMPERSAND_EQUAL,
+            TOKEN_PIPE_EQUAL, TOKEN_CARET_EQUAL, TOKEN_LESS_LESS_EQUAL,
+            TOKEN_GREATER_GREATER_EQUAL)) {
     enum TokenKind op_kind = parser->prev->kind;
 
     right_result = assignment(parser);
@@ -2818,8 +3030,18 @@ struct ParseFnResult assignment(struct Parser *parser)
         bin_kind = EXPR_BIN_SUB;
       } else if (op_kind == TOKEN_STAR_EQUAL) {
         bin_kind = EXPR_BIN_MUL;
-      } else {
+      } else if (op_kind == TOKEN_SLASH_EQUAL) {
         bin_kind = EXPR_BIN_DIV;
+      } else if (op_kind == TOKEN_AMPERSAND_EQUAL) {
+        bin_kind = EXPR_BIN_BITWISE_AND;
+      } else if (op_kind == TOKEN_PIPE_EQUAL) {
+        bin_kind = EXPR_BIN_BITWISE_OR;
+      } else if (op_kind == TOKEN_CARET_EQUAL) {
+        bin_kind = EXPR_BIN_BITWISE_XOR;
+      } else if (op_kind == TOKEN_LESS_LESS_EQUAL) {
+        bin_kind = EXPR_BIN_SHIFT_LEFT;
+      } else {
+        bin_kind = EXPR_BIN_SHIFT_RIGHT;
       }
 
       struct ExprCompoundAssign comp = {
@@ -4202,6 +4424,12 @@ enum IRInstrBinaryKind {
   IRInstrBinary_LE,
   IRInstrBinary_G,
   IRInstrBinary_GE,
+  IRInstrBinary_BIT_AND,
+  IRInstrBinary_BIT_XOR,
+  IRInstrBinary_BIT_OR,
+  IRInstrBinary_SHL,
+  IRInstrBinary_SHR,
+  IRInstrBinary_SAR,
 };
 
 void print_ir_binary_op(enum IRInstrBinaryKind kind)
@@ -4237,10 +4465,74 @@ void print_ir_binary_op(enum IRInstrBinaryKind kind)
     case IRInstrBinary_GE:
       printf("GREATER EQUAL");
       break;
+    case IRInstrBinary_BIT_AND:
+      printf("BITWISE AND");
+      break;
+    case IRInstrBinary_BIT_XOR:
+      printf("BITWISE XOR");
+      break;
+    case IRInstrBinary_BIT_OR:
+      printf("BITWISE OR");
+      break;
+    case IRInstrBinary_SHL:
+      printf("SHIFT LEFT");
+      break;
+    case IRInstrBinary_SHR:
+      printf("SHIFT RIGHT LOGICAL");
+      break;
+    case IRInstrBinary_SAR:
+      printf("SHIFT RIGHT ARITHMETIC");
+      break;
     default:
       assert(0);
   }
 }
+enum IRInstrBinaryKind expr_bin_to_ir_bin(enum ExprBinKind kind, Type type)
+{
+  switch (kind) {
+    case EXPR_BIN_ADD:
+      return IRInstrBinary_ADD;
+    case EXPR_BIN_SUB:
+      return IRInstrBinary_SUB;
+    case EXPR_BIN_MUL:
+      return IRInstrBinary_MUL;
+    case EXPR_BIN_DIV:
+      return IRInstrBinary_DIV;
+    case EXPR_BIN_EQUAL_EQUAL:
+      return IRInstrBinary_E;
+    case EXPR_BIN_BANG_EQUAL:
+      return IRInstrBinary_NE;
+    case EXPR_BIN_LESS:
+      return IRInstrBinary_L;
+    case EXPR_BIN_LESS_EQUAL:
+      return IRInstrBinary_LE;
+    case EXPR_BIN_GREATER:
+      return IRInstrBinary_G;
+    case EXPR_BIN_GREATER_EQUAL:
+      return IRInstrBinary_GE;
+    case EXPR_BIN_BITWISE_AND:
+      return IRInstrBinary_BIT_AND;
+    case EXPR_BIN_BITWISE_XOR:
+      return IRInstrBinary_BIT_XOR;
+    case EXPR_BIN_BITWISE_OR:
+      return IRInstrBinary_BIT_OR;
+    case EXPR_BIN_SHIFT_LEFT:
+      return IRInstrBinary_SHL;
+    case EXPR_BIN_SHIFT_RIGHT:
+      switch (type.kind) {
+        case U8_T:
+        case U16_T:
+        case U32_T:
+        case U64_T:
+          return IRInstrBinary_SHR;
+        default:
+          return IRInstrBinary_SAR;
+      }
+    default:
+      assert(0 && "unhandled ExprBinKind in expr_bin_to_ir_bin");
+  }
+}
+
 struct IRInstr_Binary {
   enum IRInstrBinaryKind kind;
   struct IRValue *lhs;
@@ -4251,6 +4543,7 @@ struct IRInstr_Binary {
 enum IRInstrUnaryKind {
   IRInstrUnary_NEG,
   IRInstrUnary_NOT,
+  IRInstrUnary_BIT_NOT,
 };
 
 struct IRInstr_Unary {
@@ -4933,6 +5226,8 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       enum IRInstrUnaryKind kind;
       if (expr->as.unary.op[0] == '!') {
         kind = IRInstrUnary_NOT;
+      } else if (expr->as.unary.op[0] == '~') {
+        kind = IRInstrUnary_BIT_NOT;
       } else {
         kind = IRInstrUnary_NEG;
       }
@@ -5102,40 +5397,7 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       dst->type = expr->type;
 
       enum IRInstrBinaryKind kind;
-      switch (expr->as.binary.kind) {
-        case EXPR_BIN_ADD:
-          kind = IRInstrBinary_ADD;
-          break;
-        case EXPR_BIN_SUB:
-          kind = IRInstrBinary_SUB;
-          break;
-        case EXPR_BIN_MUL:
-          kind = IRInstrBinary_MUL;
-          break;
-        case EXPR_BIN_DIV:
-          kind = IRInstrBinary_DIV;
-          break;
-        case EXPR_BIN_EQUAL_EQUAL:
-          kind = IRInstrBinary_E;
-          break;
-        case EXPR_BIN_BANG_EQUAL:
-          kind = IRInstrBinary_NE;
-          break;
-        case EXPR_BIN_LESS:
-          kind = IRInstrBinary_L;
-          break;
-        case EXPR_BIN_LESS_EQUAL:
-          kind = IRInstrBinary_LE;
-          break;
-        case EXPR_BIN_GREATER:
-          kind = IRInstrBinary_G;
-          break;
-        case EXPR_BIN_GREATER_EQUAL:
-          kind = IRInstrBinary_GE;
-          break;
-        default:
-          assert(0);
-      }
+      kind = expr_bin_to_ir_bin(expr->as.binary.kind, expr->type);
 
       struct IRInstr_Binary bininstr = {
           .lhs = lhs, .rhs = rhs, .dst = clone_irval(dst), .kind = kind};
@@ -5244,7 +5506,8 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
 
       struct IRInstr bin_instr = {
           .kind = IRInstr_BIN,
-          .as.binary = {.kind = expr->as.compound_assign.kind,
+          .as.binary = {.kind = expr_bin_to_ir_bin(
+                            expr->as.compound_assign.kind, expr->type),
                         .lhs = clone_irval(lhs_val),
                         .rhs = rhs_val,
                         .dst = clone_irval(bin_res)}};
@@ -6351,6 +6614,35 @@ bool is_unsigned(enum TypeKind kind)
   }
 }
 
+bool is_integer_type(enum TypeKind kind)
+{
+  switch (kind) {
+    case I8_T:
+    case I16_T:
+    case I32_T:
+    case I64_T:
+    case U8_T:
+    case U16_T:
+    case U32_T:
+    case U64_T:
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool is_bitwise_binop(enum ExprBinKind kind)
+{
+  return kind == EXPR_BIN_BITWISE_AND || kind == EXPR_BIN_BITWISE_XOR ||
+         kind == EXPR_BIN_BITWISE_OR || kind == EXPR_BIN_SHIFT_LEFT ||
+         kind == EXPR_BIN_SHIFT_RIGHT;
+}
+
+bool is_shift_binop(enum ExprBinKind kind)
+{
+  return kind == EXPR_BIN_SHIFT_LEFT || kind == EXPR_BIN_SHIFT_RIGHT;
+}
+
 static inline int get_type_size(enum TypeKind kind)
 {
   switch (kind) {
@@ -6654,6 +6946,36 @@ bool promote_literal(struct Expr *expr, Type target_type)
   return false;
 }
 
+struct TypecheckResult coerce_expr_to_type(struct Expr *expr, Type target_type,
+                                           char *err_msg)
+{
+  if (types_equal(expr->type, target_type)) {
+    return (struct TypecheckResult){.is_ok = true, .msg = NULL, .ast = NULL};
+  }
+
+  bool is_literal =
+      (expr->kind == EXPR_LITERAL && expr->as.literal.kind == LITERAL_NUM);
+  bool is_unary_literal =
+      (expr->kind == EXPR_UNARY && expr->as.unary.expr->kind == EXPR_LITERAL &&
+       expr->as.unary.expr->as.literal.kind == LITERAL_NUM);
+
+  if (is_literal || is_unary_literal) {
+    if (!promote_literal(expr, target_type)) {
+      return (struct TypecheckResult){
+          .is_ok = false, .msg = err_msg, .ast = NULL};
+    }
+  } else {
+    struct Expr *inner = malloc(sizeof(struct Expr));
+    *inner = *expr;
+
+    expr->kind = EXPR_CAST;
+    expr->type = target_type;
+    expr->as.cast.expr = inner;
+  }
+
+  return (struct TypecheckResult){.is_ok = true, .msg = NULL, .ast = NULL};
+}
+
 struct TypecheckResult typecheck_expr(struct Expr *expr,
                                       struct Symbol *sym_table)
 {
@@ -6869,6 +7191,14 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
                   "Type error: logical NOT (!) requires a boolean expression",
               .ast = NULL};
         }
+      } else if (*expr->as.unary.op == '~') {
+        if (!is_integer_type(expr->type.kind)) {
+          return (struct TypecheckResult){
+              .is_ok = false,
+              .msg =
+                  "Type error: bitwise NOT (~) requires an integer expression",
+              .ast = NULL};
+        }
       }
 
       break;
@@ -6908,6 +7238,45 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
       if (expr->as.binary.kind == EXPR_BIN_LOGICAL_AND ||
           expr->as.binary.kind == EXPR_BIN_LOGICAL_OR) {
         expr->type = (Type){.kind = BOOL_T};
+        break;
+      }
+
+      if (is_bitwise_binop(expr->as.binary.kind)) {
+        if (!is_integer_type(expr->as.binary.lhs->type.kind) ||
+            !is_integer_type(expr->as.binary.rhs->type.kind)) {
+          return (struct TypecheckResult){
+              .is_ok = false,
+              .msg = "Type error: bitwise operators require integer operands",
+              .ast = NULL};
+        }
+
+        if (is_shift_binop(expr->as.binary.kind)) {
+          expr->type = expr->as.binary.lhs->type;
+        } else {
+          Type common_type =
+              get_common_type(expr->as.binary.lhs, expr->as.binary.rhs);
+          if (common_type.kind == UNKNOWN_T) {
+            return (struct TypecheckResult){
+                .is_ok = false,
+                .msg = "Unable to compute common type",
+                .ast = NULL};
+          }
+          struct TypecheckResult lhs_coerce = coerce_expr_to_type(
+              expr->as.binary.lhs, common_type,
+              "Type error: bitwise lhs does not fit in the common type");
+          if (!lhs_coerce.is_ok) {
+            return lhs_coerce;
+          }
+
+          struct TypecheckResult rhs_coerce = coerce_expr_to_type(
+              expr->as.binary.rhs, common_type,
+              "Type error: bitwise rhs does not fit in the common type");
+          if (!rhs_coerce.is_ok) {
+            return rhs_coerce;
+          }
+
+          expr->type = common_type;
+        }
         break;
       }
 
@@ -7001,6 +7370,17 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
             .msg =
                 "Invalid compound assignment target: left side must be a "
                 "variable",
+            .ast = NULL};
+      }
+
+      if (is_bitwise_binop(expr->as.compound_assign.kind) &&
+          (!is_integer_type(expr->as.compound_assign.lhs->type.kind) ||
+           !is_integer_type(expr->as.compound_assign.rhs->type.kind))) {
+        return (struct TypecheckResult){
+            .is_ok = false,
+            .msg =
+                "Type error: compound bitwise assignment requires integer "
+                "operands",
             .ast = NULL};
       }
 
@@ -8064,6 +8444,12 @@ enum AsmInstrBinaryKind {
   AsmInstrBinary_GREATER_EQUAL,
   AsmInstrBinary_EQUAL_EQUAL,
   AsmInstrBinary_BANG_EQUAL,
+  AsmInstrBinary_BIT_AND,
+  AsmInstrBinary_BIT_XOR,
+  AsmInstrBinary_BIT_OR,
+  AsmInstrBinary_SHL,
+  AsmInstrBinary_SHR,
+  AsmInstrBinary_SAR,
 };
 
 struct AsmInstrBinary {
@@ -8135,6 +8521,7 @@ struct AsmInstrLea {
 
 enum AsmInstrUnaryKind {
   AsmInstrUnary_NEG,
+  AsmInstrUnary_BIT_NOT,
 };
 
 struct AsmInstrUnary {
@@ -8252,6 +8639,24 @@ void print_asm_binary_op(enum AsmInstrBinaryKind kind)
       break;
     case AsmInstrBinary_BANG_EQUAL:
       printf("BANG EQUAL");
+      break;
+    case AsmInstrBinary_BIT_AND:
+      printf("BITWISE AND");
+      break;
+    case AsmInstrBinary_BIT_XOR:
+      printf("BITWISE XOR");
+      break;
+    case AsmInstrBinary_BIT_OR:
+      printf("BITWISE OR");
+      break;
+    case AsmInstrBinary_SHL:
+      printf("SHIFT LEFT");
+      break;
+    case AsmInstrBinary_SHR:
+      printf("SHIFT RIGHT LOGICAL");
+      break;
+    case AsmInstrBinary_SAR:
+      printf("SHIFT RIGHT ARITHMETIC");
       break;
     default:
       assert(0 && "Unhandled AsmInstrBinaryKind");
@@ -8634,6 +9039,12 @@ bool is_sret(Type *retval)
   return size > 16;
 }
 
+bool is_shift_asm_binary(enum AsmInstrBinaryKind kind)
+{
+  return kind == AsmInstrBinary_SHL || kind == AsmInstrBinary_SHR ||
+         kind == AsmInstrBinary_SAR;
+}
+
 void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
                    Type *fn_retval)
 {
@@ -8738,6 +9149,24 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
         case IRInstrBinary_DIV:
           kind = AsmInstrBinary_DIV;
           break;
+        case IRInstrBinary_BIT_AND:
+          kind = AsmInstrBinary_BIT_AND;
+          break;
+        case IRInstrBinary_BIT_XOR:
+          kind = AsmInstrBinary_BIT_XOR;
+          break;
+        case IRInstrBinary_BIT_OR:
+          kind = AsmInstrBinary_BIT_OR;
+          break;
+        case IRInstrBinary_SHL:
+          kind = AsmInstrBinary_SHL;
+          break;
+        case IRInstrBinary_SHR:
+          kind = AsmInstrBinary_SHR;
+          break;
+        case IRInstrBinary_SAR:
+          kind = AsmInstrBinary_SAR;
+          break;
         default:
           assert(0);
       }
@@ -8800,6 +9229,9 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
         i1.asm_type = dst.asm_type;
 
         i2.kind = AsmInstr_UNARY;
+        i2.as.unary.kind = (ir_instr->as.unary.kind == IRInstrUnary_BIT_NOT)
+                               ? AsmInstrUnary_BIT_NOT
+                               : AsmInstrUnary_NEG;
         i2.as.unary.op = dst;
         i2.asm_type = dst.asm_type;
 
@@ -10513,6 +10945,33 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
           bool is_float = (asminstr->asm_type.kind == AsmType_FLOAT ||
                            asminstr->asm_type.kind == AsmType_DOUBLE);
 
+          if (is_shift_asm_binary(asminstr->as.binary.kind) &&
+              asminstr->as.binary.lhs.kind != AsmOperand_IMM) {
+            struct AsmOperand count_src = asminstr->as.binary.lhs;
+            count_src.asm_type = (struct AsmType){.kind = AsmType_BYTE};
+
+            struct AsmOperand cl = {
+                .kind = AsmOperand_REG,
+                .as.reg = CX,
+                .asm_type = (struct AsmType){.kind = AsmType_BYTE}};
+
+            struct AsmInstr i1 = {0}, i2 = {0};
+            i1.kind = AsmInstr_MOV;
+            i1.as.mov.src = count_src;
+            i1.as.mov.dst = cl;
+            i1.asm_type = (struct AsmType){.kind = AsmType_BYTE};
+
+            i2.kind = AsmInstr_BIN;
+            i2.as.binary.kind = asminstr->as.binary.kind;
+            i2.as.binary.lhs = cl;
+            i2.as.binary.rhs = asminstr->as.binary.rhs;
+            i2.asm_type = asminstr->asm_type;
+
+            vec_insert(&instrs, i1);
+            vec_insert(&instrs, i2);
+            break;
+          }
+
           /* imul and float ops cannot use mem as dst */
           if ((asminstr->as.binary.kind == AsmInstrBinary_MUL || is_float) &&
               asminstr->as.binary.rhs.kind == AsmOperand_STACK) {
@@ -11126,6 +11585,52 @@ void emit(struct AsmProgram *prog, char *path)
               }
               break;
             }
+            case AsmInstrBinary_BIT_AND:
+            case AsmInstrBinary_BIT_XOR:
+            case AsmInstrBinary_BIT_OR:
+            case AsmInstrBinary_SHL:
+            case AsmInstrBinary_SHR:
+            case AsmInstrBinary_SAR: {
+              switch (instr->as.binary.kind) {
+                case AsmInstrBinary_BIT_AND:
+                  fprintf(f, "and");
+                  break;
+                case AsmInstrBinary_BIT_XOR:
+                  fprintf(f, "xor");
+                  break;
+                case AsmInstrBinary_BIT_OR:
+                  fprintf(f, "or");
+                  break;
+                case AsmInstrBinary_SHL:
+                  fprintf(f, "sal");
+                  break;
+                case AsmInstrBinary_SHR:
+                  fprintf(f, "shr");
+                  break;
+                case AsmInstrBinary_SAR:
+                  fprintf(f, "sar");
+                  break;
+                default:
+                  assert(0);
+              }
+              switch (instr->asm_type.kind) {
+                case AsmType_BYTE:
+                  fprintf(f, "b ");
+                  break;
+                case AsmType_WORD:
+                  fprintf(f, "w ");
+                  break;
+                case AsmType_LONGWORD:
+                  fprintf(f, "l ");
+                  break;
+                case AsmType_QUADWORD:
+                  fprintf(f, "q ");
+                  break;
+                default:
+                  assert(0 && "bitwise operators require integer asm types");
+              }
+              break;
+            }
             default:
               assert(0 && "not implemented");
               break;
@@ -11275,7 +11780,8 @@ void emit(struct AsmProgram *prog, char *path)
           break;
         }
         case AsmInstr_UNARY: {
-          fprintf(f, "neg");
+          fprintf(
+              f, instr->as.unary.kind == AsmInstrUnary_BIT_NOT ? "not" : "neg");
           switch (instr->asm_type.kind) {
             case AsmType_BYTE:
               fprintf(f, "b");
