@@ -1,5 +1,10 @@
 extern fn printf(fmt: str, ...) -> i32;
 
+enum Color {
+  RED,
+  BLUE,
+}
+
 struct Point {
   a: i8,
   b: i32,
@@ -16,5 +21,5 @@ fn main(void) -> i32 {
 
   let mem: i32 = ptr->as.mem;
 
-  ret mem;
+  ret BLUE;
 }

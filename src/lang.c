@@ -185,6 +185,7 @@ enum TokenKind {
   TOKEN_VOID,
   TOKEN_STRUCT,
   TOKEN_UNION,
+  TOKEN_ENUM,
   TOKEN_BOOL,
   TOKEN_TRUE,
   TOKEN_FALSE,
@@ -431,7 +432,9 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
         break;
       }
       case 'e': {
-        if (lookahead(tokenizer, 3, "lse") == 0) {
+        if (lookahead(tokenizer, 3, "num") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_ENUM, 4));
+        } else if (lookahead(tokenizer, 3, "lse") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_ELSE, 4));
         } else if (lookahead(tokenizer, 5, "xtern") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_EXTERN, 6));
@@ -712,6 +715,9 @@ void print_token(struct Token *token)
     case TOKEN_UNION:
       printf("union");
       break;
+    case TOKEN_ENUM:
+      printf("enum");
+      break;
     case TOKEN_BOOL:
       printf("bool");
       break;
@@ -955,6 +961,69 @@ struct StructDef *struct_get(struct StructTable *table, char *name)
     table = table->next;
   }
   return NULL;
+}
+
+struct EnumTypeItem {
+  char *name;
+  struct EnumTypeItem *next;
+};
+struct EnumTypeItem *enum_types = NULL;
+
+void enum_type_insert(char *name)
+{
+  struct EnumTypeItem *item;
+
+  item = malloc(sizeof(*item));
+  item->name = strdup(name);
+  item->next = enum_types;
+  enum_types = item;
+}
+
+bool is_enum_type(char *name)
+{
+  struct EnumTypeItem *curr;
+
+  curr = enum_types;
+  while (curr) {
+    if (strcmp(curr->name, name) == 0) {
+      return true;
+    }
+    curr = curr->next;
+  }
+  return false;
+}
+
+struct EnumVariantItem {
+  char *name;
+  int value;
+  struct EnumVariantItem *next;
+};
+struct EnumVariantItem *enum_variants = NULL;
+
+void enum_variant_insert(char *name, int value)
+{
+  struct EnumVariantItem *item;
+
+  item = malloc(sizeof(*item));
+  item->name = strdup(name);
+  item->value = value;
+  item->next = enum_variants;
+  enum_variants = item;
+}
+
+bool enum_variant_get(char *name, int *out_val)
+{
+  struct EnumVariantItem *curr;
+
+  curr = enum_variants;
+  while (curr) {
+    if (strcmp(curr->name, name) == 0) {
+      *out_val = curr->value;
+      return true;
+    }
+    curr = curr->next;
+  }
+  return false;
 }
 
 Type clone_type(Type t)
@@ -1553,6 +1622,7 @@ enum StmtKind {
   STMT_EXTERN,
   STMT_EXPR,
   STMT_STRUCT,
+  STMT_ENUM,
 };
 
 struct StmtFn {
@@ -1614,6 +1684,18 @@ struct StmtStruct {
   bool is_union;
 };
 
+struct EnumVariant {
+  char *name;
+  int value;
+};
+
+typedef Vector(struct EnumVariant) VecEnumVariant;
+
+struct StmtEnum {
+  char *name;
+  VecEnumVariant variants;
+};
+
 struct Stmt {
   enum StmtKind kind;
   union {
@@ -1628,6 +1710,7 @@ struct Stmt {
     struct StmtExtern extern_stmt;
     struct StmtExpr expr_stmt;
     struct StmtStruct struct_stmt;
+    struct StmtEnum enum_stmt;
   } as;
 };
 
@@ -1865,6 +1948,24 @@ void print_stmt(struct Stmt *stmt, int spaces)
       printf(")\n");
       break;
     }
+    case STMT_ENUM: {
+      print_indent(spaces);
+      printf("STMT_ENUM(\n");
+      print_indent(spaces + 2);
+      printf("name = %s,\n", stmt->as.enum_stmt.name);
+      print_indent(spaces + 2);
+      printf("variants = [\n");
+      for (int i = 0; i < stmt->as.enum_stmt.variants.len; i++) {
+        print_indent(spaces + 4);
+        printf("%s = %d,\n", stmt->as.enum_stmt.variants.data[i].name,
+               stmt->as.enum_stmt.variants.data[i].value);
+      }
+      print_indent(spaces + 2);
+      printf("]\n");
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
     default:
       assert(0 && "Unhandled statement kind in print_stmt");
   }
@@ -1873,6 +1974,14 @@ void print_stmt(struct Stmt *stmt, int spaces)
 void free_stmt(struct Stmt *stmt)
 {
   switch (stmt->kind) {
+    case STMT_ENUM: {
+      free(stmt->as.enum_stmt.name);
+      for (int i = 0; i < stmt->as.enum_stmt.variants.len; i++) {
+        free(stmt->as.enum_stmt.variants.data[i].name);
+      }
+      vec_free(&stmt->as.enum_stmt.variants);
+      break;
+    }
     case STMT_STRUCT: {
       free(stmt->as.struct_stmt.name);
       for (int i = 0; i < stmt->as.struct_stmt.fields.len; i++) {
@@ -2770,10 +2879,26 @@ Type parse_type(struct Parser *parser)
     }
   } else if (check(parser, TOKEN_IDENTIFIER)) {
     struct Token *id_token = consume(parser, TOKEN_IDENTIFIER);
-    Type custom_type;
-    custom_type.kind = STRUCT_T;
-    custom_type.as.struct_name = strndup(id_token->start, id_token->len);
-    return custom_type;
+    char *name = strndup(id_token->start, id_token->len);
+
+    if (is_enum_type(name)) {
+      free(name);
+      return (Type){.kind = I32_T}; /* Treat enum strictly as i32 */
+    } else {
+      Type custom_type;
+      custom_type.kind = STRUCT_T;
+      custom_type.as.struct_name = name;
+      return custom_type;
+    }
+  }
+
+  /* Support explicit keyword usage like `let c: enum Color;` */
+  if (check(parser, TOKEN_ENUM)) {
+    advance_parser(parser);
+    struct Token *id_token = consume(parser, TOKEN_IDENTIFIER);
+    if (id_token) {
+      return (Type){.kind = I32_T};
+    }
   }
   return (Type){.kind = UNKNOWN_T};
 }
@@ -3494,6 +3619,117 @@ struct ParseFnResult parse_struct_stmt(struct Parser *parser)
   return result;
 }
 
+struct ParseFnResult parse_enum_stmt(struct Parser *parser)
+{
+  struct ParseFnResult result = {.is_ok = true, .msg = NULL};
+
+  consume(parser, TOKEN_ENUM);
+
+  struct Token *id = consume(parser, TOKEN_IDENTIFIER);
+  if (!id) {
+    return (struct ParseFnResult){.is_ok = false,
+                                  .msg = "Expected identifier after enum",
+                                  .as.stmt = {0}};
+  }
+  char *name = strndup(id->start, id->len);
+  enum_type_insert(name);
+
+  consume(parser, TOKEN_LBRACE);
+
+  VecEnumVariant variants = {0};
+  int current_val = 0;
+
+  while (!check(parser, TOKEN_RBRACE)) {
+    struct Token *var_id = consume(parser, TOKEN_IDENTIFIER);
+    if (!var_id) {
+      return (struct ParseFnResult){.is_ok = false,
+                                    .msg = "Expected identifier in enum body",
+                                    .as.stmt = {0}};
+    }
+    char *var_name = strndup(var_id->start, var_id->len);
+
+    /* Check if the user specified an explicit value (e.g. A = 5) */
+    if (check(parser, TOKEN_EQUAL)) {
+      advance_parser(parser);
+
+      struct ParseFnResult expr_res = parse_expr(parser);
+      if (!expr_res.is_ok) {
+        return expr_res;
+      }
+
+      struct Expr *e = &expr_res.as.expr;
+      int sign = 1;
+
+      if (e->kind == EXPR_UNARY && strncmp(e->as.unary.op, "-", 1) == 0) {
+        sign = -1;
+        e = e->as.unary.expr;
+      }
+
+      if (e->kind == EXPR_LITERAL && e->as.literal.kind == LITERAL_NUM) {
+        unsigned long long raw_val = 0;
+        switch (e->as.literal.type.kind) {
+          case U8_T:
+            raw_val = e->as.literal.as.u8;
+            break;
+          case I8_T:
+            raw_val = e->as.literal.as.i8;
+            break;
+          case U16_T:
+            raw_val = e->as.literal.as.u16;
+            break;
+          case I16_T:
+            raw_val = e->as.literal.as.i16;
+            break;
+          case U32_T:
+            raw_val = e->as.literal.as.u32;
+            break;
+          case I32_T:
+            raw_val = e->as.literal.as.i32;
+            break;
+          case U64_T:
+            raw_val = e->as.literal.as.u64;
+            break;
+          case I64_T:
+            raw_val = e->as.literal.as.i64;
+            break;
+          default:
+            break;
+        }
+        current_val = sign * (int) raw_val;
+      } else {
+        free_expr(&expr_res.as.expr);
+        return (struct ParseFnResult){
+            .is_ok = false,
+            .msg = "Enum variant value must be a constant integer",
+            .as.stmt = {0}};
+      }
+      free_expr(&expr_res.as.expr);
+    }
+
+    struct EnumVariant var;
+    var.name = var_name;
+    var.value = current_val;
+    vec_insert(&variants, var);
+
+    /* Register it globally so `resolve` can find it later */
+    enum_variant_insert(var_name, current_val);
+
+    current_val++;
+
+    if (check(parser, TOKEN_COMMA)) {
+      advance_parser(parser);
+    }
+  }
+  consume(parser, TOKEN_RBRACE);
+
+  struct StmtEnum enum_stmt;
+  enum_stmt.name = name;
+  enum_stmt.variants = variants;
+
+  result.as.stmt = (struct Stmt){.kind = STMT_ENUM, .as.enum_stmt = enum_stmt};
+  return result;
+}
+
 struct ParseFnResult parse_stmt(struct Parser *parser)
 {
   struct ParseFnResult result;
@@ -3581,6 +3817,14 @@ struct ParseFnResult parse_stmt(struct Parser *parser)
         return struct_res;
       }
       result.as.stmt = struct_res.as.stmt;
+      break;
+    }
+    case TOKEN_ENUM: {
+      struct ParseFnResult enum_res = parse_enum_stmt(parser);
+      if (!enum_res.is_ok) {
+        return enum_res;
+      }
+      result.as.stmt = enum_res.as.stmt;
       break;
     }
     default: {
@@ -3692,6 +3936,7 @@ struct LoopLabelResult loop_label_stmt(struct Stmt *stmt, char *label)
     case STMT_LET:
     case STMT_EXTERN:
     case STMT_STRUCT:
+    case STMT_ENUM:
       break;
     default:
       assert(0);
@@ -5323,6 +5568,7 @@ void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
       break;
     }
     case STMT_EXTERN:
+    case STMT_ENUM:
       break;
     case STMT_EXPR: {
       struct IRValue *v;
@@ -5476,13 +5722,24 @@ struct ResolveResult resolve_expr(struct VariableMap **varmap,
       break;
     case EXPR_VARIABLE: {
       char *resolved_name = varmap_get(*varmap, expr->as.var.name);
-      if (!resolved_name) {
-        return (struct ResolveResult){.is_ok = false,
-                                      .msg = "Undefined variable"};
-      }
+      if (resolved_name) {
+        free(expr->as.var.name);
+        expr->as.var.name = strdup(resolved_name);
+      } else {
+        int val;
+        if (enum_variant_get(expr->as.var.name, &val)) {
+          free(expr->as.var.name);
 
-      free(expr->as.var.name);
-      expr->as.var.name = strdup(resolved_name);
+          expr->kind = EXPR_LITERAL;
+          expr->as.literal.kind = LITERAL_NUM;
+          expr->as.literal.type = (Type){.kind = I32_T};
+          expr->as.literal.as.i32 = val;
+          expr->type = (Type){.kind = I32_T};
+        } else {
+          return (struct ResolveResult){.is_ok = false,
+                                        .msg = "Undefined variable"};
+        }
+      }
       break;
     }
     case EXPR_BINARY: {
@@ -5593,6 +5850,7 @@ struct ResolveResult resolve_stmt(struct VariableMap **varmap,
     }
     case STMT_BREAK:
     case STMT_CONTINUE:
+    case STMT_ENUM:
       break;
     case STMT_EXPR: {
       struct ResolveResult r;
@@ -6918,6 +7176,7 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
     }
     case STMT_BREAK:
     case STMT_CONTINUE:
+    case STMT_ENUM:
       break;
     default:
       assert(0);
@@ -11227,6 +11486,24 @@ free_up2_fread:
     free(global_constants.data[i].value);
   }
   vec_free(&global_constants);
+
+  struct EnumTypeItem *curr_t = enum_types;
+  while (curr_t) {
+    struct EnumTypeItem *tmp = curr_t;
+    curr_t = curr_t->next;
+    free(tmp->name);
+    free(tmp);
+  }
+  enum_types = NULL;
+
+  struct EnumVariantItem *curr_v = enum_variants;
+  while (curr_v) {
+    struct EnumVariantItem *tmp = curr_v;
+    curr_v = curr_v->next;
+    free(tmp->name);
+    free(tmp);
+  }
+  enum_variants = NULL;
 
   return r;
 }
