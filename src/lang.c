@@ -3884,7 +3884,8 @@ struct IRInstr_CopyToOffset {
 
 struct IRInstr_AddPtr {
   struct IRValue *ptr;
-  int offset;
+  struct IRValue *index;
+  int scale;
   struct IRValue *dst;
 };
 
@@ -4138,7 +4139,11 @@ void print_ir_instr(struct IRInstr *instr, int spaces)
       print_ir_val(instr->as.add_ptr.ptr, spaces + 2);
       printf(",\n");
       print_indent(spaces + 2);
-      printf("offset = %d,\n", instr->as.add_ptr.offset);
+      printf("index = ");
+      print_ir_val(instr->as.add_ptr.index, spaces + 2);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("scale = %d,\n", instr->as.add_ptr.scale);
       print_indent(spaces + 2);
       printf("dst = ");
       print_ir_val(instr->as.add_ptr.dst, spaces + 2);
@@ -4233,6 +4238,7 @@ void free_ir_instr(struct IRInstr *instr)
     }
     case IRInstr_ADD_PTR: {
       free_ir_val(instr->as.add_ptr.ptr);
+      free_ir_val(instr->as.add_ptr.index);
       free_ir_val(instr->as.add_ptr.dst);
       break;
     }
@@ -4827,16 +4833,22 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
                                                .dst = clone_irval(base_ptr)};
           vec_insert(instrs, ((struct IRInstr){.kind = IRInstr_GETADDR,
                                                .as.getaddr = getaddr}));
-
           struct IRValue *field_ptr = mkirvar();
           field_ptr->type = expr->type;
 
+          struct IRValue *index_val = malloc(sizeof(struct IRValue));
+          index_val->kind = IRValue_CONST;
+          index_val->type = (Type){.kind = I32_T};
+          index_val->as.konst.kind = LITERAL_NUM;
+          index_val->as.konst.type = (Type){.kind = I32_T};
+          index_val->as.konst.as.i32 = result.as.subobject.offset;
+
           struct IRInstr_AddPtr add_ptr = {.ptr = base_ptr,
-                                           .offset = result.as.subobject.offset,
+                                           .index = index_val,
+                                           .scale = 1,
                                            .dst = clone_irval(field_ptr)};
           vec_insert(instrs, ((struct IRInstr){.kind = IRInstr_ADD_PTR,
                                                .as.add_ptr = add_ptr}));
-
           return (struct ExpResult){.kind = EXPRESULT_PLAIN,
                                     .as.plain = field_ptr};
         }
@@ -4915,12 +4927,20 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
           return (struct ExpResult){.kind = EXPRESULT_DEREF,
                                     .as.ptr = base_ptr};
         }
-
         struct IRValue *field_ptr = mkirvar();
         field_ptr->type = (Type){.kind = PTR_T, .as.base = ALLOC(expr->type)};
 
-        struct IRInstr_AddPtr add_ptr = {
-            .ptr = base_ptr, .offset = offset, .dst = clone_irval(field_ptr)};
+        struct IRValue *index_val = malloc(sizeof(struct IRValue));
+        index_val->kind = IRValue_CONST;
+        index_val->type = (Type){.kind = I32_T};
+        index_val->as.konst.kind = LITERAL_NUM;
+        index_val->as.konst.type = (Type){.kind = I32_T};
+        index_val->as.konst.as.i32 = offset;
+
+        struct IRInstr_AddPtr add_ptr = {.ptr = base_ptr,
+                                         .index = index_val,
+                                         .scale = 1,
+                                         .dst = clone_irval(field_ptr)};
         vec_insert(instrs, ((struct IRInstr){.kind = IRInstr_ADD_PTR,
                                              .as.add_ptr = add_ptr}));
 
@@ -4954,8 +4974,16 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
           struct IRValue *field_ptr = mkirvar();
           field_ptr->type = (Type){.kind = PTR_T, .as.base = ALLOC(expr->type)};
 
+          struct IRValue *index_val = malloc(sizeof(struct IRValue));
+          index_val->kind = IRValue_CONST;
+          index_val->type = (Type){.kind = I32_T};
+          index_val->as.konst.kind = LITERAL_NUM;
+          index_val->as.konst.type = (Type){.kind = I32_T};
+          index_val->as.konst.as.i32 = offset;
+
           struct IRInstr_AddPtr add_ptr = {.ptr = target_res.as.ptr,
-                                           .offset = offset,
+                                           .index = index_val,
+                                           .scale = 1,
                                            .dst = clone_irval(field_ptr)};
           vec_insert(instrs, ((struct IRInstr){.kind = IRInstr_ADD_PTR,
                                                .as.add_ptr = add_ptr}));
@@ -6797,6 +6825,7 @@ enum AsmOperandKind {
   AsmOperand_STACK,
   AsmOperand_DATA,
   AsmOperand_MEMORY,
+  AsmOperand_INDEXED,
 };
 
 enum AsmRegister {
@@ -6960,12 +6989,51 @@ struct AsmOperand {
       enum AsmRegister base;
       int offset;
     } mem;
+    struct {
+      enum AsmRegister base;
+      enum AsmRegister index;
+      int scale;
+    } indexed;
   } as;
 };
+
+static const char *reg_to_str_64(enum AsmRegister reg)
+{
+  switch (reg) {
+    case AX:
+      return "%rax";
+    case DI:
+      return "%rdi";
+    case SI:
+      return "%rsi";
+    case DX:
+      return "%rdx";
+    case CX:
+      return "%rcx";
+    case R8:
+      return "%r8";
+    case R9:
+      return "%r9";
+    case R10:
+      return "%r10";
+    case BP:
+      return "%rbp";
+    case SP:
+      return "%rsp";
+    default:
+      return "";
+  }
+}
 
 void print_asm_operand(struct AsmOperand *op)
 {
   switch (op->kind) {
+    case AsmOperand_INDEXED: {
+      printf("AsmOperand_INDEXED((%s, %s, %d)",
+             reg_to_str_64(op->as.indexed.base),
+             reg_to_str_64(op->as.indexed.index), op->as.indexed.scale);
+      break;
+    }
     case AsmOperand_MEMORY: {
       printf("AsmOperand_MEMORY(offset = %d, base = ", op->as.mem.offset);
       switch (op->as.mem.base) {
@@ -8972,26 +9040,70 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
       break;
     }
     case IRInstr_ADD_PTR: {
-      struct AsmOperand ptr = codegen_irvalue(ir_instr->as.add_ptr.ptr);
-      struct AsmOperand dst = codegen_irvalue(ir_instr->as.add_ptr.dst);
+      // Step 1: Stage base pointer into %rax
+      struct AsmInstr mov1 = {0};
+      mov1.kind = AsmInstr_MOV;
+      mov1.asm_type = (struct AsmType){.kind = AsmType_QUADWORD};
+      mov1.as.mov.src = codegen_irvalue(ir_instr->as.add_ptr.ptr);
+      mov1.as.mov.dst = (struct AsmOperand){
+          .kind = AsmOperand_REG,
+          .as.reg = AX,
+          .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+      vec_insert(instrs, mov1);
 
-      struct AsmInstr i1 = {0}, i2 = {0};
+      // Step 2: Stage layout index into %rdx
+      struct AsmInstr mov2 = {0};
+      mov2.kind = AsmInstr_MOV;
+      mov2.asm_type = (struct AsmType){.kind = AsmType_QUADWORD};
+      mov2.as.mov.src = codegen_irvalue(ir_instr->as.add_ptr.index);
+      mov2.as.mov.dst = (struct AsmOperand){
+          .kind = AsmOperand_REG,
+          .as.reg = DX,
+          .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+      vec_insert(instrs, mov2);
 
-      i1.kind = AsmInstr_MOV;
-      i1.as.mov.src = ptr;
-      i1.as.mov.dst = dst;
-      i1.asm_type = (struct AsmType){.kind = AsmType_QUADWORD};
+      // Step 3: Match scaling factor for optimized LEA vs. fallback
+      // multiplication
+      int scale = ir_instr->as.add_ptr.scale;
+      if (scale == 1 || scale == 2 || scale == 4 || scale == 8) {
+        struct AsmInstr lea_instr = {0};
+        lea_instr.kind = AsmInstr_LEA;
+        lea_instr.asm_type = (struct AsmType){.kind = AsmType_QUADWORD};
+        lea_instr.as.lea.src = (struct AsmOperand){
+            .kind = AsmOperand_INDEXED,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD},
+            .as.indexed = {.base = AX, .index = DX, .scale = scale}};
+        lea_instr.as.lea.dst = codegen_irvalue(ir_instr->as.add_ptr.dst);
+        vec_insert(instrs, lea_instr);
+      } else {
+        // Fallback: Perform hardware multiplication on index container (%rdx =
+        // %rdx * scale)
+        struct AsmInstr imul_instr = {0};
+        imul_instr.kind = AsmInstr_BIN;
+        imul_instr.asm_type = (struct AsmType){.kind = AsmType_QUADWORD};
+        imul_instr.as.binary.kind = AsmInstrBinary_MUL;
+        imul_instr.as.binary.lhs = (struct AsmOperand){
+            .kind = AsmOperand_IMM,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD},
+            .as.imm = scale};
+        imul_instr.as.binary.rhs = (struct AsmOperand){
+            .kind = AsmOperand_REG,
+            .as.reg = DX,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+        vec_insert(instrs, imul_instr);
 
-      i2.kind = AsmInstr_BIN;
-      i2.as.binary.kind = AsmInstrBinary_ADD;
-      i2.as.binary.lhs = (struct AsmOperand){
-          .kind = AsmOperand_IMM, .as.imm = ir_instr->as.add_ptr.offset};
-      i2.as.binary.rhs = dst;
-      i2.asm_type = (struct AsmType){.kind = AsmType_QUADWORD};
-
-      vec_insert(instrs, i1);
-      vec_insert(instrs, i2);
-
+        // Compute address via base multiplier scaling of 1: leaq (%rax, %rdx,
+        // 1), dst
+        struct AsmInstr lea_fallback = {0};
+        lea_fallback.kind = AsmInstr_LEA;
+        lea_fallback.asm_type = (struct AsmType){.kind = AsmType_QUADWORD};
+        lea_fallback.as.lea.src = (struct AsmOperand){
+            .kind = AsmOperand_INDEXED,
+            .asm_type = (struct AsmType){.kind = AsmType_QUADWORD},
+            .as.indexed = {.base = AX, .index = DX, .scale = 1}};
+        lea_fallback.as.lea.dst = codegen_irvalue(ir_instr->as.add_ptr.dst);
+        vec_insert(instrs, lea_fallback);
+      }
       break;
     }
     case IRInstr_CPY_FROM_OFFSET: {
@@ -9859,6 +9971,11 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
 void emit_operand(FILE *f, struct AsmOperand *op)
 {
   switch (op->kind) {
+    case AsmOperand_INDEXED: {
+      fprintf(f, "(%s, %s, %d)", reg_to_str_64(op->as.indexed.base),
+              reg_to_str_64(op->as.indexed.index), op->as.indexed.scale);
+      break;
+    }
     case AsmOperand_MEMORY: {
       fprintf(f, "%d(", op->as.mem.offset);
       switch (op->as.mem.base) {
