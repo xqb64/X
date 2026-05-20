@@ -2182,7 +2182,6 @@ struct ParseFnResult primary(struct Parser *parser)
 
       struct ExprStructInit init;
       init.struct_name = strndup(token_id->start, token_id->len);
-      printf("init.struct_name: %s\n", init.struct_name);
       init.values = values;
 
       res.as.expr =
@@ -2664,7 +2663,6 @@ Type parse_type(struct Parser *parser)
     Type custom_type;
     custom_type.kind = STRUCT_T;
     custom_type.as.struct_name = strndup(id_token->start, id_token->len);
-    printf("custom_type.as.struct_name: %s\n", custom_type.as.struct_name);
     return custom_type;
   }
   return (Type){.kind = UNKNOWN_T};
@@ -4898,13 +4896,6 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
                               ? target_type.as.base->as.struct_name
                               : target_type.as.struct_name;
 
-      printf("IRFY_EXPR: Type kind: %d\n", target_type.kind);
-      if (target_type.kind == STRUCT_T) {
-        printf("IRFY_EXPR: Struct name: %s\n", target_type.as.struct_name);
-      }
-
-      printf("IRFY_EXPR: Looking up struct: %s\n", struct_name);
-
       struct StructDef *def = struct_get(struct_table, struct_name);
 
       int offset = 0;
@@ -5346,9 +5337,7 @@ struct ResolveResult resolve_expr(struct VariableMap **varmap,
     case EXPR_LITERAL:
       break;
     case EXPR_VARIABLE: {
-      printf("trying to resolve: %s\n", expr->as.var.name);
       char *resolved_name = varmap_get(*varmap, expr->as.var.name);
-      printf("resolved p to %s\n", resolved_name);
       if (!resolved_name) {
         return (struct ResolveResult){.is_ok = false,
                                       .msg = "Undefined variable"};
@@ -6120,7 +6109,6 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
               .ast = NULL};
         }
         struct_name = target_type.as.base->as.struct_name;
-        printf("struct name is: %s\n", struct_name);
       } else {
         if (target_type.kind != STRUCT_T) {
           return (struct TypecheckResult){.is_ok = false,
@@ -6128,7 +6116,6 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
                                           .ast = NULL};
         }
         struct_name = target_type.as.struct_name;
-        printf("struct name is: %s\n", struct_name);
       }
 
       /* 2. Look up the struct definition */
@@ -6158,7 +6145,6 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
       break;
     }
     case EXPR_STRUCT_INIT: {
-      printf("geetting %s\n", expr->as.struct_init.struct_name);
       struct StructDef *def =
           struct_get(struct_table, expr->as.struct_init.struct_name);
       if (!def) {
@@ -6216,7 +6202,6 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
 
       expr->type.kind = STRUCT_T;
       expr->type.as.struct_name = strdup(def->name);
-      printf("expr->type.as.struct_name is: %s\n", expr->type.as.struct_name);
       break;
     }
     case EXPR_ADDROF: {
@@ -6574,8 +6559,6 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
       if (def.size % def.alignment != 0) {
         def.size += def.alignment - (def.size % def.alignment);
       }
-
-      printf("%s\n", def.name);
 
       struct_insert(&struct_table, def);
       break;
