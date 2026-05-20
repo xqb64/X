@@ -175,6 +175,7 @@ enum TokenKind {
   /* keywords */
   TOKEN_FN,
   TOKEN_LET,
+  TOKEN_MUT,
   TOKEN_IF,
   TOKEN_ELSE,
   TOKEN_WHILE,
@@ -498,6 +499,14 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
 
         break;
       }
+      case 'm': {
+        if (lookahead(tokenizer, 2, "ut") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_MUT, 3));
+        } else {
+          vec_insert(&tokens, identifier(tokenizer));
+        }
+        break;
+      }
       case 'r': {
         if (lookahead(tokenizer, 2, "et") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_RET, 3));
@@ -736,6 +745,9 @@ void print_token(struct Token *token)
       break;
     case TOKEN_LET:
       printf("let");
+      break;
+    case TOKEN_MUT:
+      printf("mut");
       break;
     case TOKEN_IF:
       printf("if");
@@ -1749,6 +1761,7 @@ void free_expr(struct Expr *expr)
 struct Parameter {
   char *name;
   Type type;
+  bool is_mut;
 };
 
 typedef Vector(struct Stmt) VecStmt;
@@ -1780,6 +1793,7 @@ struct StmtLet {
   char *name;
   Type type;
   struct Expr *init;
+  bool is_mut;
 };
 
 struct StmtRet {
@@ -3290,6 +3304,8 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
       char *name;
       Type type;
 
+      bool is_mut = match(parser, 1, TOKEN_MUT);
+
       name_token = consume(parser, TOKEN_IDENTIFIER);
       if (!name_token) {
         return (struct ParseFnResult){
@@ -3384,6 +3400,8 @@ struct ParseFnResult parse_let_stmt(struct Parser *parser)
         .is_ok = false, .as.stmt = {0}, .msg = "Expected token 'let'"};
   }
 
+  bool is_mut = match(parser, 1, TOKEN_MUT);
+
   token_id = consume(parser, TOKEN_IDENTIFIER);
   if (!token_id) {
     return (struct ParseFnResult){.is_ok = false,
@@ -3438,7 +3456,7 @@ struct ParseFnResult parse_let_stmt(struct Parser *parser)
   let_stmt.name = name;
   let_stmt.type = type;
   let_stmt.init = ALLOC(init);
-
+  let_stmt.is_mut = is_mut;
   result.as.stmt = (struct Stmt){.kind = STMT_LET, .as.let = let_stmt};
 
   return result;
@@ -3740,6 +3758,8 @@ struct ParseFnResult parse_extern_stmt(struct Parser *parser)
       struct Token *name_token, *colon_token;
       char *name;
       Type type;
+
+      bool is_mut = match(parser, 1, TOKEN_MUT);
 
       name_token = consume(parser, TOKEN_IDENTIFIER);
       if (!name_token) {
@@ -6480,6 +6500,7 @@ struct Symbol {
   struct Symbol *next;
   char *name;
   Type type;
+  bool is_mut;
 };
 
 void free_symbol(struct Symbol *sym)
@@ -6488,7 +6509,7 @@ void free_symbol(struct Symbol *sym)
   free(sym);
 }
 
-void sym_insert(struct Symbol **sym, char *name, Type type)
+void sym_insert(struct Symbol **sym, char *name, Type type, bool is_mut)
 {
   struct Symbol *node;
 
@@ -6496,6 +6517,7 @@ void sym_insert(struct Symbol **sym, char *name, Type type)
 
   node->name = name;
   node->type = type;
+  node->is_mut = is_mut;
   node->next = *sym;
 
   *sym = node;
@@ -6976,6 +6998,27 @@ struct TypecheckResult coerce_expr_to_type(struct Expr *expr, Type target_type,
   return (struct TypecheckResult){.is_ok = true, .msg = NULL, .ast = NULL};
 }
 
+bool is_expr_mutable(struct Expr *expr, struct Symbol *sym_table)
+{
+  switch (expr->kind) {
+    case EXPR_VARIABLE: {
+      struct Symbol *sym = sym_get(sym_table, expr->as.var.name);
+      return sym ? sym->is_mut : false;
+    }
+    case EXPR_MEMBER: {
+      if (expr->as.member.is_arrow) {
+        return true;
+      }
+      return is_expr_mutable(expr->as.member.target, sym_table);
+    }
+    case EXPR_DEREF: {
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
 struct TypecheckResult typecheck_expr(struct Expr *expr,
                                       struct Symbol *sym_table)
 {
@@ -7315,6 +7358,13 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
             .ast = NULL};
       }
 
+      if (!is_expr_mutable(expr->as.assign.lhs, sym_table)) {
+        return (struct TypecheckResult){
+            .is_ok = false,
+            .msg = "Type error: cannot assign to an immutable variable",
+            .ast = NULL};
+      }
+
       Type actual_type = expr->as.assign.rhs->type;
       Type expected_type = expr->as.assign.lhs->type;
 
@@ -7370,6 +7420,13 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
             .msg =
                 "Invalid compound assignment target: left side must be a "
                 "variable",
+            .ast = NULL};
+      }
+
+      if (!is_expr_mutable(expr->as.compound_assign.lhs, sym_table)) {
+        return (struct TypecheckResult){
+            .is_ok = false,
+            .msg = "Type error: cannot assign to an immutable variable",
             .ast = NULL};
       }
 
@@ -7615,7 +7672,7 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
       t.as.func.params = param_types;
       t.as.func.is_variadic = stmt->as.extern_stmt.is_variadic;
 
-      sym_insert(sym_table, stmt->as.extern_stmt.name, t);
+      sym_insert(sym_table, stmt->as.extern_stmt.name, t, false);
       break;
     }
     case STMT_FN: {
@@ -7632,7 +7689,7 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
         *t.as.func.retval = clone_type(stmt->as.fn.retval);
         t.as.func.params = types;
 
-        sym_insert(sym_table, stmt->as.fn.name, clone_type(t));
+        sym_insert(sym_table, stmt->as.fn.name, clone_type(t), false);
       }
 
       struct Symbol *fn_sym_table = sym_table ? *sym_table : NULL;
@@ -7640,7 +7697,8 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
 
       for (int i = 0; i < stmt->as.fn.params.len; i++) {
         sym_insert(&fn_sym_table, stmt->as.fn.params.data[i].name,
-                   clone_type(stmt->as.fn.params.data[i].type));
+                   clone_type(stmt->as.fn.params.data[i].type),
+                   stmt->as.fn.params.data[i].is_mut);
       }
 
       for (int i = 0; i < stmt->as.fn.body.len; i++) {
@@ -7701,7 +7759,8 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
           stmt->as.let.init->as.cast.expr = inner;
         }
       }
-      sym_insert(sym_table, stmt->as.let.name, clone_type(stmt->as.let.type));
+      sym_insert(sym_table, stmt->as.let.name, clone_type(stmt->as.let.type),
+                 stmt->as.let.is_mut);
       break;
     }
 
