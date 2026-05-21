@@ -182,6 +182,7 @@ enum TokenKind {
   TOKEN_WHILE,
   TOKEN_BREAK,
   TOKEN_CONTINUE,
+  TOKEN_GOTO,
   TOKEN_RET,
   TOKEN_EXTERN,
   TOKEN_VOID,
@@ -483,6 +484,14 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
 
         break;
       }
+      case 'g': {
+        if (lookahead(tokenizer, 3, "oto") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_GOTO, 4));
+        } else {
+          vec_insert(&tokens, identifier(tokenizer));
+        }
+        break;
+      }
       case 'i': {
         if (lookahead(tokenizer, 1, "8") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_I8, 2));
@@ -776,6 +785,9 @@ void print_token(struct Token *token)
       break;
     case TOKEN_CONTINUE:
       printf("continue");
+      break;
+    case TOKEN_GOTO:
+      printf("goto");
       break;
     case TOKEN_RET:
       printf("ret");
@@ -1799,6 +1811,8 @@ enum StmtKind {
   STMT_WHILE,
   STMT_BREAK,
   STMT_CONTINUE,
+  STMT_GOTO,
+  STMT_LABELED,
   STMT_BLOCK,
   STMT_EXTERN,
   STMT_EXPR,
@@ -1845,6 +1859,15 @@ struct StmtContinue {
   char *label;
 };
 
+struct StmtGoto {
+  char *label;
+};
+
+struct StmtLabeled {
+  char *label;
+  struct Stmt *stmt;
+};
+
 struct StmtBlock {
   VecStmt stmts;
 };
@@ -1888,6 +1911,8 @@ struct Stmt {
     struct StmtWhile while_stmt;
     struct StmtBreak break_stmt;
     struct StmtContinue continue_stmt;
+    struct StmtGoto goto_stmt;
+    struct StmtLabeled labeled;
     struct StmtBlock block;
     struct StmtExtern extern_stmt;
     struct StmtExpr expr_stmt;
@@ -2148,6 +2173,23 @@ void print_stmt(struct Stmt *stmt, int spaces)
       printf(")\n");
       break;
     }
+    case STMT_LABELED: {
+      print_indent(spaces);
+      printf("STMT_LABELED(\n");
+      print_stmt(stmt->as.labeled.stmt, spaces + 2);
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
+    case STMT_GOTO: {
+      print_indent(spaces);
+      printf("STMT_GOTO(\n");
+      print_indent(spaces + 2);
+      printf("label = \"%s\",\n", stmt->as.goto_stmt.label);
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
     default:
       assert(0 && "Unhandled statement kind in print_stmt");
   }
@@ -2186,6 +2228,15 @@ void free_stmt(struct Stmt *stmt)
     case STMT_BREAK:
     case STMT_CONTINUE:
       break;
+    case STMT_GOTO: {
+      free(stmt->as.goto_stmt.label);
+      break;
+    }
+    case STMT_LABELED: {
+      free(stmt->as.labeled.label);
+      free_stmt(stmt->as.labeled.stmt);
+      break;
+    }
     case STMT_LET: {
       free(stmt->as.let.name);
       free_expr(stmt->as.let.init);
@@ -4091,6 +4142,44 @@ struct ParseFnResult parse_struct_stmt(struct Parser *parser)
   return result;
 }
 
+struct ParseFnResult parse_goto_stmt(struct Parser *parser)
+{
+  struct ParseFnResult result = {.is_ok = true, .msg = NULL};
+
+  struct Token *token_goto, *token_label, *token_semicolon;
+
+  token_goto = consume(parser, TOKEN_GOTO);
+  if (!token_goto) {
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Expected 'goto'", .as.stmt = {0}};
+  }
+
+  token_label = consume(parser, TOKEN_IDENTIFIER);
+  if (!token_label) {
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Expected ident after goto", .as.stmt = {0}};
+  }
+
+  token_semicolon = consume(parser, TOKEN_SEMICOLON);
+  if (!token_semicolon) {
+    return (struct ParseFnResult){
+        .is_ok = false,
+        .msg = "Expected ';' at the end of 'goto' stmt",
+        .as.stmt = {0}};
+  }
+
+  struct StmtGoto goto_stmt;
+  goto_stmt.label = strndup(token_label->start, token_label->len);
+
+  struct Stmt s;
+  s.kind = STMT_GOTO;
+  s.as.goto_stmt = goto_stmt;
+
+  result.as.stmt = s;
+
+  return result;
+}
+
 struct ParseFnResult parse_enum_stmt(struct Parser *parser)
 {
   struct ParseFnResult result = {.is_ok = true, .msg = NULL};
@@ -4130,6 +4219,36 @@ struct ParseFnResult parse_stmt(struct Parser *parser)
 
   result.is_ok = true;
   result.msg = NULL;
+
+  if (match(parser, 1, TOKEN_IDENTIFIER)) {
+    char *label = strndup(parser->prev->start, parser->prev->len);
+
+    struct Token *token_colon;
+
+    token_colon = consume(parser, TOKEN_COLON);
+    if (!token_colon) {
+      return (struct ParseFnResult){
+          .is_ok = false, .msg = "Expected ':' after label", .as.stmt = {0}};
+    }
+
+    struct ParseFnResult labeled_res;
+
+    labeled_res = parse_stmt(parser);
+    if (!labeled_res.is_ok) {
+      return labeled_res;
+    }
+
+    struct StmtLabeled labeled;
+
+    labeled.label = label;
+    labeled.stmt = ALLOC(labeled_res.as.stmt);
+
+    return (struct ParseFnResult){
+        .is_ok = true,
+        .msg = NULL,
+        .as.stmt =
+            ((struct Stmt){.kind = STMT_LABELED, .as.labeled = labeled})};
+  }
 
   switch (parser->curr->kind) {
     case TOKEN_FN: {
@@ -4186,6 +4305,14 @@ struct ParseFnResult parse_stmt(struct Parser *parser)
         return continue_res;
       }
       result.as.stmt = continue_res.as.stmt;
+      break;
+    }
+    case TOKEN_GOTO: {
+      struct ParseFnResult goto_res = parse_goto_stmt(parser);
+      if (!goto_res.is_ok) {
+        return goto_res;
+      }
+      result.as.stmt = goto_res.as.stmt;
       break;
     }
     case TOKEN_EXTERN: {
@@ -4289,6 +4416,16 @@ struct LoopLabelResult loop_label_stmt(struct Stmt *stmt, char *label)
       stmt->as.continue_stmt.label = label;
       break;
     }
+    case STMT_LABELED: {
+      struct LoopLabelResult r;
+
+      r = loop_label_stmt(stmt->as.labeled.stmt, label);
+      if (!r.is_ok) {
+        return r;
+      }
+
+      break;
+    }
     case STMT_FN: {
       for (int i = 0; i < stmt->as.fn.body.len; i++) {
         struct LoopLabelResult r;
@@ -4331,6 +4468,7 @@ struct LoopLabelResult loop_label_stmt(struct Stmt *stmt, char *label)
     case STMT_EXTERN:
     case STMT_STRUCT:
     case STMT_ENUM:
+    case STMT_GOTO:
       break;
     default:
       assert(0);
@@ -6201,9 +6339,35 @@ void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
 
       struct IRInstr i;
       i.kind = IRInstr_JMP;
-      i.as.jmp.target = label;
+      i.as.jmp.target = strdup(label);
 
       vec_insert(instrs, i);
+      break;
+    }
+    case STMT_GOTO: {
+      char *label;
+
+      label = stmt->as.goto_stmt.label;
+
+      struct IRInstr i;
+      i.kind = IRInstr_JMP;
+      i.as.jmp.target = strdup(label);
+
+      vec_insert(instrs, i);
+      break;
+    }
+    case STMT_LABELED: {
+      char *label;
+
+      label = stmt->as.labeled.label;
+
+      struct IRInstr i;
+      i.kind = IRInstr_LBL;
+      i.as.label.name = strdup(label);
+
+      vec_insert(instrs, i);
+
+      irfy_stmt(instrs, stmt->as.labeled.stmt);
       break;
     }
     case STMT_EXTERN:
@@ -6496,6 +6660,16 @@ struct ResolveResult resolve_stmt(struct VariableMap **varmap,
                                   struct Stmt *stmt)
 {
   switch (stmt->kind) {
+    case STMT_LABELED: {
+      struct ResolveResult r;
+
+      r = resolve_stmt(varmap, stmt->as.labeled.stmt);
+      if (!r.is_ok) {
+        return r;
+      }
+
+      break;
+    }
     case STMT_EXTERN: {
       char *cpy;
 
@@ -6506,6 +6680,7 @@ struct ResolveResult resolve_stmt(struct VariableMap **varmap,
     case STMT_BREAK:
     case STMT_CONTINUE:
     case STMT_ENUM:
+    case STMT_GOTO:
       break;
     case STMT_EXPR: {
       struct ResolveResult r;
@@ -7388,6 +7563,7 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
     case EXPR_VARIABLE: {
       struct Symbol *sym = sym_get(sym_table, expr->as.var.name);
 
+      printf("looking up: %s\n", expr->as.var.name);
       if (!sym) {
         return (struct TypecheckResult){
             .is_ok = false,
@@ -7983,9 +8159,20 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
 
       break;
     }
+    case STMT_LABELED: {
+      struct TypecheckResult r;
+
+      r = typecheck_stmt(stmt->as.labeled.stmt, sym_table);
+      if (!r.is_ok) {
+        return r;
+      }
+
+      break;
+    }
     case STMT_BREAK:
     case STMT_CONTINUE:
     case STMT_ENUM:
+    case STMT_GOTO:
       break;
     default:
       assert(0);
@@ -12194,7 +12381,6 @@ struct AssembleLinkResult assemble_and_link(const char *path,
   pid_t pid = fork();
 
   if (pid < 0) {
-    perror("Fork failed");
     result.is_ok = false;
     result.msg = "Fork failed";
     return result;
@@ -12205,7 +12391,6 @@ struct AssembleLinkResult assemble_and_link(const char *path,
       execlp("gcc", "gcc", path, "-o", out_path, NULL);
     }
 
-    perror("Failed to execute gcc");
     exit(EXIT_FAILURE);
   } else {
     int status;
