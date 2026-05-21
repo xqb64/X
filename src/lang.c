@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <bits/posix2_lim.h>
 #include <getopt.h>
 #include <limits.h>
 #include <stdarg.h>
@@ -4487,6 +4488,222 @@ struct LoopLabelResult loop_label(struct AST *ast)
   }
   return (struct LoopLabelResult){.is_ok = true, .msg = NULL, .ast = ast};
 }
+
+typedef Vector(char *) VecCharPtr;
+
+struct CollectLabelsResult {
+  bool is_ok;
+  char *msg;
+  VecCharPtr labels;
+  ;
+};
+
+struct CollectLabelsResult collect_labels_stmt(struct Stmt *stmt,
+                                               VecCharPtr *labels,
+                                               char *funcname)
+{
+  switch (stmt->kind) {
+    case STMT_LABELED: {
+      struct CollectLabelsResult r;
+      char *label;
+
+      label = mkstr("%s.%s", funcname, stmt->as.labeled.label);
+
+      for (int i = 0; i < labels->len; i++) {
+        if (strcmp(labels->data[i], label) == 0) {
+          return (struct CollectLabelsResult){
+              .is_ok = false, .msg = "Duplicate label", .labels = {0}};
+        }
+      }
+
+      vec_insert(labels, label);
+
+      r = collect_labels_stmt(stmt->as.labeled.stmt, labels, funcname);
+      if (!r.is_ok) {
+        return r;
+      }
+      break;
+    }
+    case STMT_FN: {
+      for (int i = 0; i < stmt->as.fn.body.len; i++) {
+        struct CollectLabelsResult r;
+
+        r = collect_labels_stmt(&stmt->as.fn.body.data[i], labels,
+                                stmt->as.fn.name);
+        if (!r.is_ok) {
+          return r;
+        }
+      }
+      break;
+    }
+    case STMT_BLOCK: {
+      for (int i = 0; i < stmt->as.block.stmts.len; i++) {
+        struct CollectLabelsResult r;
+
+        r = collect_labels_stmt(&stmt->as.block.stmts.data[i], labels,
+                                funcname);
+        if (!r.is_ok) {
+          return r;
+        }
+      }
+      break;
+    }
+    case STMT_IF: {
+      struct CollectLabelsResult r1, r2;
+
+      r1 = collect_labels_stmt(stmt->as.if_stmt.then_block, labels, funcname);
+      if (!r1.is_ok) {
+        return r1;
+      }
+
+      if (stmt->as.if_stmt.else_block) {
+        r2 = collect_labels_stmt(stmt->as.if_stmt.else_block, labels, funcname);
+        if (!r2.is_ok) {
+          return r2;
+        }
+      }
+      break;
+    }
+    case STMT_WHILE: {
+      struct CollectLabelsResult r;
+
+      r = collect_labels_stmt(stmt->as.while_stmt.body, labels, funcname);
+      if (!r.is_ok) {
+        return r;
+      }
+
+      break;
+    }
+    default:
+      break;
+  }
+  return (struct CollectLabelsResult){.is_ok = true, .msg = NULL};
+}
+
+struct CollectLabelsResult collect_labels(struct AST *ast)
+{
+  VecCharPtr labels = {0};
+
+  for (int i = 0; i < ast->stmts.len; i++) {
+    struct CollectLabelsResult r;
+
+    r = collect_labels_stmt(&ast->stmts.data[i], &labels, NULL);
+    if (!r.is_ok) {
+      return r;
+    }
+  }
+
+  for (int i = 0; i < labels.len; i++) {
+    printf("found label: %s\n", labels.data[i]);
+  }
+
+  return (struct CollectLabelsResult){
+      .is_ok = true, .msg = NULL, .labels = labels};
+}
+
+struct LabelCheckResult {
+  bool is_ok;
+  char *msg;
+};
+
+struct LabelCheckResult check_labels_stmt(struct Stmt *stmt, VecCharPtr *labels,
+                                          char *funcname)
+{
+  switch (stmt->kind) {
+    case STMT_FN: {
+      for (int i = 0; i < stmt->as.fn.body.len; i++) {
+        struct LabelCheckResult r;
+
+        r = check_labels_stmt(&stmt->as.fn.body.data[i], labels,
+                              stmt->as.fn.name);
+        if (!r.is_ok) {
+          return r;
+        }
+      }
+      break;
+    }
+    case STMT_GOTO: {
+      bool is_found;
+      char *label;
+
+      is_found = false;
+      label = mkstr("%s.%s", funcname, stmt->as.goto_stmt.label);
+
+      printf("labels->len is: %d\n", labels->len);
+      for (int i = 0; i < labels->len; i++) {
+        printf("label inside is: %s\n", labels->data[i]);
+        if (strcmp(labels->data[i], label) == 0) {
+          is_found = true;
+          break;
+        }
+      }
+
+      if (!is_found) {
+        return (struct LabelCheckResult){
+            .is_ok = false, .msg = mkstr("No label %s found", label)};
+      }
+
+      free(label);
+      return (struct LabelCheckResult){.is_ok = true, .msg = NULL};
+    }
+    case STMT_IF: {
+      struct LabelCheckResult then_res, else_res;
+
+      then_res =
+          check_labels_stmt(stmt->as.if_stmt.then_block, labels, funcname);
+      if (!then_res.is_ok) {
+        return then_res;
+      }
+
+      if (stmt->as.if_stmt.else_block) {
+        else_res =
+            check_labels_stmt(stmt->as.if_stmt.else_block, labels, funcname);
+        if (!else_res.is_ok) {
+          return else_res;
+        }
+      }
+
+      break;
+    }
+    case STMT_WHILE: {
+      struct LabelCheckResult body_res;
+
+      body_res = check_labels_stmt(stmt->as.while_stmt.body, labels, funcname);
+      if (!body_res.is_ok) {
+        return body_res;
+      }
+
+      break;
+    }
+    case STMT_LABELED: {
+      struct LabelCheckResult labeled_res;
+
+      labeled_res = check_labels_stmt(stmt->as.labeled.stmt, labels, funcname);
+      if (!labeled_res.is_ok) {
+        return labeled_res;
+      }
+
+      break;
+    }
+    default:
+      break;
+  }
+  return (struct LabelCheckResult){.is_ok = true, .msg = NULL};
+}
+
+struct LabelCheckResult check_labels(struct AST *ast, VecCharPtr *labels)
+{
+  for (int i = 0; i < ast->stmts.len; i++) {
+    struct LabelCheckResult r;
+
+    r = check_labels_stmt(&ast->stmts.data[i], labels, NULL);
+    if (!r.is_ok) {
+      return r;
+    }
+  }
+  return (struct LabelCheckResult){.is_ok = true, .msg = NULL};
+}
+
 enum IRValueKind {
   IRValue_CONST,
   IRValue_VAR,
@@ -12572,6 +12789,8 @@ struct RunResult run(struct CompilerOptions *opts)
   struct ResolveResult resolve_result;
   struct TypecheckResult typecheck_result;
   struct LoopLabelResult loop_label_result;
+  struct CollectLabelsResult collect_labels_result;
+  struct LabelCheckResult label_check_result;
   struct IrfyResult irfy_result;
   struct IRProgram ir_prog;
   struct AsmResult asm_result;
@@ -12667,6 +12886,20 @@ struct RunResult run(struct CompilerOptions *opts)
 
   printf("labeled ast:\n");
   print_ast(labeled_ast);
+
+  collect_labels_result = collect_labels(labeled_ast);
+  if (!collect_labels_result.is_ok) {
+    r.msg = collect_labels_result.msg;
+    r.is_ok = false;
+    goto free_up2_parse;
+  }
+
+  label_check_result = check_labels(labeled_ast, &collect_labels_result.labels);
+  if (!label_check_result.is_ok) {
+    r.msg = label_check_result.msg;
+    r.is_ok = false;
+    goto free_up2_parse;
+  }
 
   irfy_result = irfy_ast(labeled_ast);
   if (!irfy_result.is_ok) {

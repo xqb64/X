@@ -10,4 +10,7 @@ fn main(void) -> u32 {
 
 spam:  
   ret y; 
+
+spam:
+  ret y+1;
 }
