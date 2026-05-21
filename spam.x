@@ -1,7 +1,6 @@
 extern fn printf(fmt: str, ...) -> i32;
 
-fn main(void) -> i32 {
-  let x: i32 = 0;
-  x = 10;
-  ret x;
+fn main(void) -> u32 {
+  let x: u8 = 0;
+  ret x as u32;
 }

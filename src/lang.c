@@ -176,6 +176,7 @@ enum TokenKind {
   TOKEN_FN,
   TOKEN_LET,
   TOKEN_MUT,
+  TOKEN_AS,
   TOKEN_IF,
   TOKEN_ELSE,
   TOKEN_WHILE,
@@ -425,6 +426,15 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
     }
 
     switch (*tokenizer->src) {
+      case 'a': {
+        if (lookahead(tokenizer, 1, "s") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_AS, 2));
+        } else {
+          vec_insert(&tokens, identifier(tokenizer));
+        }
+
+        break;
+      }
       case 'b': {
         if (lookahead(tokenizer, 3, "ool") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_BOOL, 4));
@@ -748,6 +758,9 @@ void print_token(struct Token *token)
       break;
     case TOKEN_MUT:
       printf("mut");
+      break;
+    case TOKEN_AS:
+      printf("as");
       break;
     case TOKEN_IF:
       printf("if");
@@ -1342,12 +1355,13 @@ struct ExprAddrOf {
 
 struct ExprCast {
   struct Expr *expr;
+  Type target_type;
 };
 
 struct StructInitItem {
-  char *designator; /* e.g., "a" or "as.mem" (NULL if positional) */
+  char *designator;
   struct Expr *expr;
-  int resolved_offset; /* Calculated later by the typechecker */
+  int resolved_offset;
 };
 typedef Vector(struct StructInitItem) VecStructInitItem;
 
@@ -1360,6 +1374,11 @@ struct ExprMember {
   struct Expr *target;
   char *field_name;
   bool is_arrow;
+};
+
+struct ExprAs {
+  struct Expr *target;
+  Type target_type;
 };
 
 struct Expr {
@@ -1377,6 +1396,7 @@ struct Expr {
     struct ExprCast cast;
     struct ExprStructInit struct_init;
     struct ExprMember member;
+    struct ExprAs as;
   } as;
   Type type;
 };
@@ -1631,6 +1651,10 @@ void print_expr(struct Expr *expr, int spaces)
       printf("Cast(\n");
       print_indent(spaces + 2);
       print_expr(expr->as.cast.expr, spaces + 2);
+      printf("\n");
+      print_indent(spaces + 2);
+      printf("target_type: ");
+      print_type(&expr->as.cast.target_type, spaces + 2);
       printf("\n");
       print_indent(spaces);
       printf(")");
@@ -2559,6 +2583,137 @@ struct ParseFnResult finish_call(struct Parser *parser, struct Expr callee)
   return (struct ParseFnResult){.as.expr = e, .is_ok = true, .msg = NULL};
 }
 
+Type parse_type(struct Parser *parser)
+{
+  if (match(parser, 1, TOKEN_STAR)) {
+    Type *base = malloc(sizeof(Type));
+    *base = parse_type(parser);
+    return (Type){.kind = PTR_T, .as.base = base};
+  }
+
+  if (check(parser, TOKEN_VOID)) {
+    advance_parser(parser);
+    return (Type){.kind = VOID_T};
+  }
+
+  if (check(parser, TOKEN_UNION) || check(parser, TOKEN_STRUCT)) {
+    bool is_union = check(parser, TOKEN_UNION);
+    advance_parser(parser);
+
+    /* Generate a unique name for the typechecker/IR */
+    char *anon_name = mkuniq(is_union ? "anon_union" : "anon_struct");
+
+    consume(parser, TOKEN_LBRACE);
+    VecStructField fields = {0};
+
+    while (!check(parser, TOKEN_RBRACE)) {
+      char *field_name = NULL;
+      Type field_type;
+
+      if (check(parser, TOKEN_IDENTIFIER) &&
+          parser->idx < parser->tokens->len &&
+          parser->tokens->data[parser->idx].kind == TOKEN_COLON) {
+        struct Token *name_tok = consume(parser, TOKEN_IDENTIFIER);
+        consume(parser, TOKEN_COLON);
+        field_type = parse_type(parser);
+        field_name = strndup(name_tok->start, name_tok->len);
+      } else {
+        field_type = parse_type(parser);
+        struct Token *name_tok = consume(parser, TOKEN_IDENTIFIER);
+        if (name_tok) {
+          field_name = strndup(name_tok->start, name_tok->len);
+        } else {
+          field_name = strdup("");
+        }
+      }
+
+      struct StructField field;
+      field.name = field_name;
+      field.type = field_type;
+      field.offset = 0;
+      vec_insert(&fields, field);
+
+      if (check(parser, TOKEN_COMMA)) {
+        advance_parser(parser);
+      }
+    }
+    consume(parser, TOKEN_RBRACE);
+
+    struct StmtStruct struct_stmt;
+    struct_stmt.name = strdup(anon_name);
+    struct_stmt.fields = fields;
+    struct_stmt.is_union = is_union;
+
+    struct Stmt s;
+    s.kind = STMT_STRUCT;
+    s.as.struct_stmt = struct_stmt;
+
+    if (parser->global_stmts) {
+      vec_insert(parser->global_stmts, s);
+    }
+
+    Type custom_type;
+    custom_type.kind = STRUCT_T;
+    custom_type.as.struct_name = anon_name;
+    return custom_type;
+  }
+
+  struct Token *type_token =
+      consume_any(parser, 12, TOKEN_U8, TOKEN_U16, TOKEN_U32, TOKEN_U64,
+                  TOKEN_I8, TOKEN_I16, TOKEN_I32, TOKEN_I64, TOKEN_F32,
+                  TOKEN_F64, TOKEN_BOOL, TOKEN_STR);
+
+  if (type_token) {
+    if (strncmp(type_token->start, "i8", type_token->len) == 0) {
+      return (Type){.kind = I8_T};
+    } else if (strncmp(type_token->start, "i16", type_token->len) == 0) {
+      return (Type){.kind = I16_T};
+    } else if (strncmp(type_token->start, "i32", type_token->len) == 0) {
+      return (Type){.kind = I32_T};
+    } else if (strncmp(type_token->start, "i64", type_token->len) == 0) {
+      return (Type){.kind = I64_T};
+    } else if (strncmp(type_token->start, "u8", type_token->len) == 0) {
+      return (Type){.kind = U8_T};
+    } else if (strncmp(type_token->start, "u16", type_token->len) == 0) {
+      return (Type){.kind = U16_T};
+    } else if (strncmp(type_token->start, "u32", type_token->len) == 0) {
+      return (Type){.kind = U32_T};
+    } else if (strncmp(type_token->start, "u64", type_token->len) == 0) {
+      return (Type){.kind = U64_T};
+    } else if (strncmp(type_token->start, "f32", type_token->len) == 0) {
+      return (Type){.kind = F32_T};
+    } else if (strncmp(type_token->start, "f64", type_token->len) == 0) {
+      return (Type){.kind = F64_T};
+    } else if (strncmp(type_token->start, "bool", type_token->len) == 0) {
+      return (Type){.kind = BOOL_T};
+    } else if (strncmp(type_token->start, "str", type_token->len) == 0) {
+      return (Type){.kind = STR_T};
+    }
+  } else if (check(parser, TOKEN_IDENTIFIER)) {
+    struct Token *id_token = consume(parser, TOKEN_IDENTIFIER);
+    char *name = strndup(id_token->start, id_token->len);
+
+    if (is_enum_type(name)) {
+      free(name);
+      return (Type){.kind = I32_T};
+    } else {
+      Type custom_type;
+      custom_type.kind = STRUCT_T;
+      custom_type.as.struct_name = name;
+      return custom_type;
+    }
+  }
+
+  if (check(parser, TOKEN_ENUM)) {
+    advance_parser(parser);
+    struct Token *id_token = consume(parser, TOKEN_IDENTIFIER);
+    if (id_token) {
+      return (Type){.kind = I32_T};
+    }
+  }
+  return (Type){.kind = UNKNOWN_T};
+}
+
 struct ParseFnResult postfix(struct Parser *parser)
 {
   struct ParseFnResult expr_result;
@@ -2594,6 +2749,18 @@ struct ParseFnResult postfix(struct Parser *parser)
 
       expr.kind = EXPR_MEMBER;
       expr.as.member = member_expr;
+    } else if (match(parser, 1, TOKEN_AS)) {
+      Type t;
+
+      t = parse_type(parser);
+
+      struct ExprCast cast_expr = {
+          .expr = ALLOC(expr),
+          .target_type = t,
+      };
+
+      expr.kind = EXPR_CAST;
+      expr.as.cast = cast_expr;
     } else {
       break;
     }
@@ -3084,140 +3251,6 @@ struct ParseFnResult parse_expr(struct Parser *parser)
   expr = res.as.expr;
 
   return (struct ParseFnResult){.is_ok = true, .msg = NULL, .as.expr = expr};
-}
-
-Type parse_type(struct Parser *parser)
-{
-  if (match(parser, 1, TOKEN_STAR)) {
-    Type *base = malloc(sizeof(Type));
-    *base = parse_type(parser);
-    return (Type){.kind = PTR_T, .as.base = base};
-  }
-
-  if (check(parser, TOKEN_VOID)) {
-    advance_parser(parser);
-    return (Type){.kind = VOID_T};
-  }
-
-  if (check(parser, TOKEN_UNION) || check(parser, TOKEN_STRUCT)) {
-    bool is_union = check(parser, TOKEN_UNION);
-    advance_parser(parser);
-
-    /* Generate a unique name for the typechecker/IR */
-    char *anon_name = mkuniq(is_union ? "anon_union" : "anon_struct");
-
-    consume(parser, TOKEN_LBRACE);
-    VecStructField fields = {0};
-
-    while (!check(parser, TOKEN_RBRACE)) {
-      char *field_name = NULL;
-      Type field_type;
-
-      /* Support native `name: type` or C-style `type name` */
-      if (check(parser, TOKEN_IDENTIFIER) &&
-          parser->idx < parser->tokens->len &&
-          parser->tokens->data[parser->idx].kind == TOKEN_COLON) {
-        struct Token *name_tok = consume(parser, TOKEN_IDENTIFIER);
-        consume(parser, TOKEN_COLON);
-        field_type = parse_type(parser);
-        field_name = strndup(name_tok->start, name_tok->len);
-      } else {
-        field_type = parse_type(parser);
-        struct Token *name_tok = consume(parser, TOKEN_IDENTIFIER);
-        if (name_tok) {
-          field_name = strndup(name_tok->start, name_tok->len);
-        } else {
-          field_name = strdup(""); /* True anonymous field */
-        }
-      }
-
-      struct StructField field;
-      field.name = field_name;
-      field.type = field_type;
-      field.offset = 0;
-      vec_insert(&fields, field);
-
-      if (check(parser, TOKEN_COMMA)) {
-        advance_parser(parser);
-      }
-    }
-    consume(parser, TOKEN_RBRACE);
-
-    /* Create the STMT_STRUCT and inject it globally */
-    struct StmtStruct struct_stmt;
-    struct_stmt.name = strdup(anon_name);
-    struct_stmt.fields = fields;
-    struct_stmt.is_union = is_union;
-
-    struct Stmt s;
-    s.kind = STMT_STRUCT;
-    s.as.struct_stmt = struct_stmt;
-
-    if (parser->global_stmts) {
-      vec_insert(parser->global_stmts, s);
-    }
-
-    Type custom_type;
-    custom_type.kind = STRUCT_T;
-    custom_type.as.struct_name = anon_name;
-    return custom_type;
-  }
-
-  struct Token *type_token =
-      consume_any(parser, 12, TOKEN_U8, TOKEN_U16, TOKEN_U32, TOKEN_U64,
-                  TOKEN_I8, TOKEN_I16, TOKEN_I32, TOKEN_I64, TOKEN_F32,
-                  TOKEN_F64, TOKEN_BOOL, TOKEN_STR);
-
-  if (type_token) {
-    if (strncmp(type_token->start, "i8", type_token->len) == 0) {
-      return (Type){.kind = I8_T};
-    } else if (strncmp(type_token->start, "i16", type_token->len) == 0) {
-      return (Type){.kind = I16_T};
-    } else if (strncmp(type_token->start, "i32", type_token->len) == 0) {
-      return (Type){.kind = I32_T};
-    } else if (strncmp(type_token->start, "i64", type_token->len) == 0) {
-      return (Type){.kind = I64_T};
-    } else if (strncmp(type_token->start, "u8", type_token->len) == 0) {
-      return (Type){.kind = U8_T};
-    } else if (strncmp(type_token->start, "u16", type_token->len) == 0) {
-      return (Type){.kind = U16_T};
-    } else if (strncmp(type_token->start, "u32", type_token->len) == 0) {
-      return (Type){.kind = U32_T};
-    } else if (strncmp(type_token->start, "u64", type_token->len) == 0) {
-      return (Type){.kind = U64_T};
-    } else if (strncmp(type_token->start, "f32", type_token->len) == 0) {
-      return (Type){.kind = F32_T};
-    } else if (strncmp(type_token->start, "f64", type_token->len) == 0) {
-      return (Type){.kind = F64_T};
-    } else if (strncmp(type_token->start, "bool", type_token->len) == 0) {
-      return (Type){.kind = BOOL_T};
-    } else if (strncmp(type_token->start, "str", type_token->len) == 0) {
-      return (Type){.kind = STR_T};
-    }
-  } else if (check(parser, TOKEN_IDENTIFIER)) {
-    struct Token *id_token = consume(parser, TOKEN_IDENTIFIER);
-    char *name = strndup(id_token->start, id_token->len);
-
-    if (is_enum_type(name)) {
-      free(name);
-      return (Type){.kind = I32_T}; /* Treat enum strictly as i32 */
-    } else {
-      Type custom_type;
-      custom_type.kind = STRUCT_T;
-      custom_type.as.struct_name = name;
-      return custom_type;
-    }
-  }
-
-  /* Support explicit keyword usage like `let c: enum Color;` */
-  if (check(parser, TOKEN_ENUM)) {
-    advance_parser(parser);
-    struct Token *id_token = consume(parser, TOKEN_IDENTIFIER);
-    if (id_token) {
-      return (Type){.kind = I32_T};
-    }
-  }
-  return (Type){.kind = UNKNOWN_T};
 }
 
 struct ParseFnResult block(struct Parser *parser)
@@ -4617,7 +4650,33 @@ struct IRInstr_Store {
   struct IRValue *dst;
 };
 
+enum IRCastKind {
+  IRCast_None,
+
+  IRCast_Truncate,
+  IRCast_SignExtend,
+  IRCast_ZeroExtend,
+
+  IRCast_FloatPromote,
+  IRCast_FloatDemote,
+
+  IRCast_IntToFloat,
+  IRCast_IntToDouble,
+  IRCast_FloatToInt,
+  IRCast_DoubleToInt,
+
+  IRCast_UIntToFloat,
+  IRCast_UIntToDouble,
+  IRCast_FloatToUInt,
+  IRCast_DoubleToUInt,
+
+  IRCast_PtrToInt,
+  IRCast_IntToPtr,
+  IRCast_Bitcast,
+};
+
 struct IRInstr_Cast {
+  enum IRCastKind kind;
   struct IRValue *src;
   struct IRValue *dst;
 };
@@ -5185,6 +5244,115 @@ struct StaticConstant {
 typedef Vector(struct StaticConstant) VecStaticConstant;
 VecStaticConstant global_constants = {0};
 
+static inline int get_type_size(enum TypeKind kind)
+{
+  switch (kind) {
+    case I8_T:
+    case U8_T:
+    case BOOL_T:
+      return 1;
+    case I16_T:
+    case U16_T:
+      return 2;
+    case I32_T:
+    case U32_T:
+    case F32_T:
+      return 4;
+    case I64_T:
+    case U64_T:
+    case F64_T:
+    case STR_T:
+    case PTR_T:
+      return 8;
+    default:
+      return -1;
+  }
+}
+
+bool is_unsigned(enum TypeKind kind)
+{
+  switch (kind) {
+    case U8_T:
+    case U16_T:
+    case U32_T:
+    case U64_T:
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool is_integer_type(enum TypeKind kind)
+{
+  switch (kind) {
+    case I8_T:
+    case I16_T:
+    case I32_T:
+    case I64_T:
+    case U8_T:
+    case U16_T:
+    case U32_T:
+    case U64_T:
+      return true;
+    default:
+      return false;
+  }
+}
+
+enum IRCastKind get_cast_kind(Type src, Type dst)
+{
+  if (types_equal(src, dst)) {
+    return IRCast_None;
+  }
+
+  bool src_is_float = (src.kind == F32_T || src.kind == F64_T);
+  bool dst_is_float = (dst.kind == F32_T || dst.kind == F64_T);
+
+  if (src_is_float && dst_is_float) {
+    return src.kind == F32_T ? IRCast_FloatPromote : IRCast_FloatDemote;
+  }
+
+  if (src.kind == PTR_T && is_integer_type(dst.kind)) {
+    return IRCast_PtrToInt;
+  }
+  if (is_integer_type(src.kind) && dst.kind == PTR_T) {
+    return IRCast_IntToPtr;
+  }
+  if (src.kind == PTR_T && dst.kind == PTR_T) {
+    return IRCast_Bitcast;
+  }
+
+  bool src_unsigned = is_unsigned(src.kind) || src.kind == BOOL_T;
+  bool dst_unsigned = is_unsigned(dst.kind) || dst.kind == BOOL_T;
+
+  if (src_is_float && !dst_is_float) {
+    if (dst_unsigned) {
+      return src.kind == F32_T ? IRCast_FloatToUInt : IRCast_DoubleToUInt;
+    } else {
+      return src.kind == F32_T ? IRCast_FloatToInt : IRCast_DoubleToInt;
+    }
+  }
+
+  if (!src_is_float && dst_is_float) {
+    if (src_unsigned) {
+      return dst.kind == F32_T ? IRCast_UIntToFloat : IRCast_UIntToDouble;
+    } else {
+      return dst.kind == F32_T ? IRCast_IntToFloat : IRCast_IntToDouble;
+    }
+  }
+
+  int src_sz = get_type_size(src.kind);
+  int dst_sz = get_type_size(dst.kind);
+
+  if (src_sz == dst_sz) {
+    return IRCast_Bitcast;
+  }
+  if (src_sz > dst_sz) {
+    return IRCast_Truncate;
+  }
+  return src_unsigned ? IRCast_ZeroExtend : IRCast_SignExtend;
+}
+
 struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
 {
   switch (expr->kind) {
@@ -5673,34 +5841,29 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       return (struct ExpResult){.kind = EXPRESULT_DEREF, .as.ptr = ptr_val};
     }
     case EXPR_CAST: {
-      /* When we evaluate a type cast (e.g., `x as i32`), we are creating a
-       * new value of the target type based on the src.  */
-      struct IRValue *src, *dst;
-
-      /* 1. Lvalue-to-Rvalue Conversion: We must evaluate the inner expression
-       *    using `irfy_expr_and_convert`. If `x` is a variable in memory, this
-       *    forces a LOAD instruction to fetch its actual data. We cannot cast
-       *    an abstract memory location; we must cast the data itself.  */
-      src = irfy_expr_and_convert(instrs, expr->as.cast.expr);
-
-      /* 2. Temporary Generation: A cast does not mutate the original variable.
-       *    Therefore, we generate a fresh temporary IR variable (`dst`) and set
-       *    its type to the new, casted type.  */
-      dst = mkirvar();
+      struct IRValue *src = irfy_expr_and_convert(instrs, expr->as.cast.expr);
+      struct IRValue *dst = mkirvar();
       dst->type = expr->type;
 
-      /* 3. IR Emission: We explicitly emit an `IRInstr_CAST`. This acts as a
-       *    directive for the backend, which will later decide if this requires
-       *    sign-extension (e.g., `movsbl`), floating-point conversion
-       *    (e.g., `cvtsi2sd`), or just a simple register move.  */
-      struct IRInstr i;
-      i.kind = IRInstr_CAST;
-      i.as.cast.src = src;
-      i.as.cast.dst = clone_irval(dst);
-      vec_insert(instrs, i);
-      /* 4. Rvalue Return: The result of a cast is always an rvalue (you cannot
-       *    assign to a cast, like `(int)x = 5;`). Thus, we package our new
-       *    temporary variable into an `EXPRESULT_PLAIN` and return it.  */
+      enum IRCastKind kind =
+          get_cast_kind(expr->as.cast.expr->type, expr->type);
+
+      if (kind == IRCast_None || kind == IRCast_Bitcast ||
+          kind == IRCast_PtrToInt || kind == IRCast_IntToPtr) {
+        struct IRInstr i = {0};
+        i.kind = IRInstr_CPY;
+        i.as.copy.src = src;
+        i.as.copy.dst = clone_irval(dst);
+        vec_insert(instrs, i);
+      } else {
+        struct IRInstr i = {0};
+        i.kind = IRInstr_CAST;
+        i.as.cast.kind = kind;
+        i.as.cast.src = src;
+        i.as.cast.dst = clone_irval(dst);
+        vec_insert(instrs, i);
+      }
+
       return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = dst};
     }
     case EXPR_MEMBER: {
@@ -5720,7 +5883,6 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       }
 
       if (expr->as.member.is_arrow) {
-        /* foo->bar is a pointer dereference plus an offset. */
         struct IRValue *base_ptr =
             irfy_expr_and_convert(instrs, expr->as.member.target);
 
@@ -5758,7 +5920,6 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
                   .base_type = target_res.as.plain->type,
               }};
         } else if (target_res.kind == EXPRESULT_SUBOBJECT) {
-          /* Target is already a subobject: a.b.c -> accumulate the offset */
           return (struct ExpResult){
               .kind = EXPRESULT_SUBOBJECT,
               .as.subobject = {
@@ -5767,7 +5928,6 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
                   .base_type = target_res.as.subobject.base_type,
               }};
         } else if (target_res.kind == EXPRESULT_DEREF) {
-          /* Target is a deref: (*foo).bar -> use pointer arithmetic */
           if (offset == 0) {
             return target_res;
           }
@@ -5801,11 +5961,9 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       tmp_struct->type.as.struct_name = expr->as.struct_init.struct_name;
 
       for (int i = 0; i < expr->as.struct_init.values.len; i++) {
-        /* Use .expr instead of the array index directly */
         struct IRValue *val = irfy_expr_and_convert(
             instrs, expr->as.struct_init.values.data[i].expr);
 
-        /* Use our newly cached flat offset! */
         int offset = expr->as.struct_init.values.data[i].resolved_offset;
 
         struct IRInstr_CopyToOffset copy_to = {
@@ -6623,36 +6781,6 @@ void print_type(Type *type, int spaces)
 
 #define IN_RANGE(val, min, max) ((val) >= (min) && (val) <= (max))
 
-bool is_unsigned(enum TypeKind kind)
-{
-  switch (kind) {
-    case U8_T:
-    case U16_T:
-    case U32_T:
-    case U64_T:
-      return true;
-    default:
-      return false;
-  }
-}
-
-bool is_integer_type(enum TypeKind kind)
-{
-  switch (kind) {
-    case I8_T:
-    case I16_T:
-    case I32_T:
-    case I64_T:
-    case U8_T:
-    case U16_T:
-    case U32_T:
-    case U64_T:
-      return true;
-    default:
-      return false;
-  }
-}
-
 bool is_bitwise_binop(enum ExprBinKind kind)
 {
   return kind == EXPR_BIN_BITWISE_AND || kind == EXPR_BIN_BITWISE_XOR ||
@@ -6663,31 +6791,6 @@ bool is_bitwise_binop(enum ExprBinKind kind)
 bool is_shift_binop(enum ExprBinKind kind)
 {
   return kind == EXPR_BIN_SHIFT_LEFT || kind == EXPR_BIN_SHIFT_RIGHT;
-}
-
-static inline int get_type_size(enum TypeKind kind)
-{
-  switch (kind) {
-    case I8_T:
-    case U8_T:
-    case BOOL_T:
-      return 1;
-    case I16_T:
-    case U16_T:
-      return 2;
-    case I32_T:
-    case U32_T:
-    case F32_T:
-      return 4;
-    case I64_T:
-    case U64_T:
-    case F64_T:
-    case STR_T:
-    case PTR_T:
-      return 8;
-    default:
-      return -1;
-  }
 }
 
 void get_type_size_and_align(Type *type, int *size, int *align)
@@ -6986,13 +7089,6 @@ struct TypecheckResult coerce_expr_to_type(struct Expr *expr, Type target_type,
       return (struct TypecheckResult){
           .is_ok = false, .msg = err_msg, .ast = NULL};
     }
-  } else {
-    struct Expr *inner = malloc(sizeof(struct Expr));
-    *inner = *expr;
-
-    expr->kind = EXPR_CAST;
-    expr->type = target_type;
-    expr->as.cast.expr = inner;
   }
 
   return (struct TypecheckResult){.is_ok = true, .msg = NULL, .ast = NULL};
@@ -7184,13 +7280,18 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
       break;
     }
     case EXPR_CAST: {
-      struct TypecheckResult r;
-
-      r = typecheck_expr(expr->as.cast.expr, sym_table);
+      struct TypecheckResult r = typecheck_expr(expr->as.cast.expr, sym_table);
       if (!r.is_ok) {
         return r;
       }
 
+      struct TypecheckResult coerce_r = coerce_expr_to_type(
+          expr->as.cast.expr, expr->as.cast.target_type, "Invalid cast");
+      if (!coerce_r.is_ok) {
+        return coerce_r;
+      }
+
+      expr->type = clone_type(expr->as.cast.target_type);
       break;
     }
     case EXPR_LITERAL: {
@@ -7792,13 +7893,6 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
                   .ast = NULL,
               };
             }
-          } else {
-            struct Expr *inner = malloc(sizeof(struct Expr));
-            *inner = *stmt->as.ret.val;
-
-            stmt->as.ret.val->kind = EXPR_CAST;
-            stmt->as.ret.val->type = expected_type;
-            stmt->as.ret.val->as.cast.expr = inner;
           }
         }
       }
@@ -8588,8 +8682,19 @@ struct AsmInstrUnary {
   struct AsmOperand op;
 };
 
+enum AsmCastKind {
+  AsmCast_SignExtend,
+  AsmCast_ZeroExtend,
+  AsmCast_FloatPromote,
+  AsmCast_FloatDemote,
+  AsmCast_IntToFloat,
+  AsmCast_IntToDouble,
+  AsmCast_FloatToInt,
+  AsmCast_DoubleToInt,
+};
+
 struct AsmInstrCvt {
-  bool is_unsigned;
+  enum AsmCastKind kind;
   struct AsmOperand src;
   struct AsmOperand dst;
 };
@@ -10114,55 +10219,94 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
 
       if (src.kind == AsmOperand_IMM) {
         struct AsmInstr i = {0};
-
         i.kind = AsmInstr_MOV;
         i.as.mov.src = src;
         i.as.mov.dst = dst;
         i.asm_type = dst.asm_type;
-
         vec_insert(instrs, i);
-      } else if (src.asm_type.kind == dst.asm_type.kind) {
-        struct AsmInstr i = {0};
-
-        i.kind = AsmInstr_MOV;
-        i.as.mov.src = src;
-        i.as.mov.dst = dst;
-        i.asm_type = dst.asm_type;
-
-        vec_insert(instrs, i);
-      } else if (src.asm_type.kind == AsmType_QUADWORD &&
-                 dst.asm_type.kind == AsmType_LONGWORD) {
-        /*
-         * Truncating 64-bit integer/pointer to 32-bit integer.
-         * Emit a 32-bit move of the low 32 bits.
-         */
+      } else if (ir_instr->as.cast.kind == IRCast_Truncate) {
+        // Truncation relies on doing a standard move into the narrower size
         struct AsmOperand narrowed_src = src;
-        narrowed_src.asm_type = (struct AsmType){.kind = AsmType_LONGWORD};
-
+        narrowed_src.asm_type = dst.asm_type;
         struct AsmInstr i = {0};
         i.kind = AsmInstr_MOV;
         i.as.mov.src = narrowed_src;
         i.as.mov.dst = dst;
-        i.asm_type = (struct AsmType){.kind = AsmType_LONGWORD};
-
+        i.asm_type = dst.asm_type;
         vec_insert(instrs, i);
       } else {
-        struct AsmInstr i = {0};
+        enum IRCastKind ir_k = ir_instr->as.cast.kind;
 
+        // Map Unsigned behavior down to standard Signed implementations
+        if (ir_k == IRCast_FloatToUInt) {
+          ir_k = IRCast_FloatToInt;
+        }
+        if (ir_k == IRCast_DoubleToUInt) {
+          ir_k = IRCast_DoubleToInt;
+        }
+
+        if (ir_k == IRCast_UIntToFloat || ir_k == IRCast_UIntToDouble) {
+          int src_sz = asm_type_stack_size(src.asm_type);
+          if (src_sz < 8) {
+            // Safely Zero-Extend <64 bit Unsigned into 64-bit Reg before float
+            // conversion
+            struct AsmOperand r10 = {
+                .kind = AsmOperand_REG,
+                .as.reg = R10,
+                .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
+            struct AsmInstr zext = {0};
+            zext.kind = AsmInstr_CVT;
+            zext.as.cvt.kind = AsmCast_ZeroExtend;
+            zext.as.cvt.src = src;
+            zext.as.cvt.dst = r10;
+            vec_insert(instrs, zext);
+            src = r10;
+          }
+          ir_k = (ir_k == IRCast_UIntToFloat) ? IRCast_IntToFloat
+                                              : IRCast_IntToDouble;
+        }
+
+        enum AsmCastKind asm_k;
+        switch (ir_k) {
+          case IRCast_SignExtend:
+            asm_k = AsmCast_SignExtend;
+            break;
+          case IRCast_ZeroExtend:
+            asm_k = AsmCast_ZeroExtend;
+            break;
+          case IRCast_FloatPromote:
+            asm_k = AsmCast_FloatPromote;
+            break;
+          case IRCast_FloatDemote:
+            asm_k = AsmCast_FloatDemote;
+            break;
+          case IRCast_IntToFloat:
+            asm_k = AsmCast_IntToFloat;
+            break;
+          case IRCast_IntToDouble:
+            asm_k = AsmCast_IntToDouble;
+            break;
+          case IRCast_FloatToInt:
+            asm_k = AsmCast_FloatToInt;
+            break;
+          case IRCast_DoubleToInt:
+            asm_k = AsmCast_DoubleToInt;
+            break;
+          default:
+            assert(0 && "Unhandled mapped cast variant");
+        }
+
+        struct AsmInstr i = {0};
         i.kind = AsmInstr_CVT;
-        i.as.cvt.is_unsigned = is_unsigned(ir_instr->as.cast.src->type.kind) ||
-                               ir_instr->as.cast.src->type.kind == BOOL_T;
+        i.as.cvt.kind = asm_k;
         i.as.cvt.src = src;
         i.as.cvt.dst = dst;
-        i.asm_type = src.asm_type;
-
+        i.asm_type = dst.asm_type;
         vec_insert(instrs, i);
       }
-
       break;
     }
     case IRInstr_ADD_PTR: {
-      // Step 1: Stage base pointer into %rax
       struct AsmInstr mov1 = {0};
       mov1.kind = AsmInstr_MOV;
       mov1.asm_type = (struct AsmType){.kind = AsmType_QUADWORD};
@@ -10173,7 +10317,6 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
           .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
       vec_insert(instrs, mov1);
 
-      // Step 2: Stage layout index into %rdx
       struct AsmInstr mov2 = {0};
       mov2.kind = AsmInstr_MOV;
       mov2.asm_type = (struct AsmType){.kind = AsmType_QUADWORD};
@@ -10184,8 +10327,6 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
           .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
       vec_insert(instrs, mov2);
 
-      // Step 3: Match scaling factor for optimized LEA vs. fallback
-      // multiplication
       int scale = ir_instr->as.add_ptr.scale;
       if (scale == 1 || scale == 2 || scale == 4 || scale == 8) {
         struct AsmInstr lea_instr = {0};
@@ -10198,8 +10339,6 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
         lea_instr.as.lea.dst = codegen_irvalue(ir_instr->as.add_ptr.dst);
         vec_insert(instrs, lea_instr);
       } else {
-        // Fallback: Perform hardware multiplication on index container (%rdx =
-        // %rdx * scale)
         struct AsmInstr imul_instr = {0};
         imul_instr.kind = AsmInstr_BIN;
         imul_instr.asm_type = (struct AsmType){.kind = AsmType_QUADWORD};
@@ -10214,8 +10353,6 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
             .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
         vec_insert(instrs, imul_instr);
 
-        // Compute address via base multiplier scaling of 1: leaq (%rax, %rdx,
-        // 1), dst
         struct AsmInstr lea_fallback = {0};
         lea_fallback.kind = AsmInstr_LEA;
         lea_fallback.asm_type = (struct AsmType){.kind = AsmType_QUADWORD};
@@ -10907,17 +11044,19 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
         }
         case AsmInstr_CVT: {
           if (asminstr->as.cvt.dst.kind == AsmOperand_STACK) {
-            bool is_float = (asminstr->asm_type.kind == AsmType_FLOAT ||
-                             asminstr->asm_type.kind == AsmType_DOUBLE);
+            bool is_float_dst =
+                (asminstr->as.cvt.dst.asm_type.kind == AsmType_FLOAT ||
+                 asminstr->as.cvt.dst.asm_type.kind == AsmType_DOUBLE);
 
             struct AsmOperand scratch_op = {
                 .kind = AsmOperand_REG,
-                .as.reg = is_float ? XMM8 : R10,
+                .as.reg = is_float_dst ? XMM8 : R10,
                 .asm_type = asminstr->as.cvt.dst.asm_type};
+
             struct AsmInstr i1 = {0}, i2 = {0};
 
             i1.kind = AsmInstr_CVT;
-            i1.as.cvt.is_unsigned = asminstr->as.cvt.is_unsigned;
+            i1.as.cvt.kind = asminstr->as.cvt.kind;
             i1.as.cvt.src = asminstr->as.cvt.src;
             i1.as.cvt.dst = scratch_op;
             i1.asm_type = asminstr->asm_type;
@@ -11863,27 +12002,134 @@ void emit(struct AsmProgram *prog, char *path)
           break;
         }
         case AsmInstr_CVT: {
-          if (instr->asm_type.kind == AsmType_FLOAT) {
-            fprintf(f, "cvtss2sd ");
-          } else if (instr->asm_type.kind == AsmType_DOUBLE) {
-            fprintf(f, "cvtsd2ss ");
-          } else if (instr->asm_type.kind == AsmType_BYTE) {
-            fprintf(f, instr->as.cvt.is_unsigned ? "movzbl " : "movsbl ");
-          } else if (instr->asm_type.kind == AsmType_WORD) {
-            fprintf(f, instr->as.cvt.is_unsigned ? "movzwl " : "movswl ");
-          } else if (instr->asm_type.kind == AsmType_LONGWORD) {
-            if (instr->as.cvt.is_unsigned) {
-              fprintf(f, "movl ");
-            } else {
-              fprintf(f, "movslq ");
-            }
-          } else {
-            assert(0 && "Unhandled cast type");
+          switch (instr->as.cvt.kind) {
+            case AsmCast_SignExtend:
+              if (instr->as.cvt.src.asm_type.kind == AsmType_BYTE) {
+                if (instr->as.cvt.dst.asm_type.kind == AsmType_WORD) {
+                  fprintf(f, "movsbw ");
+                } else if (instr->as.cvt.dst.asm_type.kind ==
+                           AsmType_LONGWORD) {
+                  fprintf(f, "movsbl ");
+                } else {
+                  fprintf(f, "movsbq ");
+                }
+              } else if (instr->as.cvt.src.asm_type.kind == AsmType_WORD) {
+                if (instr->as.cvt.dst.asm_type.kind == AsmType_LONGWORD) {
+                  fprintf(f, "movswl ");
+                } else {
+                  fprintf(f, "movswq ");
+                }
+              } else if (instr->as.cvt.src.asm_type.kind == AsmType_LONGWORD) {
+                fprintf(f, "movslq ");
+              }
+              emit_operand(f, &instr->as.cvt.src);
+              fprintf(f, ", ");
+              emit_operand(f, &instr->as.cvt.dst);
+              fprintf(f, "\n");
+              break;
+
+            case AsmCast_ZeroExtend:
+              if (instr->as.cvt.src.asm_type.kind == AsmType_BYTE) {
+                if (instr->as.cvt.dst.asm_type.kind == AsmType_WORD) {
+                  fprintf(f, "movzbw ");
+                } else if (instr->as.cvt.dst.asm_type.kind ==
+                           AsmType_LONGWORD) {
+                  fprintf(f, "movzbl ");
+                } else {
+                  fprintf(f, "movzbq ");
+                }
+                emit_operand(f, &instr->as.cvt.src);
+                fprintf(f, ", ");
+                emit_operand(f, &instr->as.cvt.dst);
+                fprintf(f, "\n");
+              } else if (instr->as.cvt.src.asm_type.kind == AsmType_WORD) {
+                if (instr->as.cvt.dst.asm_type.kind == AsmType_LONGWORD) {
+                  fprintf(f, "movzwl ");
+                } else {
+                  fprintf(f, "movzwq ");
+                }
+                emit_operand(f, &instr->as.cvt.src);
+                fprintf(f, ", ");
+                emit_operand(f, &instr->as.cvt.dst);
+                fprintf(f, "\n");
+              } else if (instr->as.cvt.src.asm_type.kind == AsmType_LONGWORD) {
+                /* Hardware automatically zero extends the upper 32 bits on
+                 * 32-bit register writes */
+                fprintf(f, "movl ");
+                emit_operand(f, &instr->as.cvt.src);
+                fprintf(f, ", ");
+                struct AsmOperand narrowed_dst = instr->as.cvt.dst;
+                narrowed_dst.asm_type =
+                    (struct AsmType){.kind = AsmType_LONGWORD};
+                emit_operand(f, &narrowed_dst);
+                fprintf(f, "\n");
+              }
+              break;
+
+            case AsmCast_FloatPromote:
+              fprintf(f, "cvtss2sd ");
+              emit_operand(f, &instr->as.cvt.src);
+              fprintf(f, ", ");
+              emit_operand(f, &instr->as.cvt.dst);
+              fprintf(f, "\n");
+              break;
+
+            case AsmCast_FloatDemote:
+              fprintf(f, "cvtsd2ss ");
+              emit_operand(f, &instr->as.cvt.src);
+              fprintf(f, ", ");
+              emit_operand(f, &instr->as.cvt.dst);
+              fprintf(f, "\n");
+              break;
+
+            case AsmCast_IntToFloat:
+              if (instr->as.cvt.src.asm_type.kind == AsmType_QUADWORD) {
+                fprintf(f, "cvtsi2ssq ");
+              } else {
+                fprintf(f, "cvtsi2ssl ");
+              }
+              emit_operand(f, &instr->as.cvt.src);
+              fprintf(f, ", ");
+              emit_operand(f, &instr->as.cvt.dst);
+              fprintf(f, "\n");
+              break;
+
+            case AsmCast_IntToDouble:
+              if (instr->as.cvt.src.asm_type.kind == AsmType_QUADWORD) {
+                fprintf(f, "cvtsi2sdq ");
+              } else {
+                fprintf(f, "cvtsi2sdl ");
+              }
+              emit_operand(f, &instr->as.cvt.src);
+              fprintf(f, ", ");
+              emit_operand(f, &instr->as.cvt.dst);
+              fprintf(f, "\n");
+              break;
+
+            case AsmCast_FloatToInt:
+            case AsmCast_DoubleToInt:
+              if (instr->as.cvt.kind == AsmCast_FloatToInt) {
+                if (instr->as.cvt.dst.asm_type.kind == AsmType_QUADWORD) {
+                  fprintf(f, "cvttss2siq ");
+                } else {
+                  fprintf(f, "cvttss2sil ");
+                }
+              } else {
+                if (instr->as.cvt.dst.asm_type.kind == AsmType_QUADWORD) {
+                  fprintf(f, "cvttsd2siq ");
+                } else {
+                  fprintf(f, "cvttsd2sil ");
+                }
+              }
+              emit_operand(f, &instr->as.cvt.src);
+              fprintf(f, ", ");
+              emit_operand(f, &instr->as.cvt.dst);
+              fprintf(f, "\n");
+              break;
+
+            default:
+              assert(0 && "Unhandled cast type");
           }
-          emit_operand(f, &instr->as.cvt.src);
-          fprintf(f, ", ");
-          emit_operand(f, &instr->as.cvt.dst);
-          fprintf(f, "\n");
           break;
         }
         case AsmInstr_REP_MOVSB: {
