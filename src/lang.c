@@ -2583,6 +2583,70 @@ struct ParseFnResult finish_call(struct Parser *parser, struct Expr callee)
   return (struct ParseFnResult){.as.expr = e, .is_ok = true, .msg = NULL};
 }
 
+bool parse_enum_body(struct Parser *parser, VecEnumVariant *out_variants)
+{
+  int current_val = 0;
+
+  while (!check(parser, TOKEN_RBRACE)) {
+    struct Token *var_id = consume(parser, TOKEN_IDENTIFIER);
+    if (!var_id) {
+      return false;
+    }
+    char *var_name = strndup(var_id->start, var_id->len);
+
+    if (check(parser, TOKEN_EQUAL)) {
+      advance_parser(parser);
+
+      struct ParseFnResult expr_res = parse_expr(parser);
+      if (!expr_res.is_ok) {
+        return false;
+      }
+
+      struct Expr *e = &expr_res.as.expr;
+      int sign = 1;
+
+      if (e->kind == EXPR_UNARY && strncmp(e->as.unary.op, "-", 1) == 0) {
+        sign = -1;
+        e = e->as.unary.expr;
+      }
+
+      if (e->kind == EXPR_LITERAL && e->as.literal.kind == LITERAL_NUM) {
+        unsigned long long raw_val = 0;
+        switch (e->as.literal.type.kind) {
+          case U8_T: raw_val = e->as.literal.as.u8; break;
+          case I8_T: raw_val = e->as.literal.as.i8; break;
+          case U16_T: raw_val = e->as.literal.as.u16; break;
+          case I16_T: raw_val = e->as.literal.as.i16; break;
+          case U32_T: raw_val = e->as.literal.as.u32; break;
+          case I32_T: raw_val = e->as.literal.as.i32; break;
+          case U64_T: raw_val = e->as.literal.as.u64; break;
+          case I64_T: raw_val = e->as.literal.as.i64; break;
+          default: break;
+        }
+        current_val = sign * (int) raw_val;
+      } else {
+        free_expr(&expr_res.as.expr);
+        return false;
+      }
+      free_expr(&expr_res.as.expr);
+    }
+
+    struct EnumVariant var;
+    var.name = var_name;
+    var.value = current_val;
+    vec_insert(out_variants, var);
+
+    enum_variant_insert(var_name, current_val);
+
+    current_val++;
+
+    if (check(parser, TOKEN_COMMA)) {
+      advance_parser(parser);
+    }
+  }
+  return true;
+}
+
 Type parse_type(struct Parser *parser)
 {
   if (match(parser, 1, TOKEN_STAR)) {
@@ -2600,7 +2664,6 @@ Type parse_type(struct Parser *parser)
     bool is_union = check(parser, TOKEN_UNION);
     advance_parser(parser);
 
-    /* Generate a unique name for the typechecker/IR */
     char *anon_name = mkuniq(is_union ? "anon_union" : "anon_struct");
 
     consume(parser, TOKEN_LBRACE);
@@ -2656,6 +2719,42 @@ Type parse_type(struct Parser *parser)
     custom_type.kind = STRUCT_T;
     custom_type.as.struct_name = anon_name;
     return custom_type;
+  }
+
+  if (check(parser, TOKEN_ENUM)) {
+    advance_parser(parser);
+
+    if (check(parser, TOKEN_LBRACE)) {
+      char *anon_name = mkuniq("anon_enum");
+      enum_type_insert(anon_name);
+
+      consume(parser, TOKEN_LBRACE);
+      VecEnumVariant variants = {0};
+      
+      if (!parse_enum_body(parser, &variants)) {
+        return (Type){.kind = UNKNOWN_T};
+      }
+      consume(parser, TOKEN_RBRACE);
+
+      struct StmtEnum enum_stmt;
+      enum_stmt.name = anon_name;
+      enum_stmt.variants = variants;
+
+      struct Stmt s;
+      s.kind = STMT_ENUM;
+      s.as.enum_stmt = enum_stmt;
+
+      if (parser->global_stmts) {
+        vec_insert(parser->global_stmts, s);
+      }
+
+      return (Type){.kind = I32_T};
+    }
+
+    struct Token *id_token = consume(parser, TOKEN_IDENTIFIER);
+    if (id_token) {
+      return (Type){.kind = I32_T};
+    }
   }
 
   struct Token *type_token =
@@ -3981,101 +4080,24 @@ struct ParseFnResult parse_enum_stmt(struct Parser *parser)
 
   consume(parser, TOKEN_ENUM);
 
-  struct Token *id = consume(parser, TOKEN_IDENTIFIER);
-  if (!id) {
-    return (struct ParseFnResult){.is_ok = false,
-                                  .msg = "Expected identifier after enum",
-                                  .as.stmt = {0}};
+  char *name;
+  if (check(parser, TOKEN_IDENTIFIER)) {
+    struct Token *id = consume(parser, TOKEN_IDENTIFIER);
+    name = strndup(id->start, id->len);
+  } else {
+    name = mkuniq("anon_enum");
   }
-  char *name = strndup(id->start, id->len);
   enum_type_insert(name);
 
   consume(parser, TOKEN_LBRACE);
 
   VecEnumVariant variants = {0};
-  int current_val = 0;
-
-  while (!check(parser, TOKEN_RBRACE)) {
-    struct Token *var_id = consume(parser, TOKEN_IDENTIFIER);
-    if (!var_id) {
-      return (struct ParseFnResult){.is_ok = false,
-                                    .msg = "Expected identifier in enum body",
-                                    .as.stmt = {0}};
-    }
-    char *var_name = strndup(var_id->start, var_id->len);
-
-    /* Check if the user specified an explicit value (e.g. A = 5) */
-    if (check(parser, TOKEN_EQUAL)) {
-      advance_parser(parser);
-
-      struct ParseFnResult expr_res = parse_expr(parser);
-      if (!expr_res.is_ok) {
-        return expr_res;
-      }
-
-      struct Expr *e = &expr_res.as.expr;
-      int sign = 1;
-
-      if (e->kind == EXPR_UNARY && strncmp(e->as.unary.op, "-", 1) == 0) {
-        sign = -1;
-        e = e->as.unary.expr;
-      }
-
-      if (e->kind == EXPR_LITERAL && e->as.literal.kind == LITERAL_NUM) {
-        unsigned long long raw_val = 0;
-        switch (e->as.literal.type.kind) {
-          case U8_T:
-            raw_val = e->as.literal.as.u8;
-            break;
-          case I8_T:
-            raw_val = e->as.literal.as.i8;
-            break;
-          case U16_T:
-            raw_val = e->as.literal.as.u16;
-            break;
-          case I16_T:
-            raw_val = e->as.literal.as.i16;
-            break;
-          case U32_T:
-            raw_val = e->as.literal.as.u32;
-            break;
-          case I32_T:
-            raw_val = e->as.literal.as.i32;
-            break;
-          case U64_T:
-            raw_val = e->as.literal.as.u64;
-            break;
-          case I64_T:
-            raw_val = e->as.literal.as.i64;
-            break;
-          default:
-            break;
-        }
-        current_val = sign * (int) raw_val;
-      } else {
-        free_expr(&expr_res.as.expr);
-        return (struct ParseFnResult){
-            .is_ok = false,
-            .msg = "Enum variant value must be a constant integer",
-            .as.stmt = {0}};
-      }
-      free_expr(&expr_res.as.expr);
-    }
-
-    struct EnumVariant var;
-    var.name = var_name;
-    var.value = current_val;
-    vec_insert(&variants, var);
-
-    /* Register it globally so `resolve` can find it later */
-    enum_variant_insert(var_name, current_val);
-
-    current_val++;
-
-    if (check(parser, TOKEN_COMMA)) {
-      advance_parser(parser);
-    }
+  if (!parse_enum_body(parser, &variants)) {
+    return (struct ParseFnResult){.is_ok = false,
+                                  .msg = "Failed to parse enum body",
+                                  .as.stmt = {0}};
   }
+  
   consume(parser, TOKEN_RBRACE);
 
   struct StmtEnum enum_stmt;
