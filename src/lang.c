@@ -2613,15 +2613,32 @@ bool parse_enum_body(struct Parser *parser, VecEnumVariant *out_variants)
       if (e->kind == EXPR_LITERAL && e->as.literal.kind == LITERAL_NUM) {
         unsigned long long raw_val = 0;
         switch (e->as.literal.type.kind) {
-          case U8_T: raw_val = e->as.literal.as.u8; break;
-          case I8_T: raw_val = e->as.literal.as.i8; break;
-          case U16_T: raw_val = e->as.literal.as.u16; break;
-          case I16_T: raw_val = e->as.literal.as.i16; break;
-          case U32_T: raw_val = e->as.literal.as.u32; break;
-          case I32_T: raw_val = e->as.literal.as.i32; break;
-          case U64_T: raw_val = e->as.literal.as.u64; break;
-          case I64_T: raw_val = e->as.literal.as.i64; break;
-          default: break;
+          case U8_T:
+            raw_val = e->as.literal.as.u8;
+            break;
+          case I8_T:
+            raw_val = e->as.literal.as.i8;
+            break;
+          case U16_T:
+            raw_val = e->as.literal.as.u16;
+            break;
+          case I16_T:
+            raw_val = e->as.literal.as.i16;
+            break;
+          case U32_T:
+            raw_val = e->as.literal.as.u32;
+            break;
+          case I32_T:
+            raw_val = e->as.literal.as.i32;
+            break;
+          case U64_T:
+            raw_val = e->as.literal.as.u64;
+            break;
+          case I64_T:
+            raw_val = e->as.literal.as.i64;
+            break;
+          default:
+            break;
         }
         current_val = sign * (int) raw_val;
       } else {
@@ -2730,7 +2747,7 @@ Type parse_type(struct Parser *parser)
 
       consume(parser, TOKEN_LBRACE);
       VecEnumVariant variants = {0};
-      
+
       if (!parse_enum_body(parser, &variants)) {
         return (Type){.kind = UNKNOWN_T};
       }
@@ -4093,11 +4110,10 @@ struct ParseFnResult parse_enum_stmt(struct Parser *parser)
 
   VecEnumVariant variants = {0};
   if (!parse_enum_body(parser, &variants)) {
-    return (struct ParseFnResult){.is_ok = false,
-                                  .msg = "Failed to parse enum body",
-                                  .as.stmt = {0}};
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Failed to parse enum body", .as.stmt = {0}};
   }
-  
+
   consume(parser, TOKEN_RBRACE);
 
   struct StmtEnum enum_stmt;
