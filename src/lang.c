@@ -8633,18 +8633,18 @@ struct AsmInstrJmp {
 
 enum ConditionCode {
   /* signed */
-  E,  /* equal */
-  NE, /* not equal */
-  L,  /* less, */
-  LE, /* less or equal */
-  G,  /* greater */
-  GE, /* greater or equal */
+  CC_E,  /* equal */
+  CC_NE, /* not equal */
+  CC_L,  /* less, */
+  CC_LE, /* less or equal */
+  CC_G,  /* greater */
+  CC_GE, /* greater or equal */
 
   /* unsigned */
-  A,  /* above */
-  AE, /* above or equal */
-  B,  /* below */
-  BE, /* below or equal */
+  CC_A,  /* above */
+  CC_AE, /* above or equal */
+  CC_B,  /* below */
+  CC_BE, /* below or equal */
 };
 
 struct AsmInstrJmpCC {
@@ -8736,34 +8736,34 @@ struct AsmProgram {
 void print_condition_code(enum ConditionCode cc)
 {
   switch (cc) {
-    case E:
+    case CC_E:
       printf("E");
       break;
-    case NE:
+    case CC_NE:
       printf("NE");
       break;
-    case L:
+    case CC_L:
       printf("L");
       break;
-    case LE:
+    case CC_LE:
       printf("LE");
       break;
-    case G:
+    case CC_G:
       printf("G");
       break;
-    case GE:
+    case CC_GE:
       printf("GE");
       break;
-    case A:
+    case CC_A:
       printf("A");
       break;
-    case AE:
+    case CC_AE:
       printf("AE");
       break;
-    case B:
+    case CC_B:
       printf("B");
       break;
-    case BE:
+    case CC_BE:
       printf("BE");
       break;
     default:
@@ -9221,22 +9221,22 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
         if (is_signed) {
           switch (ir_instr->as.binary.kind) {
             case IRInstrBinary_E:
-              cc = E;
+              cc = CC_E;
               break;
             case IRInstrBinary_NE:
-              cc = NE;
+              cc = CC_NE;
               break;
             case IRInstrBinary_L:
-              cc = L;
+              cc = CC_L;
               break;
             case IRInstrBinary_G:
-              cc = G;
+              cc = CC_G;
               break;
             case IRInstrBinary_LE:
-              cc = LE;
+              cc = CC_LE;
               break;
             case IRInstrBinary_GE:
-              cc = GE;
+              cc = CC_GE;
               break;
             default:
               assert(0 && "Unreachable or unhandled signed condition");
@@ -9244,22 +9244,22 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
         } else {
           switch (ir_instr->as.binary.kind) {
             case IRInstrBinary_E:
-              cc = E;
+              cc = CC_E;
               break;
             case IRInstrBinary_NE:
-              cc = NE;
+              cc = CC_NE;
               break;
             case IRInstrBinary_L:
-              cc = B;
+              cc = CC_B;
               break;
             case IRInstrBinary_G:
-              cc = A;
+              cc = CC_A;
               break;
             case IRInstrBinary_LE:
-              cc = BE;
+              cc = CC_BE;
               break;
             case IRInstrBinary_GE:
-              cc = AE;
+              cc = CC_AE;
               break;
             default:
               assert(0 && "Unreachable or unhandled unsigned condition");
@@ -9376,7 +9376,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
         i2.asm_type = dst.asm_type;
 
         i3.kind = AsmInstr_SetCC;
-        i3.as.setcc.cc = E;
+        i3.as.setcc.cc = CC_E;
         i3.as.setcc.op = dst;
 
         vec_insert(instrs, i1);
@@ -10038,7 +10038,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
       i1.as.cmp = cmp;
 
       i2.kind = AsmInstr_JmpCC;
-      i2.as.jmpcc.cc = E;
+      i2.as.jmpcc.cc = CC_E;
       i2.as.jmpcc.target = ir_instr->as.jz.target;
 
       vec_insert(instrs, i1);
@@ -11888,34 +11888,34 @@ void emit(struct AsmProgram *prog, char *path)
           char *suffix;
 
           switch (instr->as.jmpcc.cc) {
-            case E:
+            case CC_E:
               suffix = "e";
               break;
-            case NE:
+            case CC_NE:
               suffix = "ne";
               break;
-            case L:
+            case CC_L:
               suffix = "l";
               break;
-            case LE:
+            case CC_LE:
               suffix = "le";
               break;
-            case G:
+            case CC_G:
               suffix = "g";
               break;
-            case GE:
+            case CC_GE:
               suffix = "ge";
               break;
-            case A:
+            case CC_A:
               suffix = "a";
               break;
-            case AE:
+            case CC_AE:
               suffix = "ae";
               break;
-            case B:
+            case CC_B:
               suffix = "b";
               break;
-            case BE:
+            case CC_BE:
               suffix = "be";
               break;
           }
@@ -11927,34 +11927,34 @@ void emit(struct AsmProgram *prog, char *path)
           char *suffix;
 
           switch (instr->as.setcc.cc) {
-            case E:
+            case CC_E:
               suffix = "e";
               break;
-            case NE:
+            case CC_NE:
               suffix = "ne";
               break;
-            case L:
+            case CC_L:
               suffix = "l";
               break;
-            case LE:
+            case CC_LE:
               suffix = "le";
               break;
-            case G:
+            case CC_G:
               suffix = "g";
               break;
-            case GE:
+            case CC_GE:
               suffix = "ge";
               break;
-            case A:
+            case CC_A:
               suffix = "a";
               break;
-            case AE:
+            case CC_AE:
               suffix = "ae";
               break;
-            case B:
+            case CC_B:
               suffix = "b";
               break;
-            case BE:
+            case CC_BE:
               suffix = "be";
               break;
           }
