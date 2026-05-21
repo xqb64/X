@@ -9172,7 +9172,6 @@ struct ABIClassification classify_type(Type *type)
     int field_size, field_align;
     get_type_size_and_align(&field->type, &field_size, &field_align);
 
-    /* Determine which eightbytes this field overlaps */
     int start_eightbyte = offset / 8;
     int end_eightbyte = (offset + field_size - 1) / 8;
 
@@ -9180,7 +9179,6 @@ struct ABIClassification classify_type(Type *type)
       int field_eb = eb - start_eightbyte;
       enum ABIClass c = field_class.eightbytes[field_eb];
 
-      /* Merge rules: INTEGER beats SSE. */
       if (c == ABI_INTEGER) {
         result.eightbytes[eb] = ABI_INTEGER;
       } else if (c == ABI_SSE && result.eightbytes[eb] == ABI_NO_CLASS) {
@@ -10225,7 +10223,6 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
         i.asm_type = dst.asm_type;
         vec_insert(instrs, i);
       } else if (ir_instr->as.cast.kind == IRCast_Truncate) {
-        // Truncation relies on doing a standard move into the narrower size
         struct AsmOperand narrowed_src = src;
         narrowed_src.asm_type = dst.asm_type;
         struct AsmInstr i = {0};
@@ -10237,7 +10234,6 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
       } else {
         enum IRCastKind ir_k = ir_instr->as.cast.kind;
 
-        // Map Unsigned behavior down to standard Signed implementations
         if (ir_k == IRCast_FloatToUInt) {
           ir_k = IRCast_FloatToInt;
         }
@@ -10248,8 +10244,6 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
         if (ir_k == IRCast_UIntToFloat || ir_k == IRCast_UIntToDouble) {
           int src_sz = asm_type_stack_size(src.asm_type);
           if (src_sz < 8) {
-            // Safely Zero-Extend <64 bit Unsigned into 64-bit Reg before float
-            // conversion
             struct AsmOperand r10 = {
                 .kind = AsmOperand_REG,
                 .as.reg = R10,
@@ -10658,6 +10652,7 @@ struct AsmFunction codegen_fn(struct IRFunction *ir_func)
      * If size is 17 to 24 bytes: (size + 7) is 24 to 31. Integer division by 8
      * results in 3 eightbytes. */
     int num_eb = (size + 7) / 8;
+
     bool falls_to_memory = cls.is_memory;
     int needed_int = 0;
     int needed_xmm = 0;
