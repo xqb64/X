@@ -12941,17 +12941,15 @@ struct RunResult run(struct CompilerOptions *opts)
   if (!collect_labels_result.is_ok) {
     r.msg = collect_labels_result.msg;
     r.is_ok = false;
-    goto free_up2_parse;
+    goto free_up2_collect_labels;
   }
 
   label_check_result = check_labels(labeled_ast, &collect_labels_result.labels);
   if (!label_check_result.is_ok) {
     r.msg = label_check_result.msg;
     r.is_ok = false;
-    goto free_up2_parse;
+    goto free_up2_collect_labels;
   }
-
-  free_labels(&collect_labels_result.labels);
 
   irfy_result = irfy_ast(labeled_ast);
   if (!irfy_result.is_ok) {
@@ -13023,6 +13021,9 @@ free_up2_asm:
 
 free_up2_irfy:
   free_ir_prog(&irfy_result.prog);
+
+free_up2_collect_labels:
+  free_labels(&collect_labels_result.labels);
 
 free_up2_parse:
   free_ast(parse_result.ast);
