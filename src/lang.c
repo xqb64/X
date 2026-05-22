@@ -187,6 +187,7 @@ enum TokenKind {
   TOKEN_RET,
   TOKEN_EXTERN,
   TOKEN_VOID,
+  TOKEN_SIZEOF,
   TOKEN_STRUCT,
   TOKEN_UNION,
   TOKEN_ENUM,
@@ -539,7 +540,9 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
         break;
       }
       case 's': {
-        if (lookahead(tokenizer, 5, "truct") == 0) {
+        if (lookahead(tokenizer, 5, "izeof") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_SIZEOF, 6));
+        } else if (lookahead(tokenizer, 5, "truct") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_STRUCT, 6));
         } else if (lookahead(tokenizer, 2, "tr") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_STR, 3));
@@ -803,6 +806,9 @@ void print_token(struct Token *token)
       break;
     case TOKEN_VOID:
       printf("void");
+      break;
+    case TOKEN_SIZEOF:
+      printf("sizeof");
       break;
     case TOKEN_STRUCT:
       printf("struct");
@@ -1267,6 +1273,7 @@ enum ExprKind {
   EXPR_ASSIGN,
   EXPR_COMPOUND_ASSIGN,
   EXPR_CALL,
+  EXPR_SIZEOF,
   EXPR_ADDROF,
   EXPR_DEREF,
   EXPR_CAST,
@@ -1395,6 +1402,10 @@ struct ExprAddrOf {
   struct Expr *expr;
 };
 
+struct ExprSizeof {
+  struct Expr *expr;
+};
+
 struct ExprCast {
   struct Expr *expr;
   Type target_type;
@@ -1434,6 +1445,7 @@ struct Expr {
     struct ExprCompoundAssign compound_assign;
     struct ExprUnary unary;
     struct ExprAddrOf addrof;
+    struct ExprSizeof sizeof_expr;
     struct ExprDeref deref;
     struct ExprCast cast;
     struct ExprStructInit struct_init;
@@ -1671,6 +1683,15 @@ void print_expr(struct Expr *expr, int spaces)
       printf(")");
       break;
     }
+    case EXPR_SIZEOF: {
+      printf("SizeOf(\n");
+      print_indent(spaces + 2);
+      print_expr(expr->as.sizeof_expr.expr, spaces + 2);
+      printf("\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
     case EXPR_ADDROF: {
       printf("AddrOf(\n");
       print_indent(spaces + 2);
@@ -1793,6 +1814,11 @@ void free_expr(struct Expr *expr)
     case EXPR_ADDROF: {
       free_expr(expr->as.addrof.expr);
       free(expr->as.addrof.expr);
+      break;
+    }
+    case EXPR_SIZEOF: {
+      free_expr(expr->as.sizeof_expr.expr);
+      free(expr->as.sizeof_expr.expr);
       break;
     }
     case EXPR_DEREF: {
@@ -3077,6 +3103,37 @@ struct ParseFnResult unary(struct Parser *parser)
     } else {
       assert(0);
     }
+  } else if (match(parser, 1, TOKEN_SIZEOF)) {
+    struct ParseFnResult right_result;
+    struct Token *token_lparen, *token_rparen;
+
+    token_lparen = consume(parser, TOKEN_LPAREN);
+    if (!token_lparen) {
+      return (struct ParseFnResult){
+          .is_ok = false, .msg = "Expected '(' after sizeoef", .as.stmt = {0}};
+    }
+
+    right_result = unary(parser);
+    if (!right_result.is_ok) {
+      return right_result;
+    }
+
+    token_rparen = consume(parser, TOKEN_RPAREN);
+    if (!token_rparen) {
+      return (struct ParseFnResult){.is_ok = false,
+                                    .msg = "Expected ')' after sizeof expr",
+                                    .as.stmt = {0}};
+    }
+
+    struct Expr right, e;
+
+    right = right_result.as.expr;
+
+    struct ExprSizeof sizeof_expr = {.expr = ALLOC(right)};
+
+    e.kind = EXPR_SIZEOF;
+    e.as.sizeof_expr = sizeof_expr;
+    return (struct ParseFnResult){.as.expr = e, .is_ok = true, .msg = NULL};
   }
 
   return postfix(parser);
@@ -5800,9 +5857,9 @@ void free_global_constants(void)
   vec_free(&global_constants);
 }
 
-static inline int get_type_size(enum TypeKind kind)
+static inline int get_type_size(Type t)
 {
-  switch (kind) {
+  switch (t.kind) {
     case I8_T:
     case U8_T:
     case BOOL_T:
@@ -5820,6 +5877,10 @@ static inline int get_type_size(enum TypeKind kind)
     case STR_T:
     case PTR_T:
       return 8;
+    case STRUCT_T: {
+      struct StructDef *def = struct_get(struct_table, t.as.struct_name);
+      return def->size;
+    }
     default:
       return -1;
   }
@@ -5897,8 +5958,8 @@ enum IRCastKind get_cast_kind(Type src, Type dst)
     }
   }
 
-  int src_sz = get_type_size(src.kind);
-  int dst_sz = get_type_size(dst.kind);
+  int src_sz = get_type_size(src);
+  int dst_sz = get_type_size(dst);
 
   if (src_sz == dst_sz) {
     return IRCast_Bitcast;
@@ -6320,6 +6381,24 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
 
       break;
     }
+    case EXPR_SIZEOF: {
+      struct ExpResult result;
+      struct IRValue sz;
+
+      printf("expr type is: \n");
+      print_type(&expr->type, 0);
+
+      sz.kind = IRValue_CONST;
+      sz.as.konst = (struct Literal){
+          .kind = LITERAL_NUM,
+          .as.u64 = (unsigned long long) get_type_size(expr->type)};
+      sz.type = (Type){.kind = U64_T};
+
+      result.kind = EXPRESULT_PLAIN;
+      result.as.plain = ALLOC(sz);
+
+      return result;
+    }
     case EXPR_ADDROF: {
       struct ExpResult result;
 
@@ -6563,6 +6642,7 @@ void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
 {
   switch (stmt->kind) {
     case STMT_FN:
+    case STMT_STRUCT:
       assert(0);
     case STMT_LOOP: {
       int tmp;
@@ -7042,6 +7122,16 @@ struct ResolveResult resolve_expr(struct VariableMap **varmap,
 
       break;
     }
+    case EXPR_SIZEOF: {
+      struct ResolveResult r;
+
+      r = resolve_expr(varmap, expr->as.sizeof_expr.expr);
+      if (!r.is_ok) {
+        return r;
+      }
+
+      break;
+    }
     default:
       assert(0);
   }
@@ -7472,8 +7562,8 @@ Type get_common_type(struct Expr *lhs, struct Expr *rhs)
     return t1;
   }
 
-  int size1 = get_type_size(t1.kind);
-  int size2 = get_type_size(t2.kind);
+  int size1 = get_type_size(t1);
+  int size2 = get_type_size(t2);
 
   if (size1 == -1 || size2 == -1) {
     return (Type){.kind = UNKNOWN_T};
@@ -7749,6 +7839,19 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
   struct TypecheckResult res = {.is_ok = true, .msg = NULL, .ast = NULL};
 
   switch (expr->kind) {
+    case EXPR_SIZEOF: {
+      struct TypecheckResult r;
+
+      r = typecheck_expr(expr->as.sizeof_expr.expr, sym_table);
+      if (!r.is_ok) {
+        return r;
+      }
+
+      expr->type = expr->as.sizeof_expr.expr->type;
+
+      /* FIXME: is complete? */
+      break;
+    }
     case EXPR_MEMBER: {
       struct TypecheckResult r;
 
