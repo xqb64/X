@@ -30,7 +30,10 @@ The X code is first tokenized, then parsed with a recursive-descent parser.  Aft
 - sizeof
 - named loops
 - for loops
+- do while loops
+- loop {} blocks
 - comments
+- switch and/or match
 - graph coloring-based register allocator
 - IR optimizations
   - constant folding
