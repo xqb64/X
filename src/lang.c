@@ -180,6 +180,7 @@ enum TokenKind {
   TOKEN_IF,
   TOKEN_ELSE,
   TOKEN_WHILE,
+  TOKEN_LOOP,
   TOKEN_BREAK,
   TOKEN_CONTINUE,
   TOKEN_GOTO,
@@ -512,6 +513,8 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
       case 'l': {
         if (lookahead(tokenizer, 2, "et") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_LET, 3));
+        } else if (lookahead(tokenizer, 3, "oop") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_LOOP, 4));
         } else {
           vec_insert(&tokens, identifier(tokenizer));
         }
@@ -779,6 +782,9 @@ void print_token(struct Token *token)
       break;
     case TOKEN_WHILE:
       printf("while");
+      break;
+    case TOKEN_LOOP:
+      printf("loop");
       break;
     case TOKEN_BREAK:
       printf("break");
@@ -1833,6 +1839,7 @@ enum StmtKind {
   STMT_RET,
   STMT_IF,
   STMT_WHILE,
+  STMT_LOOP,
   STMT_BREAK,
   STMT_CONTINUE,
   STMT_GOTO,
@@ -1871,6 +1878,11 @@ struct StmtIf {
 
 struct StmtWhile {
   struct Expr cond;
+  struct Stmt *body;
+  char *label;
+};
+
+struct StmtLoop {
   struct Stmt *body;
   char *label;
 };
@@ -1933,6 +1945,7 @@ struct Stmt {
     struct StmtRet ret;
     struct StmtIf if_stmt;
     struct StmtWhile while_stmt;
+    struct StmtLoop loop;
     struct StmtBreak break_stmt;
     struct StmtContinue continue_stmt;
     struct StmtGoto goto_stmt;
@@ -2060,6 +2073,18 @@ void print_stmt(struct Stmt *stmt, int spaces)
       print_indent(spaces + 2);
       printf("body = \n");
       print_stmt(stmt->as.while_stmt.body, spaces + 2);
+
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
+    case STMT_LOOP: {
+      print_indent(spaces);
+      printf("STMT_LOOP(\n");
+
+      print_indent(spaces + 2);
+      printf("body = \n");
+      print_stmt(stmt->as.loop.body, spaces + 2);
 
       print_indent(spaces);
       printf(")\n");
@@ -2222,6 +2247,11 @@ void print_stmt(struct Stmt *stmt, int spaces)
 void free_stmt(struct Stmt *stmt)
 {
   switch (stmt->kind) {
+    case STMT_LOOP: {
+      free(stmt->as.loop.label);
+      free_stmt(stmt->as.loop.body);
+      break;
+    }
     case STMT_ENUM: {
       free(stmt->as.enum_stmt.name);
       for (int i = 0; i < stmt->as.enum_stmt.variants.len; i++) {
@@ -2392,6 +2422,12 @@ bool check(struct Parser *parser, enum TokenKind kind)
 bool check2(struct Parser *parser, enum TokenKind kind1, enum TokenKind kind2)
 {
   return parser->prev->kind == kind1 && parser->curr->kind == kind2;
+}
+
+bool check_next(struct Parser *parser, enum TokenKind kind)
+{
+  return parser->idx < parser->tokens->len &&
+         parser->tokens->data[parser->idx].kind == kind;
 }
 
 bool match(struct Parser *parser, int size, ...)
@@ -2600,12 +2636,20 @@ struct ParseFnResult primary(struct Parser *parser)
       res.as.expr =
           (struct Expr){.kind = EXPR_STRUCT_INIT, .as.struct_init = init};
     } else {
-      /* Standard variable access */
+      printf("token_id is: \n");
+      print_token(token_id);
+
       struct ExprVar var;
       var.name = strndup(token_id->start, token_id->len);
+      printf("var.name is: %s\n", var.name);
+
       var.type = (Type){.kind = UNKNOWN_T};
 
-      res.as.expr = (struct Expr){.kind = EXPR_VARIABLE, .as.var = var};
+      res.is_ok = true;
+      res.as.expr.kind = EXPR_VARIABLE;
+      res.as.expr.as.var = var;
+      printf("res.as.expr is: \n");
+      print_expr(&res.as.expr, 0);
     }
   }
 
@@ -3376,7 +3420,6 @@ struct ParseFnResult assignment(struct Parser *parser)
   }
 
   expr = expr_result.as.expr;
-
   if (match(parser, 10, TOKEN_EQUAL, TOKEN_PLUS_EQUAL, TOKEN_MINUS_EQUAL,
             TOKEN_STAR_EQUAL, TOKEN_SLASH_EQUAL, TOKEN_AMPERSAND_EQUAL,
             TOKEN_PIPE_EQUAL, TOKEN_CARET_EQUAL, TOKEN_LESS_LESS_EQUAL,
@@ -3417,10 +3460,17 @@ struct ParseFnResult assignment(struct Parser *parser)
         bin_kind = EXPR_BIN_SHIFT_RIGHT;
       }
 
-      struct ExprCompoundAssign comp = {
-          .kind = bin_kind, .lhs = ALLOC(expr), .rhs = ALLOC(right)};
+      struct ExprCompoundAssign comp;
+
+      comp.kind = bin_kind;
+      comp.lhs = ALLOC(expr);
+      comp.rhs = ALLOC(right);
+
       expr = (struct Expr){.kind = EXPR_COMPOUND_ASSIGN,
                            .as.compound_assign = comp};
+
+      printf("from compound assign: \n");
+      print_expr(&expr, 0);
     }
   }
 
@@ -3866,6 +3916,38 @@ struct ParseFnResult parse_while_stmt(struct Parser *parser)
   return result;
 }
 
+struct ParseFnResult parse_loop_stmt(struct Parser *parser)
+{
+  struct ParseFnResult result, body_res;
+  struct Token *token_loop;
+
+  result.is_ok = true;
+  result.msg = NULL;
+
+  token_loop = consume(parser, TOKEN_LOOP);
+  if (!token_loop) {
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Expected 'loop'", .as.stmt = {0}};
+  }
+
+  body_res = block(parser);
+  if (!body_res.is_ok) {
+    return body_res;
+  }
+
+  struct StmtLoop loop_stmt;
+  loop_stmt.body = ALLOC(body_res.as.stmt);
+  loop_stmt.label = "";
+
+  struct Stmt s;
+  s.kind = STMT_LOOP;
+  s.as.loop = loop_stmt;
+
+  result.as.stmt = s;
+
+  return result;
+}
+
 struct ParseFnResult parse_break_stmt(struct Parser *parser)
 {
   struct ParseFnResult result;
@@ -4245,16 +4327,24 @@ struct ParseFnResult parse_stmt(struct Parser *parser)
   result.is_ok = true;
   result.msg = NULL;
 
-  if (match(parser, 1, TOKEN_IDENTIFIER)) {
-    char *label = strndup(parser->prev->start, parser->prev->len);
+  if (check(parser, TOKEN_IDENTIFIER) && check_next(parser, TOKEN_COLON)) {
+    struct Token *token_label, *token_colon;
 
-    struct Token *token_colon;
+    token_label = consume(parser, TOKEN_IDENTIFIER);
+    if (!token_label) {
+      return (struct ParseFnResult){
+          .is_ok = false, .msg = "Expected label", .as.stmt = {0}};
+    }
 
     token_colon = consume(parser, TOKEN_COLON);
     if (!token_colon) {
       return (struct ParseFnResult){
           .is_ok = false, .msg = "Expected ':' after label", .as.stmt = {0}};
     }
+
+    char *label;
+
+    label = strndup(token_label->start, token_label->len);
 
     struct ParseFnResult labeled_res;
 
@@ -4314,6 +4404,14 @@ struct ParseFnResult parse_stmt(struct Parser *parser)
         return while_res;
       }
       result.as.stmt = while_res.as.stmt;
+      break;
+    }
+    case TOKEN_LOOP: {
+      struct ParseFnResult loop_res = parse_loop_stmt(parser);
+      if (!loop_res.is_ok) {
+        return loop_res;
+      }
+      result.as.stmt = loop_res.as.stmt;
       break;
     }
     case TOKEN_BREAK: {
@@ -4420,6 +4518,19 @@ struct LoopLabelResult {
 struct LoopLabelResult loop_label_stmt(struct Stmt *stmt, char *label)
 {
   switch (stmt->kind) {
+    case STMT_LOOP: {
+      char *new_label;
+      int tmp;
+
+      tmp = mktmp();
+
+      new_label = mklbl("Loop", tmp);
+
+      stmt->as.loop.label = new_label;
+
+      loop_label_stmt(stmt->as.loop.body, new_label);
+      break;
+    }
     case STMT_WHILE: {
       char *new_label;
       int tmp;
@@ -4619,7 +4730,7 @@ struct CollectLabelsResult collect_labels(struct AST *ast)
     r = collect_labels_stmt(&ast->stmts.data[i], &labels, NULL);
     if (!r.is_ok) {
       for (int i = 0; i < labels.len; i++) {
-	free(labels.data[i]);
+        free(labels.data[i]);
       }
       vec_free(&labels);
       return r;
@@ -4678,6 +4789,16 @@ struct LabelCheckResult check_labels_stmt(struct Stmt *stmt, VecCharPtr *labels,
 
       free(label);
       return (struct LabelCheckResult){.is_ok = true, .msg = NULL};
+    }
+    case STMT_LOOP: {
+      struct LabelCheckResult body_res;
+
+      body_res = check_labels_stmt(stmt->as.loop.body, labels, funcname);
+      if (!body_res.is_ok) {
+        return body_res;
+      }
+
+      break;
     }
     case STMT_IF: {
       struct LabelCheckResult then_res, else_res;
@@ -6443,6 +6564,31 @@ void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
   switch (stmt->kind) {
     case STMT_FN:
       assert(0);
+    case STMT_LOOP: {
+      int tmp;
+      struct IRInstr begin, jmp, end;
+
+      tmp = extract_label_number(stmt->as.loop.label);
+
+      begin.kind = IRInstr_LBL;
+      begin.as.label.name = mklbl("Loop", tmp);
+
+      vec_insert(instrs, begin);
+
+      irfy_stmt(instrs, stmt->as.loop.body);
+
+      jmp.kind = IRInstr_JMP;
+      jmp.as.jmp.target = mklbl("Loop", tmp);
+
+      vec_insert(instrs, jmp);
+
+      end.kind = IRInstr_LBL;
+      end.as.label.name = mklbl("End", tmp);
+
+      vec_insert(instrs, end);
+
+      break;
+    }
     case STMT_LET: {
       struct IRValue *res, *dst;
       struct IRInstr cpy = {0};
@@ -6919,6 +7065,16 @@ struct ResolveResult resolve_stmt(struct VariableMap **varmap,
                                   struct Stmt *stmt)
 {
   switch (stmt->kind) {
+    case STMT_LOOP: {
+      struct ResolveResult r;
+
+      r = resolve_stmt(varmap, stmt->as.loop.body);
+      if (!r.is_ok) {
+        return r;
+      }
+
+      break;
+    }
     case STMT_LABELED: {
       struct ResolveResult r;
 
@@ -8174,6 +8330,16 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
   struct TypecheckResult res = {.is_ok = true, .msg = NULL, .ast = NULL};
 
   switch (stmt->kind) {
+    case STMT_LOOP: {
+      struct TypecheckResult r;
+
+      r = typecheck_stmt(stmt->as.loop.body, sym_table);
+      if (!r.is_ok) {
+        return r;
+      }
+
+      break;
+    }
     case STMT_STRUCT: {
       struct StructDef def;
       def.name = stmt->as.struct_stmt.name;
