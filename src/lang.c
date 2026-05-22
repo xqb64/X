@@ -1097,7 +1097,7 @@ struct EnumTypeItem {
 };
 struct EnumTypeItem *enum_types = NULL;
 
-void free_enum_types(struct EnumTypeItem *enum_types)
+void free_enum_types(void)
 {
   struct EnumTypeItem *curr_t = enum_types;
   while (curr_t) {
@@ -1140,7 +1140,7 @@ struct EnumVariantItem {
 };
 struct EnumVariantItem *enum_variants = NULL;
 
-void free_enum_variants(struct EnumVariantItem *enum_variants)
+void free_enum_variants(void)
 {
   struct EnumVariantItem *curr_v = enum_variants;
   while (curr_v) {
@@ -13034,8 +13034,8 @@ free_up2_fread:
   free(read_file_result.contents);
 
   free_global_constants();
-  free_enum_types(enum_types);
-  free_enum_variants(enum_variants);
+  free_enum_types();
+  free_enum_variants();
 
   return r;
 }
