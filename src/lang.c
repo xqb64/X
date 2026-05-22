@@ -12396,7 +12396,12 @@ void emit(struct AsmProgram *prog, char *path)
     fprintf(f, "%s:\n", prog->funcs.data[i].name);
     for (int j = 0; j < prog->funcs.data[i].body.len; j++) {
       struct AsmInstr *instr = &prog->funcs.data[i].body.data[j];
-      fprintf(f, "\t");
+      switch (instr->kind) {
+	case AsmInstr_LBL:
+	  break;
+	default:
+	  fprintf(f, "\t");
+      }
       switch (instr->kind) {
         case AsmInstr_PUSH: {
           fprintf(f, "pushq ");
