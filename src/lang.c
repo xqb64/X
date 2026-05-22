@@ -1,5 +1,4 @@
 #include <assert.h>
-#include <bits/posix2_lim.h>
 #include <getopt.h>
 #include <limits.h>
 #include <stdarg.h>
@@ -1098,6 +1097,18 @@ struct EnumTypeItem {
 };
 struct EnumTypeItem *enum_types = NULL;
 
+void free_enum_types(struct EnumTypeItem *enum_types)
+{
+  struct EnumTypeItem *curr_t = enum_types;
+  while (curr_t) {
+    struct EnumTypeItem *tmp = curr_t;
+    curr_t = curr_t->next;
+    free(tmp->name);
+    free(tmp);
+  }
+  enum_types = NULL;
+}
+
 void enum_type_insert(char *name)
 {
   struct EnumTypeItem *item;
@@ -1128,6 +1139,18 @@ struct EnumVariantItem {
   struct EnumVariantItem *next;
 };
 struct EnumVariantItem *enum_variants = NULL;
+
+void free_enum_variants(struct EnumVariantItem *enum_variants)
+{
+  struct EnumVariantItem *curr_v = enum_variants;
+  while (curr_v) {
+    struct EnumVariantItem *tmp = curr_v;
+    curr_v = curr_v->next;
+    free(tmp->name);
+    free(tmp);
+  }
+  enum_variants = NULL;
+}
 
 void enum_variant_insert(char *name, int value)
 {
@@ -2236,6 +2259,7 @@ void free_stmt(struct Stmt *stmt)
     case STMT_LABELED: {
       free(stmt->as.labeled.label);
       free_stmt(stmt->as.labeled.stmt);
+      free(stmt->as.labeled.stmt);
       break;
     }
     case STMT_LET: {
@@ -4511,6 +4535,11 @@ struct CollectLabelsResult collect_labels_stmt(struct Stmt *stmt,
 
       for (int i = 0; i < labels->len; i++) {
         if (strcmp(labels->data[i], label) == 0) {
+          for (int i = 0; i < labels->len; i++) {
+            free(labels->data[i]);
+          }
+          vec_free(labels);
+          free(label);
           return (struct CollectLabelsResult){
               .is_ok = false, .msg = "Duplicate label", .labels = {0}};
         }
@@ -12987,23 +13016,8 @@ free_up2_fread:
   }
   vec_free(&global_constants);
 
-  struct EnumTypeItem *curr_t = enum_types;
-  while (curr_t) {
-    struct EnumTypeItem *tmp = curr_t;
-    curr_t = curr_t->next;
-    free(tmp->name);
-    free(tmp);
-  }
-  enum_types = NULL;
-
-  struct EnumVariantItem *curr_v = enum_variants;
-  while (curr_v) {
-    struct EnumVariantItem *tmp = curr_v;
-    curr_v = curr_v->next;
-    free(tmp->name);
-    free(tmp);
-  }
-  enum_variants = NULL;
+  free_enum_types(enum_types);
+  free_enum_variants(enum_variants);
 
   return r;
 }
