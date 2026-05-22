@@ -5670,6 +5670,15 @@ struct StaticConstant {
 typedef Vector(struct StaticConstant) VecStaticConstant;
 VecStaticConstant global_constants = {0};
 
+void free_global_constants(void)
+{
+  for (int i = 0; i < global_constants.len; i++) {
+    free(global_constants.data[i].name);
+    free(global_constants.data[i].value);
+  }
+  vec_free(&global_constants);
+}
+
 static inline int get_type_size(enum TypeKind kind)
 {
   switch (kind) {
@@ -13024,12 +13033,7 @@ free_up2_tokenize:
 free_up2_fread:
   free(read_file_result.contents);
 
-  for (int i = 0; i < global_constants.len; i++) {
-    free(global_constants.data[i].name);
-    free(global_constants.data[i].value);
-  }
-  vec_free(&global_constants);
-
+  free_global_constants();
   free_enum_types(enum_types);
   free_enum_variants(enum_variants);
 
