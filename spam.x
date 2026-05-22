@@ -8,9 +8,6 @@ fn main(void) -> u32 {
 
   ret x;
 
-spam:  
-  ret y; 
-
 spam:
   ret y+1;
 }

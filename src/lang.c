@@ -4618,6 +4618,10 @@ struct CollectLabelsResult collect_labels(struct AST *ast)
 
     r = collect_labels_stmt(&ast->stmts.data[i], &labels, NULL);
     if (!r.is_ok) {
+      for (int i = 0; i < labels.len; i++) {
+	free(labels.data[i]);
+      }
+      vec_free(&labels);
       return r;
     }
   }
@@ -12798,6 +12802,14 @@ char *strip_ext(char *path)
   return new;
 }
 
+void free_labels(VecCharPtr *labels)
+{
+  for (int i = 0; i < labels->len; i++) {
+    free(labels->data[i]);
+  }
+  vec_free(labels);
+}
+
 struct RunResult {
   bool is_ok;
   char *msg;
@@ -12929,6 +12941,8 @@ struct RunResult run(struct CompilerOptions *opts)
     r.is_ok = false;
     goto free_up2_parse;
   }
+
+  free_labels(&collect_labels_result.labels);
 
   irfy_result = irfy_ast(labeled_ast);
   if (!irfy_result.is_ok) {
