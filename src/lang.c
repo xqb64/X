@@ -2662,21 +2662,30 @@ struct ParseFnResult primary(struct Parser *parser)
       res.as.expr =
           (struct Expr){.kind = EXPR_STRUCT_INIT, .as.struct_init = init};
     } else {
-      printf("token_id is: \n");
-      print_token(token_id);
-
       struct ExprVar var;
       var.name = strndup(token_id->start, token_id->len);
-      printf("var.name is: %s\n", var.name);
-
       var.type = (Type){.kind = UNKNOWN_T};
 
       res.is_ok = true;
       res.as.expr.kind = EXPR_VARIABLE;
       res.as.expr.as.var = var;
-      printf("res.as.expr is: \n");
-      print_expr(&res.as.expr, 0);
     }
+  } else if (match(parser, 1, TOKEN_LPAREN)) {
+    struct ParseFnResult expr_res;
+    struct Token *token_rparen;
+
+    expr_res = parse_expr(parser);
+    if (!expr_res.is_ok) {
+      return expr_res;
+    }
+
+    token_rparen = consume(parser, TOKEN_RPAREN);
+    if (!token_rparen) {
+      return (struct ParseFnResult){
+          .is_ok = false, .msg = "Expected ')'", .as.stmt = {0}};
+    }
+
+    res = expr_res;
   }
 
   return res;
@@ -8794,6 +8803,24 @@ struct AsmType {
   } as;
 };
 
+static bool asm_type_can_live_in_int_reg(struct AsmType type)
+{
+  switch (type.kind) {
+    case AsmType_BYTE:
+    case AsmType_WORD:
+    case AsmType_LONGWORD:
+    case AsmType_QUADWORD:
+      return true;
+
+    case AsmType_FLOAT:
+    case AsmType_DOUBLE:
+    case AsmType_BYTE_ARRAY:
+      return false;
+  }
+
+  assert(0 && "unhandled asm type");
+}
+
 void print_asm_type(struct AsmType type)
 {
   switch (type.kind) {
@@ -11617,6 +11644,18 @@ struct Map {
   struct AsmType asm_type;
 };
 
+static bool map_get_offset(struct Map *map, char *name, int *out_offset)
+{
+  for (struct Map *curr = map; curr; curr = curr->next) {
+    if (curr->name && strcmp(curr->name, name) == 0) {
+      *out_offset = curr->offset;
+      return true;
+    }
+  }
+
+  return false;
+}
+
 int get_offset(struct Map *map, char *name, struct AsmType asm_type,
                int *used_stack_bytes)
 {
@@ -11685,21 +11724,185 @@ struct AllocatedReg {
   enum AsmRegister reg;
 };
 
-struct AllocatedReg *allocated_regs = NULL;
+static enum AsmRegister allocatable_int_regs[] = {
+    AX, DX, CX, SI, DI, R8, R9,
+};
 
-enum AsmRegister *alloc_reg(void)
+#define NUM_ALLOCATABLE_INT_REGS \
+  ((int) (sizeof(allocatable_int_regs) / sizeof(allocatable_int_regs[0])))
+
+struct RegAllocState {
+  struct AllocatedReg *allocated_regs;
+  bool reg_used[NUM_ALLOCATABLE_INT_REGS];
+};
+
+void init_regalloc_state(struct RegAllocState *state)
 {
-  static enum AsmRegister int_regs[] = {AX, DX, CX, SI, DI, R8, R9};
-
-  static int i = 0;
-
-  if (i < sizeof(int_regs) / sizeof(int_regs[0])) {
-    return &int_regs[i++];
-  }
-  return NULL;
+  memset(state, 0, sizeof(*state));
 }
 
-void allocated_reg_append(char *pseudo, enum AsmRegister reg)
+void free_regalloc_state(struct RegAllocState *state)
+{
+  struct AllocatedReg *curr = state->allocated_regs;
+
+  while (curr) {
+    struct AllocatedReg *next = curr->next;
+    free(curr->pseudo);
+    free(curr);
+    curr = next;
+  }
+
+  state->allocated_regs = NULL;
+}
+
+static int allocatable_reg_index(enum AsmRegister reg)
+{
+  for (int i = 0; i < NUM_ALLOCATABLE_INT_REGS; i++) {
+    if (allocatable_int_regs[i] == reg) {
+      return i;
+    }
+  }
+
+  return -1;
+}
+
+static void free_reg(struct RegAllocState *state, enum AsmRegister reg)
+{
+  int idx = allocatable_reg_index(reg);
+
+  assert(idx >= 0 && "tried to free a non-allocatable register");
+
+  state->reg_used[idx] = false;
+}
+
+typedef Vector(char *) VecPseudo;
+
+struct InstrLiveness {
+  VecPseudo use;
+  VecPseudo def;
+  VecPseudo live_before;
+  VecPseudo live_after;
+};
+
+static bool pseudo_set_contains(VecPseudo *set, char *name)
+{
+  for (int i = 0; i < set->len; i++) {
+    if (strcmp(set->data[i], name) == 0) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static void pseudo_set_add(VecPseudo *set, char *name)
+{
+  if (!name) {
+    return;
+  }
+
+  if (pseudo_set_contains(set, name)) {
+    return;
+  }
+
+  vec_insert(set, name);
+}
+
+static void pseudo_set_copy(VecPseudo *dst, VecPseudo *src)
+{
+  dst->len = 0;
+
+  for (int i = 0; i < src->len; i++) {
+    pseudo_set_add(dst, src->data[i]);
+  }
+}
+
+static void pseudo_set_union_into(VecPseudo *dst, VecPseudo *src)
+{
+  for (int i = 0; i < src->len; i++) {
+    pseudo_set_add(dst, src->data[i]);
+  }
+}
+
+static void pseudo_set_remove(VecPseudo *set, char *name)
+{
+  for (int i = 0; i < set->len; i++) {
+    if (strcmp(set->data[i], name) == 0) {
+      set->data[i] = set->data[set->len - 1];
+      set->len--;
+      return;
+    }
+  }
+}
+
+static void pseudo_set_subtract(VecPseudo *dst, VecPseudo *to_remove)
+{
+  for (int i = 0; i < to_remove->len; i++) {
+    pseudo_set_remove(dst, to_remove->data[i]);
+  }
+}
+
+static void pseudo_set_free(VecPseudo *set)
+{
+  vec_free(set);
+  set->capacity = 0;
+  set->len = 0;
+  set->data = NULL;
+}
+
+static void pseudo_set_print(VecPseudo *set)
+{
+  printf("{");
+
+  for (int i = 0; i < set->len; i++) {
+    if (i > 0) {
+      printf(", ");
+    }
+
+    printf("%s", set->data[i]);
+  }
+
+  printf("}");
+}
+
+static void release_dead_regs(struct RegAllocState *state,
+                              VecPseudo *live_after)
+{
+  struct AllocatedReg **link = &state->allocated_regs;
+
+  while (*link) {
+    struct AllocatedReg *node = *link;
+
+    if (!pseudo_set_contains(live_after, node->pseudo)) {
+      free_reg(state, node->reg);
+
+      *link = node->next;
+
+      free(node->pseudo);
+      free(node);
+
+      continue;
+    }
+
+    link = &node->next;
+  }
+}
+
+bool alloc_reg(struct RegAllocState *state, enum AsmRegister *out_reg)
+{
+  for (int i = 0; i < NUM_ALLOCATABLE_INT_REGS; i++) {
+    if (!state->reg_used[i]) {
+      state->reg_used[i] = true;
+      *out_reg = allocatable_int_regs[i];
+      return true;
+    }
+  }
+
+  return false;
+}
+
+void allocated_reg_append(struct RegAllocState *state, char *pseudo,
+                          enum AsmRegister reg)
 {
   struct AllocatedReg *node = malloc(sizeof(*node));
   if (!node) {
@@ -11710,17 +11913,18 @@ void allocated_reg_append(char *pseudo, enum AsmRegister reg)
   node->next = NULL;
   node->pseudo = strdup(pseudo);
   if (!node->pseudo) {
+    perror("strdup");
     exit(1);
   }
 
   node->reg = reg;
 
-  if (allocated_regs == NULL) {
-    allocated_regs = node;
+  if (state->allocated_regs == NULL) {
+    state->allocated_regs = node;
     return;
   }
 
-  struct AllocatedReg *curr = allocated_regs;
+  struct AllocatedReg *curr = state->allocated_regs;
   while (curr->next != NULL) {
     curr = curr->next;
   }
@@ -11728,9 +11932,11 @@ void allocated_reg_append(char *pseudo, enum AsmRegister reg)
   curr->next = node;
 }
 
-bool allocated_reg_get(char *pseudo, enum AsmRegister *out_reg)
+bool allocated_reg_get(struct RegAllocState *state, char *pseudo,
+                       enum AsmRegister *out_reg)
 {
-  for (struct AllocatedReg *curr = allocated_regs; curr; curr = curr->next) {
+  for (struct AllocatedReg *curr = state->allocated_regs; curr;
+       curr = curr->next) {
     if (strcmp(curr->pseudo, pseudo) == 0) {
       *out_reg = curr->reg;
       return true;
@@ -11740,62 +11946,271 @@ bool allocated_reg_get(char *pseudo, enum AsmRegister *out_reg)
   return false;
 }
 
-void regalloc_op(struct AsmOperand *op, struct Map *map, int *used_stack_bytes)
+static void add_use_operand(VecPseudo *use, struct AsmOperand *op)
+{
+  if (op->kind == AsmOperand_PSEUDO) {
+    pseudo_set_add(use, op->as.pseudo);
+  }
+}
+
+static void add_def_operand(VecPseudo *def, struct AsmOperand *op)
+{
+  if (op->kind == AsmOperand_PSEUDO) {
+    pseudo_set_add(def, op->as.pseudo);
+  }
+}
+
+static void compute_instr_use_def(struct AsmInstr *instr, VecPseudo *use,
+                                  VecPseudo *def)
+{
+  switch (instr->kind) {
+    case AsmInstr_MOV: {
+      add_use_operand(use, &instr->as.mov.src);
+      add_def_operand(def, &instr->as.mov.dst);
+      break;
+    }
+
+    case AsmInstr_BIN: {
+      /*
+       * x86-style two-address instruction:
+       *
+       *   rhs = rhs OP lhs
+       *
+       * So rhs is both read and written.
+       */
+      add_use_operand(use, &instr->as.binary.lhs);
+      add_use_operand(use, &instr->as.binary.rhs);
+      add_def_operand(def, &instr->as.binary.rhs);
+      break;
+    }
+
+    case AsmInstr_CMP: {
+      add_use_operand(use, &instr->as.cmp.lhs);
+      add_use_operand(use, &instr->as.cmp.rhs);
+      break;
+    }
+
+    case AsmInstr_CVT: {
+      add_use_operand(use, &instr->as.cvt.src);
+      add_def_operand(def, &instr->as.cvt.dst);
+      break;
+    }
+
+    case AsmInstr_SetCC: {
+      add_def_operand(def, &instr->as.setcc.op);
+      break;
+    }
+
+    case AsmInstr_UNARY: {
+      /*
+       * neg x / not x:
+       *
+       *   x = OP x
+       */
+      add_use_operand(use, &instr->as.unary.op);
+      add_def_operand(def, &instr->as.unary.op);
+      break;
+    }
+
+    case AsmInstr_PUSH: {
+      add_use_operand(use, &instr->as.push.op);
+      break;
+    }
+
+    case AsmInstr_POP: {
+      add_def_operand(def, &instr->as.pop.op);
+      break;
+    }
+
+    case AsmInstr_LEA: {
+      /*
+       * Important:
+       *
+       * LEA computes an address. The source is an address expression,
+       * not a value read.
+       *
+       * So for now, only the destination is a def.
+       */
+      add_def_operand(def, &instr->as.lea.dst);
+      break;
+    }
+
+    case AsmInstr_CALL:
+    case AsmInstr_RET:
+    case AsmInstr_JMP:
+    case AsmInstr_JmpCC:
+    case AsmInstr_LBL:
+    case AsmInstr_REP_MOVSB: {
+      break;
+    }
+
+    default:
+      assert(0 && "Unhandled instruction in compute_instr_use_def");
+  }
+}
+
+static struct InstrLiveness *compute_liveness_straight_line(
+    struct AsmFunction *fn)
+{
+  int n = fn->body.len;
+
+  struct InstrLiveness *lv = calloc(n, sizeof(*lv));
+  if (!lv) {
+    perror("calloc");
+    exit(1);
+  }
+
+  /*
+   * First compute use/def for every instruction.
+   */
+  for (int i = 0; i < n; i++) {
+    compute_instr_use_def(&fn->body.data[i], &lv[i].use, &lv[i].def);
+  }
+
+  /*
+   * Then walk backward.
+   *
+   * live_after[i]  = live_before[i + 1]
+   * live_before[i] = use[i] U (live_after[i] - def[i])
+   */
+  VecPseudo live = {0};
+
+  for (int i = n - 1; i >= 0; i--) {
+    pseudo_set_copy(&lv[i].live_after, &live);
+
+    VecPseudo before = {0};
+
+    pseudo_set_copy(&before, &live);
+    pseudo_set_subtract(&before, &lv[i].def);
+    pseudo_set_union_into(&before, &lv[i].use);
+
+    pseudo_set_copy(&lv[i].live_before, &before);
+
+    pseudo_set_free(&live);
+    live = before;
+  }
+
+  pseudo_set_free(&live);
+
+  return lv;
+}
+
+static void free_liveness(struct InstrLiveness *lv, int n)
+{
+  for (int i = 0; i < n; i++) {
+    pseudo_set_free(&lv[i].use);
+    pseudo_set_free(&lv[i].def);
+    pseudo_set_free(&lv[i].live_before);
+    pseudo_set_free(&lv[i].live_after);
+  }
+
+  free(lv);
+}
+
+static void print_liveness(struct AsmFunction *fn, struct InstrLiveness *lv)
+{
+  printf("Liveness for function %s:\n", fn->name);
+
+  for (int i = 0; i < fn->body.len; i++) {
+    printf("%04d: use=", i);
+    pseudo_set_print(&lv[i].use);
+
+    printf(" def=");
+    pseudo_set_print(&lv[i].def);
+
+    printf(" live_before=");
+    pseudo_set_print(&lv[i].live_before);
+
+    printf(" live_after=");
+    pseudo_set_print(&lv[i].live_after);
+
+    printf("\n");
+  }
+}
+
+void regalloc_op(struct AsmOperand *op,
+                 struct Map *map,
+                 int *used_stack_bytes,
+                 struct RegAllocState *state)
 {
   enum AsmRegister reg;
+  int stack_offset;
 
   if (op->kind != AsmOperand_PSEUDO) {
     return;
   }
 
-  if (is_tmp(op->as.pseudo)) {
-    if (allocated_reg_get(op->as.pseudo, &reg)) {
-      op->kind = AsmOperand_REG;
-      op->as.reg = reg;
-      return;
-    }
-
-    enum AsmRegister *new_reg = alloc_reg();
-
-    if (new_reg) {
-      allocated_reg_append(op->as.pseudo, *new_reg);
-
-      op->kind = AsmOperand_REG;
-      op->as.reg = *new_reg;
-      return;
-    }
-
+  /*
+   * Structs, floats, etc. stay on stack for now.
+   */
+  if (!asm_type_can_live_in_int_reg(op->asm_type)) {
     op->kind = AsmOperand_STACK;
     op->as.stack_offset =
         get_offset(map, op->as.pseudo, op->asm_type, used_stack_bytes);
     return;
   }
 
+  /*
+   * If this pseudo already has a register, use it.
+   */
+  if (allocated_reg_get(state, op->as.pseudo, &reg)) {
+    op->kind = AsmOperand_REG;
+    op->as.reg = reg;
+    return;
+  }
+
+  /*
+   * Important safety rule:
+   *
+   * If this pseudo was ever forced to the stack, keep using the stack.
+   * We are not doing reloads yet.
+   */
+  if (map_get_offset(map, op->as.pseudo, &stack_offset)) {
+    op->kind = AsmOperand_STACK;
+    op->as.stack_offset = stack_offset;
+    return;
+  }
+
+  /*
+   * Now allocate registers for any scalar pseudo, not just tmp.*.
+   */
+  if (alloc_reg(state, &reg)) {
+    allocated_reg_append(state, op->as.pseudo, reg);
+
+    op->kind = AsmOperand_REG;
+    op->as.reg = reg;
+    return;
+  }
+
+  /*
+   * No register available: permanently assign this pseudo to stack.
+   */
   op->kind = AsmOperand_STACK;
   op->as.stack_offset =
       get_offset(map, op->as.pseudo, op->asm_type, used_stack_bytes);
 }
 
 struct AsmInstr *regalloc_instr(struct AsmInstr *instr, struct Map *map,
-                                int *used_stack_bytes)
+                                int *used_stack_bytes,
+                                struct RegAllocState *state)
 {
   switch (instr->kind) {
     case AsmInstr_BIN: {
-      regalloc_op(&instr->as.binary.lhs, map, used_stack_bytes);
-      regalloc_op(&instr->as.binary.rhs, map, used_stack_bytes);
+      regalloc_op(&instr->as.binary.lhs, map, used_stack_bytes, state);
+      regalloc_op(&instr->as.binary.rhs, map, used_stack_bytes, state);
       break;
     }
     case AsmInstr_CALL: {
       break;
     }
     case AsmInstr_CMP: {
-      regalloc_op(&instr->as.cmp.lhs, map, used_stack_bytes);
-      regalloc_op(&instr->as.cmp.rhs, map, used_stack_bytes);
+      regalloc_op(&instr->as.cmp.lhs, map, used_stack_bytes, state);
+      regalloc_op(&instr->as.cmp.rhs, map, used_stack_bytes, state);
       break;
     }
     case AsmInstr_CVT: {
-      regalloc_op(&instr->as.cvt.src, map, used_stack_bytes);
-      regalloc_op(&instr->as.cvt.dst, map, used_stack_bytes);
+      regalloc_op(&instr->as.cvt.src, map, used_stack_bytes, state);
+      regalloc_op(&instr->as.cvt.dst, map, used_stack_bytes, state);
       break;
     }
     case AsmInstr_JMP: {
@@ -11808,21 +12223,21 @@ struct AsmInstr *regalloc_instr(struct AsmInstr *instr, struct Map *map,
       break;
     }
     case AsmInstr_LEA: {
-      regalloc_op(&instr->as.lea.src, map, used_stack_bytes);
-      regalloc_op(&instr->as.lea.dst, map, used_stack_bytes);
+      regalloc_op(&instr->as.lea.src, map, used_stack_bytes, state);
+      regalloc_op(&instr->as.lea.dst, map, used_stack_bytes, state);
       break;
     }
     case AsmInstr_MOV: {
-      regalloc_op(&instr->as.mov.src, map, used_stack_bytes);
-      regalloc_op(&instr->as.mov.dst, map, used_stack_bytes);
+      regalloc_op(&instr->as.mov.src, map, used_stack_bytes, state);
+      regalloc_op(&instr->as.mov.dst, map, used_stack_bytes, state);
       break;
     }
     case AsmInstr_POP: {
-      regalloc_op(&instr->as.pop.op, map, used_stack_bytes);
+      regalloc_op(&instr->as.pop.op, map, used_stack_bytes, state);
       break;
     }
     case AsmInstr_PUSH: {
-      regalloc_op(&instr->as.push.op, map, used_stack_bytes);
+      regalloc_op(&instr->as.push.op, map, used_stack_bytes, state);
       break;
     }
     case AsmInstr_REP_MOVSB: {
@@ -11832,11 +12247,11 @@ struct AsmInstr *regalloc_instr(struct AsmInstr *instr, struct Map *map,
       break;
     }
     case AsmInstr_SetCC: {
-      regalloc_op(&instr->as.setcc.op, map, used_stack_bytes);
+      regalloc_op(&instr->as.setcc.op, map, used_stack_bytes, state);
       break;
     }
     case AsmInstr_UNARY: {
-      regalloc_op(&instr->as.unary.op, map, used_stack_bytes);
+      regalloc_op(&instr->as.unary.op, map, used_stack_bytes, state);
       break;
     }
     default:
@@ -11848,9 +12263,34 @@ struct AsmInstr *regalloc_instr(struct AsmInstr *instr, struct Map *map,
 struct AsmFunction *regalloc_fn(struct AsmFunction *fn, struct Map *map,
                                 int *used_stack_bytes)
 {
+  struct RegAllocState state;
+  struct InstrLiveness *lv;
+
+  init_regalloc_state(&state);
+
+  /*
+   * Important: compute liveness before regalloc_instr mutates pseudos
+   * into real registers/stack slots.
+   */
+  lv = compute_liveness_straight_line(fn);
+
+#ifdef DEBUG_LIVENESS
+  print_liveness(fn, lv);
+#endif
+
   for (int i = 0; i < fn->body.len; i++) {
-    regalloc_instr(&fn->body.data[i], map, used_stack_bytes);
+    regalloc_instr(&fn->body.data[i], map, used_stack_bytes, &state);
+
+    /*
+     * Now the instruction has been rewritten.
+     * Any pseudo not live after this instruction can release its register.
+     */
+    release_dead_regs(&state, &lv[i].live_after);
   }
+
+  free_liveness(lv, fn->body.len);
+  free_regalloc_state(&state);
+
   return fn;
 }
 
