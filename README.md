@@ -18,6 +18,7 @@ The X code is first tokenized, then parsed with a recursive-descent parser.  Aft
   - all operators you would expect from this
 - control flow:
   - if/else
+  - loop {}
   - while
   - break/continue
   - goto
@@ -25,13 +26,12 @@ The X code is first tokenized, then parsed with a recursive-descent parser.  Aft
 - structures
 - unions
 - C-like enums
+- sizeof
 
 ## Roadmap
-- sizeof
 - named loops
 - for loops
 - do while loops
-- loop {} blocks
 - comments
 - switch and/or match
 - graph coloring-based register allocator
