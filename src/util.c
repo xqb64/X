@@ -52,6 +52,43 @@ char *mklbl(char *s, int d)
   return mkstr("%s.%d", s, d);
 }
 
+char *replace_ext(char *path, char *ext)
+{
+  int a, b, total;
+  char *replaced, *dot;
+
+  a = strlen(path);
+  b = strlen(ext);
+  total = a + b + 1;
+
+  replaced = malloc(total);
+
+  dot = strrchr(path, '.') + 1;
+
+  strncpy(replaced, path, dot - path);
+  replaced[dot - path] = '\0';
+  strcat(replaced, ext);
+
+  return replaced;
+}
+
+char *strip_ext(char *path)
+{
+  int a, total;
+  char *dot, *new;
+
+  a = strlen(path);
+  total = a + 1;
+
+  dot = strrchr(path, '.');
+  new = malloc(total);
+
+  strncpy(new, path, dot - path);
+  new[dot - path] = '\0';
+
+  return new;
+}
+
 void print_indent(int spaces)
 {
   assert(spaces >= 0 && "print_indent called with a negative number");

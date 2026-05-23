@@ -160,11 +160,6 @@ struct CompilerOptions {
   char *path;
 };
 
-struct RunResult {
-  bool is_ok;
-  char *msg;
-};
-
 struct CompilerOptions parse_args(int argc, char **argv)
 {
   struct CompilerOptions opts;
@@ -256,42 +251,10 @@ struct CompilerOptions parse_args(int argc, char **argv)
   return opts;
 }
 
-char *replace_ext(char *path, char *ext)
-{
-  int a, b, total;
-  char *replaced, *dot;
-
-  a = strlen(path);
-  b = strlen(ext);
-  total = a + b + 1;
-
-  replaced = malloc(total);
-
-  dot = strrchr(path, '.') + 1;
-
-  strncpy(replaced, path, dot - path);
-  replaced[dot - path] = '\0';
-  strcat(replaced, ext);
-
-  return replaced;
-}
-
-char *strip_ext(char *path)
-{
-  int a, total;
-  char *dot, *new;
-
-  a = strlen(path);
-  total = a + 1;
-
-  dot = strrchr(path, '.');
-  new = malloc(total);
-
-  strncpy(new, path, dot - path);
-  new[dot - path] = '\0';
-
-  return new;
-}
+struct RunResult {
+  bool is_ok;
+  char *msg;
+};
 
 struct RunResult run(struct CompilerOptions *opts)
 {
