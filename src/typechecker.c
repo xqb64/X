@@ -981,7 +981,6 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
     case EXPR_VARIABLE: {
       struct Symbol *sym = sym_get(sym_table, expr->as.var.name);
 
-      printf("looking up: %s\n", expr->as.var.name);
       if (!sym) {
         return (struct TypecheckResult){
             .is_ok = false,

@@ -304,7 +304,10 @@ struct RunResult run(struct CompilerOptions *opts)
   }
 
   tokens = tokenize_result.tokens;
+
+#ifdef DEBUG_TOKENIZER
   print_tokens(&tokens);
+#endif
 
   if (target_stage == STAGE_TOKENIZE) {
     goto free_up2_tokenize;
@@ -320,7 +323,10 @@ struct RunResult run(struct CompilerOptions *opts)
   }
 
   ast = parse_result.ast;
+  
+#ifdef DEBUG_PARSER
   print_ast(ast);
+#endif
 
   if (target_stage == STAGE_PARSE) {
     goto free_up2_parse;
@@ -333,9 +339,12 @@ struct RunResult run(struct CompilerOptions *opts)
     goto free_up2_parse;
   }
 
-  printf("resolved ast:\n");
   resolved_ast = resolve_result.as.ast;
+  
+#ifdef DEBUG_RESOLVER
+  printf("resolved ast:\n");
   print_ast(resolved_ast);
+#endif
 
   if (target_stage == STAGE_RESOLVE) {
     goto free_up2_parse;
@@ -350,8 +359,10 @@ struct RunResult run(struct CompilerOptions *opts)
 
   typechecked_ast = typecheck_result.ast;
 
+#ifdef DEBUG_TYPECHECKER
   printf("typechecked ast:\n");
   print_ast(typechecked_ast);
+#endif
 
   if (target_stage == STAGE_TYPECHECK) {
     goto free_up2_parse;
@@ -366,8 +377,10 @@ struct RunResult run(struct CompilerOptions *opts)
 
   labeled_ast = loop_label_result.ast;
 
+#ifdef DEBUG_LABELER
   printf("labeled ast:\n");
   print_ast(labeled_ast);
+#endif
 
   collect_labels_result = collect_labels(labeled_ast);
   if (!collect_labels_result.is_ok) {
@@ -392,8 +405,10 @@ struct RunResult run(struct CompilerOptions *opts)
 
   ir_prog = irfy_result.prog;
 
+#ifdef DEBUG_IR
   printf("raw ir:\n");
   print_ir(&ir_prog);
+#endif
 
   if (target_stage == STAGE_IR) {
     goto free_up2_irfy;
@@ -401,8 +416,10 @@ struct RunResult run(struct CompilerOptions *opts)
 
   optimize_ir(&ir_prog);
 
+#ifdef DEBUG_IR_OPT
   printf("optimized ir:\n");
   print_ir(&ir_prog);
+#endif
 
   if (target_stage == STAGE_IR_OPT) {
     goto free_up2_irfy;
@@ -416,27 +433,32 @@ struct RunResult run(struct CompilerOptions *opts)
   }
 
   asm_prog = asm_result.prog;
+ 
+#ifdef DEBUG_CODEGEN_RAW
   print_asm(&asm_prog);
+#endif
 
   if (target_stage == STAGE_CODEGEN_RAW) {
     goto free_up2_asm;
   }
 
-  printf("regalloc\n");
   asm_prog = *regalloc(&asm_prog);
-  print_asm(&asm_prog);
 
-  // printf("replacing pseudo...\n");
-  // asm_prog = *replace_pseudo(&asm_prog);
-  // print_asm(&asm_prog);
+#ifdef DEBUG_CODEGEN_REGALLOC
+  printf("regalloc\n");
+  print_asm(&asm_prog);
+#endif
 
   if (target_stage == STAGE_CODEGEN_REPLACE_PSEUDO) {
     goto free_up2_asm;
   }
 
-  printf("fixup...\n");
   asm_prog = *fixup(&asm_prog);
+
+#ifdef DEBUG_CODEGEN_FIXUP
+  printf("fixup...\n");
   print_asm(&asm_prog);
+#endif
 
   if (target_stage == STAGE_CODEGEN_FIXUP) {
     goto free_up2_asm;

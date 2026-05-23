@@ -27,8 +27,9 @@ LDLIBS += -lm
 #   make debug=labeler
 #   make debug=ir
 #   make debug=ir_opt
-#   make debug=codegen
-#   make debug=regalloc
+#   make debug=codegen_raw
+#   make debug=codegen_regalloc
+#   make debug=codegen_fixup
 #   make debug=emitter
 # Multiple debug selectors can be combined, e.g.:
 #   make debug="tokenizer,parser,regalloc"
@@ -41,8 +42,9 @@ ifeq ($(debug),all)
 	CFLAGS += -DDEBUG_LABELER
 	CFLAGS += -DDEBUG_IR
 	CFLAGS += -DDEBUG_IR_OPT
-	CFLAGS += -DDEBUG_CODEGEN
-	CFLAGS += -DDEBUG_REGALLOC
+	CFLAGS += -DDEBUG_CODEGEN_RAW
+	CFLAGS += -DDEBUG_CODEGEN_REGALLOC
+	CFLAGS += -DDEBUG_CODEGEN_FIXUP
 	CFLAGS += -DDEBUG_EMITTER
 	CFLAGS += -DDEBUG_INTERVALS
 	CFLAGS += -DDEBUG_SPILL_COSTS
@@ -85,12 +87,11 @@ ifeq (ir,$(findstring ir,$(debug)))
 	CFLAGS += -DDEBUG_IR
 endif
 
-ifeq (codegen,$(findstring codegen,$(debug)))
-	CFLAGS += -DDEBUG_CODEGEN
+ifeq (codegen_raw,$(findstring codegen_raw,$(debug)))
+	CFLAGS += -DDEBUG_CODEGEN_RAW
 endif
 
-ifeq (regalloc,$(findstring regalloc,$(debug)))
-	CFLAGS += -DDEBUG_REGALLOC
+ifeq (codegen_regalloc,$(findstring codegen_regalloc,$(debug)))
 	CFLAGS += -DDEBUG_INTERVALS
 	CFLAGS += -DDEBUG_SPILL_COSTS
 	CFLAGS += -DDEBUG_INTERFERENCE
@@ -99,7 +100,11 @@ ifeq (regalloc,$(findstring regalloc,$(debug)))
 	CFLAGS += -DDEBUG_HOMES
 endif
 
-ifeq (regalloc_dot,$(findstring regalloc_dot,$(debug)))
+ifeq (codegen_fixup,$(findstring codegen_fixup,$(debug)))
+	CFLAGS += -DDEBUG_CODEGEN_FIXUP
+endif
+
+ifeq (codegen_regalloc_dot,$(findstring codegen_regalloc_dot,$(debug)))
 	CFLAGS += -DDEBUG_INTERFERENCE_DOT
 	CFLAGS += -DDEBUG_MOVES_DOT
 	CFLAGS += -DDEBUG_COALESCED_INTERFERENCE_DOT
@@ -149,4 +154,4 @@ graph.png: graph.gv
 format:
 	clang-format src/*.c src/*.h -style=file:.clang-format -i
 
-.PHONY: all clean test format ruff
+.PHONY: all clean test format 
