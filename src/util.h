@@ -8,6 +8,5 @@ char *mkstr(const char *fmt, ...);
 char *mkuniq(char *s);
 char *mklbl(char *s, int d);
 void print_indent(int spaces);
-struct ReadFileResult read_file(const char *path);
 
 #endif
