@@ -1,0 +1,14 @@
+#ifndef MINI_COMPILER_EMITTER_H
+#define MINI_COMPILER_EMITTER_H
+
+#include "common.h"
+
+/* emitter */
+
+void emit_operand(FILE *f, struct AsmOperand *op);
+void emit(struct AsmProgram *prog, char *path);
+struct AssembleLinkResult assemble_and_link(const char *path,
+                                            const char *out_path,
+                                            bool assemble_only);
+
+#endif /* MINI_COMPILER_EMITTER_H */
