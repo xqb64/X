@@ -13886,10 +13886,8 @@ static bool is_spill_tmp_name(char *pseudo)
   return strncmp(pseudo, "spilltmp.", strlen("spilltmp.")) == 0;
 }
 
-static int pick_low_degree_node(struct InterferenceGraph *graph,
-                                bool *removed,
-                                int k,
-                                VecSpillCost *spill_costs)
+static int pick_low_degree_node(struct InterferenceGraph *graph, bool *removed,
+                                int k, VecSpillCost *spill_costs)
 {
   int best_idx = -1;
   double best_score = 0.0;
@@ -13924,7 +13922,7 @@ static int pick_low_degree_node(struct InterferenceGraph *graph,
      * and are colored earlier during select.
      */
     cost = spill_cost_of(spill_costs, pseudo);
-    score = cost / (double)(degree > 0 ? degree : 1);
+    score = cost / (double) (degree > 0 ? degree : 1);
 
     if (best_idx < 0 || score < best_score) {
       best_idx = i;
@@ -13936,19 +13934,17 @@ static int pick_low_degree_node(struct InterferenceGraph *graph,
 }
 
 static double spill_score_for_node(struct InterferenceGraph *graph,
-                                   bool *removed,
-                                   int node_idx,
+                                   bool *removed, int node_idx,
                                    VecSpillCost *spill_costs)
 {
   char *pseudo = graph->nodes.data[node_idx].pseudo;
   int degree = graph_degree_after_removal(graph, removed, node_idx);
   double cost = spill_cost_of(spill_costs, pseudo);
 
-  return cost / (double)(degree > 0 ? degree : 1);
+  return cost / (double) (degree > 0 ? degree : 1);
 }
 
-static int pick_spill_candidate(struct InterferenceGraph *graph,
-                                bool *removed,
+static int pick_spill_candidate(struct InterferenceGraph *graph, bool *removed,
                                 VecSpillCost *spill_costs)
 {
   int best_idx = -1;
@@ -13956,11 +13952,7 @@ static int pick_spill_candidate(struct InterferenceGraph *graph,
 
 #ifdef DEBUG_SPILL_SCORE_TABLE
   printf("Spill candidate scores:\n");
-  printf("  %-24s %-8s %-8s %-8s\n",
-         "pseudo",
-         "cost",
-         "degree",
-         "score");
+  printf("  %-24s %-8s %-8s %-8s\n", "pseudo", "cost", "degree", "score");
 #endif
 
   for (int i = 0; i < graph->nodes.len; i++) {
@@ -13996,14 +13988,10 @@ static int pick_spill_candidate(struct InterferenceGraph *graph,
      *   low cost  => cheap to spill
      *   high degree => helps simplify the graph
      */
-    score = cost / (double)(degree > 0 ? degree : 1);
+    score = cost / (double) (degree > 0 ? degree : 1);
 
 #ifdef DEBUG_SPILL_SCORE_TABLE
-    printf("  %-24s %-8.2f %-8d %-8.4f\n",
-           pseudo,
-           cost,
-           degree,
-           score);
+    printf("  %-24s %-8.2f %-8d %-8.4f\n", pseudo, cost, degree, score);
 #endif
 
     if (best_idx < 0 || score < best_score) {
@@ -14020,8 +14008,7 @@ static int pick_spill_candidate(struct InterferenceGraph *graph,
     for (int i = 0; i < graph->nodes.len; i++) {
       if (!removed[i] && !graph->nodes.data[i].is_precolored) {
 #ifdef DEBUG_SPILL_SCORES
-        printf("  fallback spill candidate: %s\n",
-               graph->nodes.data[i].pseudo);
+        printf("  fallback spill candidate: %s\n", graph->nodes.data[i].pseudo);
 #endif
         return i;
       }
@@ -14037,10 +14024,7 @@ static int pick_spill_candidate(struct InterferenceGraph *graph,
     double cost = spill_cost_of(spill_costs, pseudo);
 
     printf("  chosen spill candidate: %s cost %.2f degree %d score %.4f\n",
-           pseudo,
-           cost,
-           degree,
-           best_score);
+           pseudo, cost, degree, best_score);
   }
 #endif
 
@@ -14114,13 +14098,9 @@ static void assign_stack_home(VecPseudoHome *homes, VecPseudoType *types,
 }
 
 static VecPseudoHome color_interference_graph(
-    struct InterferenceGraph *graph,
-    VecPseudoType *types,
-    VecPseudo *force_stack,
-    VecPseudo *out_spilled,
-    VecSpillCost *spill_costs,
-    struct Map *map,
-    int *used_stack_bytes)
+    struct InterferenceGraph *graph, VecPseudoType *types,
+    VecPseudo *force_stack, VecPseudo *out_spilled, VecSpillCost *spill_costs,
+    struct Map *map, int *used_stack_bytes)
 {
   VecPseudoHome homes = {0};
   VecSelectStack select_stack = {0};
@@ -15422,8 +15402,7 @@ static VecPseudo expand_spilled_reps_to_original_pseudos(
   return out;
 }
 
-struct AsmFunction *regalloc_fn(struct AsmFunction *fn,
-                                struct Map *map,
+struct AsmFunction *regalloc_fn(struct AsmFunction *fn, struct Map *map,
                                 int *used_stack_bytes,
                                 int *used_callee_saved_count)
 {
@@ -15538,8 +15517,7 @@ struct AsmFunction *regalloc_fn(struct AsmFunction *fn,
 
 #ifdef DEBUG_COALESCED_INTERFERENCE_DOT
     {
-      char *path =
-          mkstr("%s.coalesced.interference.%d.dot", fn->name, attempt);
+      char *path = mkstr("%s.coalesced.interference.%d.dot", fn->name, attempt);
       write_interference_graph_dot(&coalesced_graph, path);
       free(path);
     }
@@ -15550,13 +15528,9 @@ struct AsmFunction *regalloc_fn(struct AsmFunction *fn,
      *
      * `spilled` contains names from the coalesced graph.
      */
-    coalesced_homes = color_interference_graph(&coalesced_graph,
-                                               &types,
-                                               NULL,
-                                               &spilled,
-                                               &spill_costs,
-                                               map,
-                                               used_stack_bytes);
+    coalesced_homes =
+        color_interference_graph(&coalesced_graph, &types, NULL, &spilled,
+                                 &spill_costs, map, used_stack_bytes);
 
 #ifdef DEBUG_SPILLS
     printf("After coloring: spilled.len = %d\n", spilled.len);
@@ -15574,10 +15548,8 @@ struct AsmFunction *regalloc_fn(struct AsmFunction *fn,
     if (spilled.len > 0) {
       VecPseudo original_spilled;
 
-      original_spilled =
-          expand_spilled_reps_to_original_pseudos(&interference,
-                                                  coalesce_parent,
-                                                  &spilled);
+      original_spilled = expand_spilled_reps_to_original_pseudos(
+          &interference, coalesce_parent, &spilled);
 
 #ifdef DEBUG_SPILLS
       printf("Spilled original pseudos:\n");
@@ -15609,8 +15581,7 @@ struct AsmFunction *regalloc_fn(struct AsmFunction *fn,
     /*
      * 10. No spills. Now, and only now, expand homes.
      */
-    homes = expand_coalesced_homes(&interference,
-                                   coalesce_parent,
+    homes = expand_coalesced_homes(&interference, coalesce_parent,
                                    &coalesced_homes);
 
     /*
@@ -15635,9 +15606,7 @@ struct AsmFunction *regalloc_fn(struct AsmFunction *fn,
        * 13. Rewrite pseudo operands to final homes.
        */
       for (int i = 0; i < fn->body.len; i++) {
-        regalloc_instr_from_homes(&fn->body.data[i],
-                                  &homes,
-                                  map,
+        regalloc_instr_from_homes(&fn->body.data[i], &homes, map,
                                   used_stack_bytes);
       }
 
@@ -15670,8 +15639,7 @@ struct AsmFunction *regalloc_fn(struct AsmFunction *fn,
     return fn;
   }
 
-  fprintf(stderr,
-          "register allocation did not converge after %d attempts\n",
+  fprintf(stderr, "register allocation did not converge after %d attempts\n",
           MAX_REGALLOC_ATTEMPTS);
   abort();
 }
