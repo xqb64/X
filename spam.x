@@ -1,10 +1,10 @@
+extern fn putchar(c: u32) -> u32;
+
 fn main(void) -> u32 {
-  let x: u32 = 10;
-  let y: u32 = 20;
+  let x: u32 = 40;
+  let y: u32 = 2;
 
-  if (x == 10) {
-    ret x + y;
-  }
+  putchar(65);
 
-  ret y;
+  ret x + y;
 }

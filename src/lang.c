@@ -8756,13 +8756,19 @@ enum AsmOperandKind {
 
 enum AsmRegister {
   AX,
-  DI,
-  SI,
+  BX,
   CX,
   DX,
+  SI,
+  DI,
   R8,
   R9,
   R10,
+  R11,
+  R12,
+  R13,
+  R14,
+  R15,
   BP,
   SP,
   XMM0,
@@ -8984,6 +8990,9 @@ void print_asm_operand(struct AsmOperand *op)
         case AX:
           printf("%%rax");
           break;
+        case BX:
+          printf("%%rbx");
+          break;
         case DI:
           printf("%%rdi");
           break;
@@ -9004,6 +9013,21 @@ void print_asm_operand(struct AsmOperand *op)
           break;
         case R10:
           printf("%%r10");
+          break;
+        case R11:
+          printf("%%r11");
+          break;
+        case R12:
+          printf("%%r12");
+          break;
+        case R13:
+          printf("%%r13");
+          break;
+        case R14:
+          printf("%%r14");
+          break;
+        case R15:
+          printf("%%r15");
           break;
         case BP:
           printf("%%rbp");
@@ -9109,6 +9133,30 @@ void print_asm_operand(struct AsmOperand *op)
             }
             case AsmType_QUADWORD: {
               printf("%%rax");
+              break;
+            }
+            default:
+              assert(0);
+          }
+
+          break;
+        }
+        case BX: {
+          switch (op->asm_type.kind) {
+            case AsmType_BYTE: {
+              printf("%%bl");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%bx");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%ebx");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%rbx");
               break;
             }
             default:
@@ -9271,6 +9319,121 @@ void print_asm_operand(struct AsmOperand *op)
             }
             case AsmType_QUADWORD: {
               printf("%%r10");
+              break;
+            }
+            default:
+              assert(0);
+          }
+          break;
+        }
+        case R11: {
+          switch (op->asm_type.kind) {
+            case AsmType_BYTE: {
+              printf("%%r11b");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%r11w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%r11d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%r11");
+              break;
+            }
+            default:
+              assert(0);
+          }
+          break;
+        }
+        case R12: {
+          switch (op->asm_type.kind) {
+            case AsmType_BYTE: {
+              printf("%%r12b");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%r12w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%r12d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%r12");
+              break;
+            }
+            default:
+              assert(0);
+          }
+          break;
+        }
+        case R13: {
+          switch (op->asm_type.kind) {
+            case AsmType_BYTE: {
+              printf("%%r13b");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%r13w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%r13d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%r13");
+              break;
+            }
+            default:
+              assert(0);
+          }
+          break;
+        }
+        case R14: {
+          switch (op->asm_type.kind) {
+            case AsmType_BYTE: {
+              printf("%%r14b");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%r14w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%r14d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%r14");
+              break;
+            }
+            default:
+              assert(0);
+          }
+          break;
+        }
+        case R15: {
+          switch (op->asm_type.kind) {
+            case AsmType_BYTE: {
+              printf("%%r15b");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%r15w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%r15d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%r15");
               break;
             }
             default:
@@ -10474,7 +10637,6 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
        * We calculate the padding needed to satisfy this requirement. */
       int stack_padding =
           num_stack_bytes % 16 != 0 ? 16 - (num_stack_bytes % 16) : 0;
-
       int total_stack_adjustment = num_stack_bytes + stack_padding;
 
       /* Allocate space on the stack for memory arguments and padding. */
@@ -11725,7 +11887,7 @@ struct AllocatedReg {
 };
 
 static enum AsmRegister allocatable_int_regs[] = {
-    AX, DX, CX, SI, DI, R8, R9,
+    AX, BX, DX, CX, SI, DI, R8, R9, R12, R13, R14, R15,
 };
 
 #define NUM_ALLOCATABLE_INT_REGS \
@@ -12212,21 +12374,36 @@ static void dot_escape(FILE *out, const char *s)
 static const char *asm_instr_kind_name(enum AsmInstrKind kind)
 {
   switch (kind) {
-    case AsmInstr_PUSH: return "PUSH";
-    case AsmInstr_POP: return "POP";
-    case AsmInstr_MOV: return "MOV";
-    case AsmInstr_BIN: return "BIN";
-    case AsmInstr_RET: return "RET";
-    case AsmInstr_CALL: return "CALL";
-    case AsmInstr_JMP: return "JMP";
-    case AsmInstr_LBL: return "LBL";
-    case AsmInstr_CMP: return "CMP";
-    case AsmInstr_JmpCC: return "JmpCC";
-    case AsmInstr_SetCC: return "SetCC";
-    case AsmInstr_LEA: return "LEA";
-    case AsmInstr_UNARY: return "UNARY";
-    case AsmInstr_CVT: return "CVT";
-    case AsmInstr_REP_MOVSB: return "REP_MOVSB";
+    case AsmInstr_PUSH:
+      return "PUSH";
+    case AsmInstr_POP:
+      return "POP";
+    case AsmInstr_MOV:
+      return "MOV";
+    case AsmInstr_BIN:
+      return "BIN";
+    case AsmInstr_RET:
+      return "RET";
+    case AsmInstr_CALL:
+      return "CALL";
+    case AsmInstr_JMP:
+      return "JMP";
+    case AsmInstr_LBL:
+      return "LBL";
+    case AsmInstr_CMP:
+      return "CMP";
+    case AsmInstr_JmpCC:
+      return "JmpCC";
+    case AsmInstr_SetCC:
+      return "SetCC";
+    case AsmInstr_LEA:
+      return "LEA";
+    case AsmInstr_UNARY:
+      return "UNARY";
+    case AsmInstr_CVT:
+      return "CVT";
+    case AsmInstr_REP_MOVSB:
+      return "REP_MOVSB";
   }
 
   assert(0 && "unhandled AsmInstrKind");
@@ -12246,7 +12423,6 @@ static void dot_print_pseudo_set(FILE *out, VecPseudo *set)
 
   fputc('}', out);
 }
-
 
 static struct CFG build_cfg(struct AsmFunction *fn)
 {
@@ -12477,9 +12653,7 @@ static void dot_print_instr_summary(FILE *out, int idx, struct AsmInstr *instr)
   }
 }
 
-static void dump_cfg_dot(FILE *out,
-                         struct AsmFunction *fn,
-                         struct CFG *cfg,
+static void dump_cfg_dot(FILE *out, struct AsmFunction *fn, struct CFG *cfg,
                          struct InstrLiveness *lv)
 {
   fprintf(out, "digraph \"cfg_%s\" {\n", fn->name);
@@ -12576,8 +12750,7 @@ static void free_cfg(struct CFG *cfg)
   cfg->block_count = 0;
 }
 
-static void write_cfg_dot(struct AsmFunction *fn,
-                          struct InstrLiveness *lv,
+static void write_cfg_dot(struct AsmFunction *fn, struct InstrLiveness *lv,
                           const char *path)
 {
   FILE *out;
@@ -13101,6 +13274,391 @@ static VecPseudoHome allocate_pseudo_homes(VecLiveInterval *intervals,
   return homes;
 }
 
+struct InterferenceNode {
+  /*
+   * For pseudo nodes:      name = "var.x.0"
+   * For precolored nodes: name = "%eax", "%edx", etc.
+   */
+  char *pseudo;
+
+  bool is_precolored;
+  enum AsmRegister precolored_reg;
+
+  VecInt neighbors;
+};
+
+typedef Vector(struct InterferenceNode) VecInterferenceNode;
+
+struct InterferenceGraph {
+  VecInterferenceNode nodes;
+};
+
+static int interference_node_index(struct InterferenceGraph *graph,
+                                   char *pseudo)
+{
+  for (int i = 0; i < graph->nodes.len; i++) {
+    if (strcmp(graph->nodes.data[i].pseudo, pseudo) == 0) {
+      return i;
+    }
+  }
+
+  return -1;
+}
+
+static int interference_add_node(struct InterferenceGraph *graph, char *pseudo)
+{
+  int idx = interference_node_index(graph, pseudo);
+
+  if (idx >= 0) {
+    return idx;
+  }
+
+  struct InterferenceNode node;
+
+  node.pseudo = strdup(pseudo);
+  if (!node.pseudo) {
+    perror("strdup");
+    exit(1);
+  }
+
+  node.is_precolored = false;
+  node.precolored_reg = AX; /* unused for non-precolored nodes */
+  node.neighbors = (VecInt){0};
+
+  vec_insert(&graph->nodes, node);
+
+  return graph->nodes.len - 1;
+}
+
+static bool int_vec_contains(VecInt *vec, int value)
+{
+  for (int i = 0; i < vec->len; i++) {
+    if (vec->data[i] == value) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static char *precolored_reg_name(enum AsmRegister reg)
+{
+  switch (reg) {
+    case AX:
+      return "ax";
+    case BX:
+      return "bx";
+    case DX:
+      return "dx";
+    case CX:
+      return "cx";
+    case SI:
+      return "si";
+    case DI:
+      return "di";
+    case R8:
+      return "r8";
+    case R9:
+      return "r9";
+    case R12:
+      return "r12";
+    case R13:
+      return "r13";
+    case R14:
+      return "r14";
+    case R15:
+      return "r15";
+    case BP:
+      return "bp";
+    case SP:
+      return "sp";
+    default:
+      assert(0 && "unhandled precolored register");
+  }
+}
+
+static int interference_add_precolored_reg(struct InterferenceGraph *graph,
+                                           enum AsmRegister reg)
+{
+  char *name = precolored_reg_name(reg);
+  int idx = interference_node_index(graph, name);
+
+  if (idx >= 0) {
+    graph->nodes.data[idx].is_precolored = true;
+    graph->nodes.data[idx].precolored_reg = reg;
+    return idx;
+  }
+
+  struct InterferenceNode node;
+
+  node.pseudo = strdup(name);
+  if (!node.pseudo) {
+    perror("strdup");
+    exit(1);
+  }
+
+  node.is_precolored = true;
+  node.precolored_reg = reg;
+  node.neighbors = (VecInt){0};
+
+  vec_insert(&graph->nodes, node);
+
+  return graph->nodes.len - 1;
+}
+
+static void interference_add_edge_by_index(struct InterferenceGraph *graph,
+                                           int ai, int bi)
+{
+  if (ai == bi) {
+    return;
+  }
+
+  if (!int_vec_contains(&graph->nodes.data[ai].neighbors, bi)) {
+    vec_insert(&graph->nodes.data[ai].neighbors, bi);
+  }
+
+  if (!int_vec_contains(&graph->nodes.data[bi].neighbors, ai)) {
+    vec_insert(&graph->nodes.data[bi].neighbors, ai);
+  }
+}
+
+static void interference_add_edge(struct InterferenceGraph *graph, char *a,
+                                  char *b)
+{
+  int ai;
+  int bi;
+
+  if (strcmp(a, b) == 0) {
+    return;
+  }
+
+  ai = interference_add_node(graph, a);
+  bi = interference_add_node(graph, b);
+
+  interference_add_edge_by_index(graph, ai, bi);
+}
+
+static enum AsmRegister caller_saved_regs[] = {
+    AX, DX, CX, SI, DI, R8, R9,
+};
+
+#define NUM_CALLER_SAVED_REGS \
+  ((int) (sizeof(caller_saved_regs) / sizeof(caller_saved_regs[0])))
+
+static enum AsmRegister callee_saved_regs[] = {
+    BX, R12, R13, R14, R15,
+};
+
+#define NUM_CALLEE_SAVED_REGS \
+  ((int) (sizeof(callee_saved_regs) / sizeof(callee_saved_regs[0])))
+
+static void add_precolored_register_nodes(struct InterferenceGraph *graph)
+{
+  for (int i = 0; i < NUM_ALLOCATABLE_INT_REGS; i++) {
+    interference_add_precolored_reg(graph, allocatable_int_regs[i]);
+  }
+}
+
+static void add_call_clobber_interference(struct InterferenceGraph *graph,
+                                          struct InstrLiveness *lv)
+{
+  for (int i = 0; i < lv->live_after.len; i++) {
+    char *pseudo = lv->live_after.data[i];
+    int pseudo_idx = interference_add_node(graph, pseudo);
+
+    for (int r = 0; r < NUM_CALLER_SAVED_REGS; r++) {
+      int reg_idx =
+          interference_add_precolored_reg(graph, caller_saved_regs[r]);
+
+      interference_add_edge_by_index(graph, pseudo_idx, reg_idx);
+    }
+  }
+}
+
+static void interference_add_nodes_from_set(struct InterferenceGraph *graph,
+                                            VecPseudo *set)
+{
+  for (int i = 0; i < set->len; i++) {
+    interference_add_node(graph, set->data[i]);
+  }
+}
+
+static char *mov_pseudo_src(struct AsmInstr *instr)
+{
+  if (instr->kind != AsmInstr_MOV) {
+    return NULL;
+  }
+
+  if (instr->as.mov.src.kind != AsmOperand_PSEUDO) {
+    return NULL;
+  }
+
+  if (instr->as.mov.dst.kind != AsmOperand_PSEUDO) {
+    return NULL;
+  }
+
+  return instr->as.mov.src.as.pseudo;
+}
+
+static void add_interferences_for_instr(struct InterferenceGraph *graph,
+                                        struct AsmInstr *instr,
+                                        struct InstrLiveness *lv)
+{
+  VecPseudo live = {0};
+  char *move_src;
+
+  /*
+   * Make sure all mentioned pseudos become graph nodes, even if they
+   * end up having no interference edges.
+   */
+  interference_add_nodes_from_set(graph, &lv->use);
+  interference_add_nodes_from_set(graph, &lv->def);
+  interference_add_nodes_from_set(graph, &lv->live_before);
+  interference_add_nodes_from_set(graph, &lv->live_after);
+
+  pseudo_set_copy(&live, &lv->live_after);
+
+  /*
+   * Move special case:
+   *
+   *   mov src, dst
+   *
+   * Do not add dst -- src here, because later coalescing may want to
+   * merge src and dst and delete the move.
+   */
+  move_src = mov_pseudo_src(instr);
+  if (move_src) {
+    pseudo_set_remove(&live, move_src);
+  }
+
+  /*
+   * Every def interferes with everything live after the instruction.
+   */
+  for (int i = 0; i < lv->def.len; i++) {
+    char *defined = lv->def.data[i];
+
+    for (int j = 0; j < live.len; j++) {
+      char *live_pseudo = live.data[j];
+
+      interference_add_edge(graph, defined, live_pseudo);
+    }
+  }
+
+  pseudo_set_free(&live);
+}
+
+static struct InterferenceGraph build_interference_graph(
+    struct AsmFunction *fn, struct InstrLiveness *lv)
+{
+  struct InterferenceGraph graph = {0};
+
+  add_precolored_register_nodes(&graph);
+
+  for (int i = 0; i < fn->body.len; i++) {
+    add_interferences_for_instr(&graph, &fn->body.data[i], &lv[i]);
+
+    if (fn->body.data[i].kind == AsmInstr_CALL) {
+      add_call_clobber_interference(&graph, &lv[i]);
+    }
+  }
+
+  return graph;
+}
+
+static void print_interference_graph(struct InterferenceGraph *graph)
+{
+  printf("Interference graph:\n");
+
+  for (int i = 0; i < graph->nodes.len; i++) {
+    struct InterferenceNode *node = &graph->nodes.data[i];
+
+    if (node->is_precolored) {
+      printf("  %s [precolored]:", node->pseudo);
+    } else {
+      printf("  %s:", node->pseudo);
+    }
+
+    for (int j = 0; j < node->neighbors.len; j++) {
+      int neighbor_idx = node->neighbors.data[j];
+      printf(" %s", graph->nodes.data[neighbor_idx].pseudo);
+    }
+
+    printf("\n");
+  }
+}
+
+static void dump_interference_graph_dot(FILE *out,
+                                        struct InterferenceGraph *graph)
+{
+  fprintf(out, "graph interference {\n");
+  fprintf(out, "  graph [fontname=\"monospace\"];\n");
+  fprintf(out, "  node [shape=ellipse, fontname=\"monospace\"];\n");
+  fprintf(out, "  edge [fontname=\"monospace\"];\n\n");
+
+  /*
+   * Print nodes first, including isolated nodes.
+   */
+  for (int i = 0; i < graph->nodes.len; i++) {
+    fprintf(out, "  \"");
+    dot_escape(out, graph->nodes.data[i].pseudo);
+    fprintf(out, "\";\n");
+  }
+
+  fprintf(out, "\n");
+
+  /*
+   * Print each undirected edge once.
+   */
+  for (int i = 0; i < graph->nodes.len; i++) {
+    struct InterferenceNode *node = &graph->nodes.data[i];
+
+    for (int j = 0; j < node->neighbors.len; j++) {
+      int neighbor_idx = node->neighbors.data[j];
+
+      if (i > neighbor_idx) {
+        continue;
+      }
+
+      fprintf(out, "  \"");
+      dot_escape(out, node->pseudo);
+      fprintf(out, "\" -- \"");
+      dot_escape(out, graph->nodes.data[neighbor_idx].pseudo);
+      fprintf(out, "\";\n");
+    }
+  }
+
+  fprintf(out, "}\n");
+}
+
+static void write_interference_graph_dot(struct InterferenceGraph *graph,
+                                         const char *path)
+{
+  FILE *out = fopen(path, "w");
+
+  if (!out) {
+    perror("fopen");
+    return;
+  }
+
+  dump_interference_graph_dot(out, graph);
+
+  fclose(out);
+}
+
+static void free_interference_graph(struct InterferenceGraph *graph)
+{
+  for (int i = 0; i < graph->nodes.len; i++) {
+    free(graph->nodes.data[i].pseudo);
+    vec_free(&graph->nodes.data[i].neighbors);
+  }
+
+  vec_free(&graph->nodes);
+
+  graph->nodes.capacity = 0;
+  graph->nodes.len = 0;
+  graph->nodes.data = NULL;
+}
+
 static void regalloc_op_from_homes(struct AsmOperand *op, VecPseudoHome *homes,
                                    struct Map *map, int *used_stack_bytes)
 {
@@ -13206,45 +13764,1329 @@ static struct AsmInstr *regalloc_instr_from_homes(struct AsmInstr *instr,
   return instr;
 }
 
+struct SelectStackEntry {
+  int node_idx;
+  bool was_spill_candidate;
+};
+
+typedef Vector(struct SelectStackEntry) VecSelectStack;
+
+static int graph_degree_after_removal(struct InterferenceGraph *graph,
+                                      bool *removed, int node_idx)
+{
+  int degree = 0;
+  struct InterferenceNode *node = &graph->nodes.data[node_idx];
+
+  for (int i = 0; i < node->neighbors.len; i++) {
+    int neighbor_idx = node->neighbors.data[i];
+
+    if (!removed[neighbor_idx]) {
+      degree++;
+    }
+  }
+
+  return degree;
+}
+
+static int pick_low_degree_node(struct InterferenceGraph *graph, bool *removed,
+                                int k)
+{
+  for (int i = 0; i < graph->nodes.len; i++) {
+    if (removed[i]) {
+      continue;
+    }
+
+    if (graph_degree_after_removal(graph, removed, i) < k) {
+      return i;
+    }
+  }
+
+  return -1;
+}
+
+static int pick_spill_candidate(struct InterferenceGraph *graph, bool *removed)
+{
+  int best_idx = -1;
+  int best_degree = -1;
+
+  for (int i = 0; i < graph->nodes.len; i++) {
+    int degree;
+
+    if (removed[i]) {
+      continue;
+    }
+
+    degree = graph_degree_after_removal(graph, removed, i);
+
+    if (degree > best_degree) {
+      best_degree = degree;
+      best_idx = i;
+    }
+  }
+
+  return best_idx;
+}
+
+static bool choose_color_for_node(struct InterferenceGraph *graph,
+                                  VecPseudoHome *homes, int node_idx,
+                                  enum AsmRegister *out_reg)
+{
+  bool used[NUM_ALLOCATABLE_INT_REGS] = {0};
+  struct InterferenceNode *node = &graph->nodes.data[node_idx];
+
+  for (int i = 0; i < node->neighbors.len; i++) {
+    int neighbor_idx = node->neighbors.data[i];
+    struct InterferenceNode *neighbor = &graph->nodes.data[neighbor_idx];
+
+    if (neighbor->is_precolored) {
+      int reg_idx = allocatable_reg_index(neighbor->precolored_reg);
+
+      if (reg_idx >= 0) {
+        used[reg_idx] = true;
+      }
+
+      continue;
+    }
+
+    struct PseudoHome *neighbor_home = pseudo_home_get(homes, neighbor->pseudo);
+
+    /*
+     * If the neighbor is not colored yet, ignore it.
+     * If it spilled to stack, it does not occupy a register.
+     */
+    if (!neighbor_home || neighbor_home->kind != PSEUDO_HOME_REG) {
+      continue;
+    }
+
+    int reg_idx = allocatable_reg_index(neighbor_home->as.reg);
+    assert(reg_idx >= 0 && "colored with non-allocatable register");
+
+    used[reg_idx] = true;
+  }
+
+  for (int i = 0; i < NUM_ALLOCATABLE_INT_REGS; i++) {
+    if (!used[i]) {
+      *out_reg = allocatable_int_regs[i];
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static void assign_stack_home(VecPseudoHome *homes, VecPseudoType *types,
+                              struct Map *map, int *used_stack_bytes,
+                              char *pseudo)
+{
+  struct AsmType *asm_type;
+  int stack_offset;
+
+  if (pseudo_home_get(homes, pseudo)) {
+    return;
+  }
+
+  asm_type = pseudo_type_get(types, pseudo);
+  assert(asm_type && "spilled pseudo has no known AsmType");
+
+  stack_offset = get_offset(map, pseudo, *asm_type, used_stack_bytes);
+
+  pseudo_home_add_stack(homes, pseudo, stack_offset);
+}
+
+static VecPseudoHome color_interference_graph(struct InterferenceGraph *graph,
+                                              VecPseudoType *types,
+                                              VecPseudo *force_stack,
+                                              struct Map *map,
+                                              int *used_stack_bytes)
+{
+  VecPseudoHome homes = {0};
+  VecSelectStack select_stack = {0};
+
+  int k = NUM_ALLOCATABLE_INT_REGS;
+  int n = graph->nodes.len;
+  int remaining = n;
+
+  bool *removed = calloc(n, sizeof(*removed));
+  if (!removed) {
+    perror("calloc");
+    exit(1);
+  }
+
+  /*
+   * First, remove pseudos that cannot live in integer registers.
+   * They become stack homes immediately.
+   */
+  for (int i = 0; i < n; i++) {
+    char *pseudo = graph->nodes.data[i].pseudo;
+
+    if (graph->nodes.data[i].is_precolored) {
+      removed[i] = true;
+      remaining--;
+      continue;
+    }
+
+    struct AsmType *asm_type = pseudo_type_get(types, pseudo);
+
+    assert(asm_type && "interference node has no known AsmType");
+
+    if (force_stack && pseudo_set_contains(force_stack, pseudo)) {
+      assign_stack_home(&homes, types, map, used_stack_bytes, pseudo);
+      removed[i] = true;
+      remaining--;
+      continue;
+    }
+
+    if (!asm_type_can_live_in_int_reg(*asm_type)) {
+      assign_stack_home(&homes, types, map, used_stack_bytes, pseudo);
+      removed[i] = true;
+      remaining--;
+    }
+  }
+
+  /*
+   * Simplify phase.
+   *
+   * Repeatedly remove low-degree nodes. If none exists, choose a spill
+   * candidate and remove it optimistically.
+   */
+  while (remaining > 0) {
+    int node_idx;
+    bool was_spill_candidate = false;
+
+    node_idx = pick_low_degree_node(graph, removed, k);
+
+    if (node_idx < 0) {
+      node_idx = pick_spill_candidate(graph, removed);
+      was_spill_candidate = true;
+    }
+
+    assert(node_idx >= 0 && "no node available during coloring");
+
+    removed[node_idx] = true;
+    remaining--;
+
+    vec_insert(&select_stack, ((struct SelectStackEntry){
+                                  .node_idx = node_idx,
+                                  .was_spill_candidate = was_spill_candidate,
+                              }));
+  }
+
+  /*
+   * Select phase.
+   *
+   * Pop nodes and assign colors. Spill only if no color is available.
+   */
+  while (select_stack.len > 0) {
+    struct SelectStackEntry entry;
+    struct InterferenceNode *node;
+    enum AsmRegister reg;
+
+    entry = select_stack.data[--select_stack.len];
+    node = &graph->nodes.data[entry.node_idx];
+
+    if (pseudo_home_get(&homes, node->pseudo)) {
+      continue;
+    }
+
+    if (choose_color_for_node(graph, &homes, entry.node_idx, &reg)) {
+      pseudo_home_add_reg(&homes, node->pseudo, reg);
+    } else {
+      assign_stack_home(&homes, types, map, used_stack_bytes, node->pseudo);
+    }
+  }
+
+  free(removed);
+  vec_free(&select_stack);
+
+  return homes;
+}
+
+static void print_pseudo_homes(VecPseudoHome *homes)
+{
+  printf("Pseudo homes:\n");
+
+  for (int i = 0; i < homes->len; i++) {
+    struct PseudoHome *home = &homes->data[i];
+
+    printf("  %-20s -> ", home->pseudo);
+
+    if (home->kind == PSEUDO_HOME_REG) {
+      struct AsmOperand op = {
+          .kind = AsmOperand_REG,
+          .asm_type = (struct AsmType){.kind = AsmType_LONGWORD},
+          .as.reg = home->as.reg,
+      };
+
+      print_asm_operand(&op);
+      printf("\n");
+    } else {
+      printf("stack(%d)\n", home->as.stack_offset);
+    }
+  }
+}
+
+static void verify_coloring(struct InterferenceGraph *graph,
+                            VecPseudoHome *homes)
+{
+  for (int i = 0; i < graph->nodes.len; i++) {
+    struct InterferenceNode *a_node = &graph->nodes.data[i];
+
+    if (a_node->is_precolored) {
+      continue;
+    }
+
+    struct PseudoHome *ha = pseudo_home_get(homes, a_node->pseudo);
+
+    if (!ha || ha->kind != PSEUDO_HOME_REG) {
+      continue;
+    }
+
+    for (int j = 0; j < a_node->neighbors.len; j++) {
+      int neighbor_idx = a_node->neighbors.data[j];
+
+      if (i > neighbor_idx) {
+        continue;
+      }
+
+      struct InterferenceNode *b_node = &graph->nodes.data[neighbor_idx];
+
+      if (b_node->is_precolored) {
+        if (ha->as.reg == b_node->precolored_reg) {
+          fprintf(stderr,
+                  "register coloring bug: %s assigned clobbered/precolored "
+                  "register %s\n",
+                  a_node->pseudo, b_node->pseudo);
+          abort();
+        }
+
+        continue;
+      }
+
+      struct PseudoHome *hb = pseudo_home_get(homes, b_node->pseudo);
+
+      if (!hb || hb->kind != PSEUDO_HOME_REG) {
+        continue;
+      }
+
+      if (ha->as.reg == hb->as.reg) {
+        fprintf(
+            stderr,
+            "register coloring bug: %s and %s both assigned same register\n",
+            a_node->pseudo, b_node->pseudo);
+        abort();
+      }
+    }
+  }
+}
+
+struct Move {
+  int src_idx;
+  int dst_idx;
+};
+
+typedef Vector(struct Move) VecMove;
+
+static char *move_node_name(struct InterferenceGraph *graph, int idx)
+{
+  assert(idx >= 0 && idx < graph->nodes.len);
+  return graph->nodes.data[idx].pseudo;
+}
+
+static bool interference_has_edge_idx(struct InterferenceGraph *graph,
+                                      int a_idx, int b_idx)
+{
+  if (a_idx < 0 || b_idx < 0) {
+    return false;
+  }
+
+  return int_vec_contains(&graph->nodes.data[a_idx].neighbors, b_idx);
+}
+
+static bool move_operand_node(struct InterferenceGraph *graph,
+                              struct AsmOperand *op, int *out_idx)
+{
+  if (op->kind == AsmOperand_PSEUDO) {
+    *out_idx = interference_node_index(graph, op->as.pseudo);
+    return *out_idx >= 0;
+  }
+
+  if (op->kind == AsmOperand_REG) {
+    char *name = precolored_reg_name(op->as.reg);
+    *out_idx = interference_node_index(graph, name);
+    return *out_idx >= 0;
+  }
+
+  return false;
+}
+
+static bool is_pseudo_to_pseudo_move(struct AsmInstr *instr, char **out_src,
+                                     char **out_dst)
+{
+  if (instr->kind != AsmInstr_MOV) {
+    return false;
+  }
+
+  if (instr->as.mov.src.kind != AsmOperand_PSEUDO) {
+    return false;
+  }
+
+  if (instr->as.mov.dst.kind != AsmOperand_PSEUDO) {
+    return false;
+  }
+
+  *out_src = instr->as.mov.src.as.pseudo;
+  *out_dst = instr->as.mov.dst.as.pseudo;
+
+  if (strcmp(*out_src, *out_dst) == 0) {
+    return false;
+  }
+
+  return true;
+}
+
+static VecMove collect_moves_from_graph(struct AsmFunction *fn,
+                                        struct InterferenceGraph *graph)
+{
+  VecMove moves = {0};
+
+  for (int i = 0; i < fn->body.len; i++) {
+    struct AsmInstr *instr = &fn->body.data[i];
+    int src_idx;
+    int dst_idx;
+
+    if (instr->kind != AsmInstr_MOV) {
+      continue;
+    }
+
+    if (!move_operand_node(graph, &instr->as.mov.src, &src_idx)) {
+      continue;
+    }
+
+    if (!move_operand_node(graph, &instr->as.mov.dst, &dst_idx)) {
+      continue;
+    }
+
+    if (src_idx == dst_idx) {
+      continue;
+    }
+
+    vec_insert(&moves, ((struct Move){
+                           .src_idx = src_idx,
+                           .dst_idx = dst_idx,
+                       }));
+  }
+
+  return moves;
+}
+
+static void print_moves(struct InterferenceGraph *graph, VecMove *moves)
+{
+  printf("Moves:\n");
+
+  for (int i = 0; i < moves->len; i++) {
+    int src = moves->data[i].src_idx;
+    int dst = moves->data[i].dst_idx;
+
+    printf("  %s -> %s\n", move_node_name(graph, src),
+           move_node_name(graph, dst));
+  }
+}
+
+static void free_moves(VecMove *moves)
+{
+  vec_free(moves);
+
+  moves->capacity = 0;
+  moves->len = 0;
+  moves->data = NULL;
+}
+
+static void dump_moves_dot(FILE *out, struct InterferenceGraph *graph,
+                           VecMove *moves)
+{
+  fprintf(out, "digraph moves {\n");
+  fprintf(out, "  graph [fontname=\"monospace\"];\n");
+  fprintf(out, "  node [shape=ellipse, fontname=\"monospace\"];\n");
+  fprintf(out, "  edge [fontname=\"monospace\"];\n\n");
+
+  for (int i = 0; i < moves->len; i++) {
+    int src = moves->data[i].src_idx;
+    int dst = moves->data[i].dst_idx;
+
+    fprintf(out, "  \"");
+    dot_escape(out, move_node_name(graph, src));
+    fprintf(out, "\" -> \"");
+    dot_escape(out, move_node_name(graph, dst));
+    fprintf(out, "\" [label=\"mov\"];\n");
+  }
+
+  fprintf(out, "}\n");
+}
+
+static void write_moves_dot(struct InterferenceGraph *graph, VecMove *moves,
+                            const char *path)
+{
+  FILE *out = fopen(path, "w");
+
+  if (!out) {
+    perror("fopen");
+    return;
+  }
+
+  dump_moves_dot(out, graph, moves);
+
+  fclose(out);
+}
+
+static bool is_same_reg_operand(struct AsmOperand *a, struct AsmOperand *b)
+{
+  return a->kind == AsmOperand_REG && b->kind == AsmOperand_REG &&
+         a->as.reg == b->as.reg;
+}
+
+static bool is_redundant_mov(struct AsmInstr *instr)
+{
+  return instr->kind == AsmInstr_MOV &&
+         is_same_reg_operand(&instr->as.mov.src, &instr->as.mov.dst);
+}
+
+static bool interference_has_edge(struct InterferenceGraph *graph, char *a,
+                                  char *b)
+{
+  int ai = interference_node_index(graph, a);
+  int bi = interference_node_index(graph, b);
+
+  if (ai < 0 || bi < 0) {
+    return false;
+  }
+
+  return int_vec_contains(&graph->nodes.data[ai].neighbors, bi);
+}
+
+static int interference_degree(struct InterferenceGraph *graph, char *pseudo)
+{
+  int idx = interference_node_index(graph, pseudo);
+
+  if (idx < 0) {
+    return 0;
+  }
+
+  return graph->nodes.data[idx].neighbors.len;
+}
+
+static bool briggs_can_coalesce(struct InterferenceGraph *graph, char *a,
+                                char *b, int k)
+{
+  int ai = interference_node_index(graph, a);
+  int bi = interference_node_index(graph, b);
+  VecInt neighbors = {0};
+  int high_degree_count = 0;
+
+  assert(ai >= 0);
+  assert(bi >= 0);
+
+  for (int i = 0; i < graph->nodes.data[ai].neighbors.len; i++) {
+    int n = graph->nodes.data[ai].neighbors.data[i];
+
+    if (n != bi) {
+      int_set_add(&neighbors, n);
+    }
+  }
+
+  for (int i = 0; i < graph->nodes.data[bi].neighbors.len; i++) {
+    int n = graph->nodes.data[bi].neighbors.data[i];
+
+    if (n != ai) {
+      int_set_add(&neighbors, n);
+    }
+  }
+
+  for (int i = 0; i < neighbors.len; i++) {
+    int n = neighbors.data[i];
+
+    if (graph->nodes.data[n].neighbors.len >= k) {
+      high_degree_count++;
+    }
+  }
+
+  vec_free(&neighbors);
+
+  return high_degree_count < k;
+}
+
+static int aliased_index_for_orig_rep(struct InterferenceGraph *aliased,
+                                      struct InterferenceGraph *orig,
+                                      int orig_rep_idx)
+{
+  char *name = orig->nodes.data[orig_rep_idx].pseudo;
+
+  return interference_node_index(aliased, name);
+}
+
+static int uf_find(int *parent, int x)
+{
+  if (parent[x] != x) {
+    parent[x] = uf_find(parent, parent[x]);
+  }
+
+  return parent[x];
+}
+
+static void uf_union(int *parent, int a, int b)
+{
+  int ra = uf_find(parent, a);
+  int rb = uf_find(parent, b);
+
+  if (ra != rb) {
+    parent[rb] = ra;
+  }
+}
+
+static bool george_ok(struct InterferenceGraph *graph, int t_idx, int r_idx,
+                      int k)
+{
+  struct InterferenceNode *t = &graph->nodes.data[t_idx];
+
+  if (t->is_precolored) {
+    return true;
+  }
+
+  if (t->neighbors.len < k) {
+    return true;
+  }
+
+  if (interference_has_edge_idx(graph, t_idx, r_idx)) {
+    return true;
+  }
+
+  return false;
+}
+
+static bool george_can_coalesce(struct InterferenceGraph *graph, int pseudo_idx,
+                                int precolored_idx, int k)
+{
+  assert(!graph->nodes.data[pseudo_idx].is_precolored);
+  assert(graph->nodes.data[precolored_idx].is_precolored);
+
+  for (int i = 0; i < graph->nodes.data[pseudo_idx].neighbors.len; i++) {
+    int t_idx = graph->nodes.data[pseudo_idx].neighbors.data[i];
+
+    if (!george_ok(graph, t_idx, precolored_idx, k)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+static void uf_union_into(int *parent, int keep, int discard)
+{
+  int r_keep = uf_find(parent, keep);
+  int r_discard = uf_find(parent, discard);
+
+  if (r_keep != r_discard) {
+    parent[r_discard] = r_keep;
+  }
+}
+
+static void debug_briggs_moves(struct InterferenceGraph *graph, VecMove *moves)
+{
+  int k = NUM_ALLOCATABLE_INT_REGS;
+
+  printf("Move coalescing decisions:\n");
+
+  for (int i = 0; i < moves->len; i++) {
+    int src_idx = moves->data[i].src_idx;
+    int dst_idx = moves->data[i].dst_idx;
+
+    char *src = move_node_name(graph, src_idx);
+    char *dst = move_node_name(graph, dst_idx);
+
+    bool src_pre = graph->nodes.data[src_idx].is_precolored;
+    bool dst_pre = graph->nodes.data[dst_idx].is_precolored;
+
+    if (interference_has_edge_idx(graph, src_idx, dst_idx)) {
+      printf("  reject %-20s -> %-20s : constrained\n", src, dst);
+      continue;
+    }
+
+    if (src_pre && dst_pre) {
+      printf("  reject %-20s -> %-20s : both precolored\n", src, dst);
+      continue;
+    }
+
+    if (src_pre || dst_pre) {
+      int pre_idx = src_pre ? src_idx : dst_idx;
+      int pseudo_idx = src_pre ? dst_idx : src_idx;
+
+      if (george_can_coalesce(graph, pseudo_idx, pre_idx, k)) {
+        printf("  accept %-20s -> %-20s : George OK\n", src, dst);
+      } else {
+        printf("  reject %-20s -> %-20s : George risky\n", src, dst);
+      }
+
+      continue;
+    }
+
+    if (briggs_can_coalesce(graph, src, dst, k)) {
+      printf("  accept %-20s -> %-20s : Briggs OK\n", src, dst);
+    } else {
+      printf("  reject %-20s -> %-20s : Briggs risky\n", src, dst);
+    }
+  }
+}
+
+static bool asm_types_coalesce_compatible(struct AsmType a, struct AsmType b)
+{
+  return a.kind == b.kind && asm_type_can_live_in_int_reg(a) &&
+         asm_type_can_live_in_int_reg(b);
+}
+
+static struct InterferenceGraph build_aliased_interference_graph(
+    struct InterferenceGraph *orig, int *parent)
+{
+  struct InterferenceGraph out = {0};
+
+  /*
+   * Add representative nodes.
+   */
+  for (int i = 0; i < orig->nodes.len; i++) {
+    int ri = orig->nodes.data[i].is_precolored ? i : uf_find(parent, i);
+
+    if (orig->nodes.data[ri].is_precolored) {
+      interference_add_precolored_reg(&out,
+                                      orig->nodes.data[ri].precolored_reg);
+    } else {
+      interference_add_node(&out, orig->nodes.data[ri].pseudo);
+    }
+  }
+
+  /*
+   * Add edges between representatives.
+   */
+  for (int i = 0; i < orig->nodes.len; i++) {
+    int ri = orig->nodes.data[i].is_precolored ? i : uf_find(parent, i);
+
+    for (int j = 0; j < orig->nodes.data[i].neighbors.len; j++) {
+      int n = orig->nodes.data[i].neighbors.data[j];
+      int rn = orig->nodes.data[n].is_precolored ? n : uf_find(parent, n);
+
+      if (ri == rn) {
+        continue;
+      }
+
+      if (orig->nodes.data[ri].is_precolored &&
+          orig->nodes.data[rn].is_precolored) {
+        int ai = interference_add_precolored_reg(
+            &out, orig->nodes.data[ri].precolored_reg);
+        int bi = interference_add_precolored_reg(
+            &out, orig->nodes.data[rn].precolored_reg);
+
+        interference_add_edge_by_index(&out, ai, bi);
+      } else if (orig->nodes.data[ri].is_precolored) {
+        int ai = interference_add_precolored_reg(
+            &out, orig->nodes.data[ri].precolored_reg);
+        int bi = interference_add_node(&out, orig->nodes.data[rn].pseudo);
+
+        interference_add_edge_by_index(&out, ai, bi);
+      } else if (orig->nodes.data[rn].is_precolored) {
+        int ai = interference_add_node(&out, orig->nodes.data[ri].pseudo);
+        int bi = interference_add_precolored_reg(
+            &out, orig->nodes.data[rn].precolored_reg);
+
+        interference_add_edge_by_index(&out, ai, bi);
+      } else {
+        interference_add_edge(&out, orig->nodes.data[ri].pseudo,
+                              orig->nodes.data[rn].pseudo);
+      }
+    }
+  }
+
+  return out;
+}
+
+static int *coalesce_briggs_george(struct InterferenceGraph *orig,
+                                   VecPseudoType *types, VecMove *moves)
+{
+  int n = orig->nodes.len;
+  int *parent = malloc(sizeof(*parent) * n);
+
+  if (!parent) {
+    perror("malloc");
+    exit(1);
+  }
+
+  for (int i = 0; i < n; i++) {
+    parent[i] = i;
+  }
+
+  bool changed = true;
+
+  while (changed) {
+    changed = false;
+
+    struct InterferenceGraph aliased =
+        build_aliased_interference_graph(orig, parent);
+
+    for (int i = 0; i < moves->len; i++) {
+      int src_idx = moves->data[i].src_idx;
+      int dst_idx = moves->data[i].dst_idx;
+
+      int src_rep_idx = uf_find(parent, src_idx);
+      int dst_rep_idx = uf_find(parent, dst_idx);
+
+      if (src_rep_idx == dst_rep_idx) {
+        continue;
+      }
+
+      int src_alias_idx =
+          aliased_index_for_orig_rep(&aliased, orig, src_rep_idx);
+      int dst_alias_idx =
+          aliased_index_for_orig_rep(&aliased, orig, dst_rep_idx);
+
+      if (src_alias_idx < 0 || dst_alias_idx < 0) {
+        continue;
+      }
+
+      bool src_pre = orig->nodes.data[src_rep_idx].is_precolored;
+      bool dst_pre = orig->nodes.data[dst_rep_idx].is_precolored;
+
+      /*
+       * If they already interfere, the move is constrained.
+       */
+      if (interference_has_edge_idx(&aliased, src_alias_idx, dst_alias_idx)) {
+        continue;
+      }
+
+      /*
+       * precolored <-> precolored: never coalesce.
+       */
+      if (src_pre && dst_pre) {
+        continue;
+      }
+
+      /*
+       * George: pseudo <-> precolored.
+       */
+      if (src_pre || dst_pre) {
+        int pre_orig_idx = src_pre ? src_rep_idx : dst_rep_idx;
+        int pseudo_orig_idx = src_pre ? dst_rep_idx : src_rep_idx;
+
+        int pre_alias_idx = src_pre ? src_alias_idx : dst_alias_idx;
+        int pseudo_alias_idx = src_pre ? dst_alias_idx : src_alias_idx;
+
+        if (george_can_coalesce(&aliased, pseudo_alias_idx, pre_alias_idx,
+                                NUM_ALLOCATABLE_INT_REGS)) {
+#ifdef DEBUG_COALESCE
+          printf("george coalesce %s <- %s\n",
+                 orig->nodes.data[pre_orig_idx].pseudo,
+                 orig->nodes.data[pseudo_orig_idx].pseudo);
+#endif
+
+          /*
+           * Keep the precolored representative.
+           */
+          uf_union_into(parent, pre_orig_idx, pseudo_orig_idx);
+          changed = true;
+          break;
+        }
+
+        continue;
+      }
+
+      /*
+       * Briggs: pseudo <-> pseudo.
+       */
+      {
+        char *src_rep = orig->nodes.data[src_rep_idx].pseudo;
+        char *dst_rep = orig->nodes.data[dst_rep_idx].pseudo;
+
+        struct AsmType *src_type = pseudo_type_get(types, src_rep);
+        struct AsmType *dst_type = pseudo_type_get(types, dst_rep);
+
+        assert(src_type && dst_type);
+
+        if (!asm_types_coalesce_compatible(*src_type, *dst_type)) {
+          continue;
+        }
+
+        if (briggs_can_coalesce(&aliased, src_rep, dst_rep,
+                                NUM_ALLOCATABLE_INT_REGS)) {
+#ifdef DEBUG_COALESCE
+          printf("briggs coalesce %s <- %s\n", src_rep, dst_rep);
+#endif
+
+          uf_union_into(parent, src_rep_idx, dst_rep_idx);
+          changed = true;
+          break;
+        }
+      }
+    }
+
+    free_interference_graph(&aliased);
+  }
+
+  return parent;
+}
+
+static VecPseudoHome expand_coalesced_homes(struct InterferenceGraph *orig,
+                                            int *parent,
+                                            VecPseudoHome *coalesced_homes)
+{
+  VecPseudoHome homes = {0};
+
+  for (int i = 0; i < orig->nodes.len; i++) {
+    if (orig->nodes.data[i].is_precolored) {
+      continue;
+    }
+
+    int rep_idx = uf_find(parent, i);
+
+    char *pseudo = orig->nodes.data[i].pseudo;
+
+    if (orig->nodes.data[rep_idx].is_precolored) {
+      pseudo_home_add_reg(&homes, pseudo,
+                          orig->nodes.data[rep_idx].precolored_reg);
+      continue;
+    }
+
+    char *rep = orig->nodes.data[rep_idx].pseudo;
+    struct PseudoHome *rep_home = pseudo_home_get(coalesced_homes, rep);
+
+    assert(rep_home && "coalesced representative has no home");
+
+    if (rep_home->kind == PSEUDO_HOME_REG) {
+      pseudo_home_add_reg(&homes, pseudo, rep_home->as.reg);
+    } else {
+      pseudo_home_add_stack(&homes, pseudo, rep_home->as.stack_offset);
+    }
+  }
+
+  return homes;
+}
+
+static bool same_asm_operand(struct AsmOperand *a, struct AsmOperand *b)
+{
+  if (a->kind != b->kind) {
+    return false;
+  }
+
+  switch (a->kind) {
+    case AsmOperand_REG:
+      return a->as.reg == b->as.reg;
+
+    case AsmOperand_STACK:
+      return a->as.stack_offset == b->as.stack_offset;
+
+    case AsmOperand_IMM:
+      return a->as.imm == b->as.imm;
+
+    case AsmOperand_PSEUDO:
+      return strcmp(a->as.pseudo, b->as.pseudo) == 0;
+
+    default:
+      return false;
+  }
+}
+
+static void remove_redundant_moves(struct AsmFunction *fn)
+{
+  int out = 0;
+
+  for (int i = 0; i < fn->body.len; i++) {
+    struct AsmInstr *instr = &fn->body.data[i];
+
+    if (instr->kind == AsmInstr_MOV &&
+        same_asm_operand(&instr->as.mov.src, &instr->as.mov.dst)) {
+      continue;
+    }
+
+    fn->body.data[out++] = fn->body.data[i];
+  }
+
+  fn->body.len = out;
+}
+
+static bool instr_is_call(struct AsmInstr *instr)
+{
+  return instr->kind == AsmInstr_CALL;
+}
+
+static bool pseudo_set_any_contains(VecPseudo *set, char *pseudo)
+{
+  return pseudo_set_contains(set, pseudo);
+}
+
+static VecPseudo collect_call_live_pseudos(struct AsmFunction *fn,
+                                           struct InstrLiveness *lv)
+{
+  VecPseudo call_live = {0};
+
+  for (int i = 0; i < fn->body.len; i++) {
+    if (!instr_is_call(&fn->body.data[i])) {
+      continue;
+    }
+
+    for (int j = 0; j < lv[i].live_after.len; j++) {
+      pseudo_set_add(&call_live, lv[i].live_after.data[j]);
+    }
+  }
+
+  return call_live;
+}
+
+static bool is_callee_saved_reg(enum AsmRegister reg)
+{
+  for (int i = 0; i < NUM_CALLEE_SAVED_REGS; i++) {
+    if (callee_saved_regs[i] == reg) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static bool reg_vec_contains(VecInt *regs, enum AsmRegister reg)
+{
+  for (int i = 0; i < regs->len; i++) {
+    if (regs->data[i] == reg) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static void reg_vec_add(VecInt *regs, enum AsmRegister reg)
+{
+  if (!reg_vec_contains(regs, reg)) {
+    vec_insert(regs, reg);
+  }
+}
+
+static VecInt collect_used_callee_saved_regs(VecPseudoHome *homes)
+{
+  VecInt used = {0};
+
+  for (int i = 0; i < homes->len; i++) {
+    struct PseudoHome *home = &homes->data[i];
+
+    if (home->kind != PSEUDO_HOME_REG) {
+      continue;
+    }
+
+    if (is_callee_saved_reg(home->as.reg)) {
+      reg_vec_add(&used, home->as.reg);
+    }
+  }
+
+  return used;
+}
+
+static struct AsmOperand make_reg_operand(enum AsmRegister reg,
+                                          struct AsmType asm_type)
+{
+  return (struct AsmOperand){
+      .kind = AsmOperand_REG,
+      .asm_type = asm_type,
+      .as.reg = reg,
+  };
+}
+
+static struct AsmInstr make_push_reg(enum AsmRegister reg)
+{
+  return (struct AsmInstr){
+      .kind = AsmInstr_PUSH,
+      .asm_type = (struct AsmType){.kind = AsmType_QUADWORD},
+      .as.push =
+          {
+              .op = make_reg_operand(
+                  reg, (struct AsmType){.kind = AsmType_QUADWORD}),
+          },
+  };
+}
+
+static struct AsmInstr make_pop_reg(enum AsmRegister reg)
+{
+  return (struct AsmInstr){
+      .kind = AsmInstr_POP,
+      .asm_type = (struct AsmType){.kind = AsmType_QUADWORD},
+      .as.pop =
+          {
+              .op = make_reg_operand(
+                  reg, (struct AsmType){.kind = AsmType_QUADWORD}),
+          },
+  };
+}
+
+static bool is_reg_operand(struct AsmOperand *op, enum AsmRegister reg)
+{
+  return op->kind == AsmOperand_REG && op->as.reg == reg;
+}
+
+static bool is_restore_sp_from_bp(struct AsmInstr *instr)
+{
+  return instr->kind == AsmInstr_MOV &&
+         is_reg_operand(&instr->as.mov.src, BP) &&
+         is_reg_operand(&instr->as.mov.dst, SP);
+}
+
+static bool is_pop_bp(struct AsmInstr *instr)
+{
+  return instr->kind == AsmInstr_POP && is_reg_operand(&instr->as.pop.op, BP);
+}
+
+static bool is_stack_alloc_instr(struct AsmInstr *instr)
+{
+  return instr->kind == AsmInstr_BIN &&
+         instr->as.binary.kind == AsmInstrBinary_SUB &&
+         instr->as.binary.lhs.kind == AsmOperand_IMM &&
+         is_reg_operand(&instr->as.binary.rhs, SP);
+}
+
+static void save_restore_callee_saved_regs(struct AsmFunction *fn,
+                                           VecInt *used_regs)
+{
+  if (used_regs->len == 0) {
+    return;
+  }
+
+  VecAsmInstr new_body = {0};
+
+  for (int i = 0; i < fn->body.len; i++) {
+    /*
+     * Before every epilogue `mov %rbp, %rsp`, restore in reverse order.
+     */
+    if (is_restore_sp_from_bp(&fn->body.data[i])) {
+      for (int r = used_regs->len - 1; r >= 0; r--) {
+        vec_insert(&new_body,
+                   make_pop_reg((enum AsmRegister) used_regs->data[r]));
+      }
+    }
+
+    vec_insert(&new_body, fn->body.data[i]);
+
+    /*
+     * After stack allocation, save all used callee-saved registers.
+     */
+    if (is_stack_alloc_instr(&fn->body.data[i])) {
+      for (int r = 0; r < used_regs->len; r++) {
+        vec_insert(&new_body,
+                   make_push_reg((enum AsmRegister) used_regs->data[r]));
+      }
+    }
+  }
+
+  vec_free(&fn->body);
+  fn->body = new_body;
+}
+
+static void patch_stack_alloc(struct AsmFunction *fn, int stack_size)
+{
+  for (int i = 0; i < fn->body.len; i++) {
+    struct AsmInstr *instr = &fn->body.data[i];
+
+    if (instr->kind == AsmInstr_BIN &&
+        instr->as.binary.kind == AsmInstrBinary_SUB &&
+        instr->as.binary.lhs.kind == AsmOperand_IMM &&
+        is_reg_operand(&instr->as.binary.rhs, SP)) {
+      instr->as.binary.lhs.as.imm = stack_size;
+      return;
+    }
+  }
+
+  assert(0 && "could not find prologue stack allocation");
+}
+
 struct AsmFunction *regalloc_fn(struct AsmFunction *fn, struct Map *map,
-                                int *used_stack_bytes)
+                                int *used_stack_bytes,
+                                int *used_callee_saved_count)
 {
   struct InstrLiveness *lv;
+  int original_instr_count;
+
   VecPseudoType types;
-  VecLiveInterval intervals;
+  VecMove moves;
   VecPseudoHome homes;
+  VecPseudoHome coalesced_homes;
+  VecInt used_callee_saved;
 
-  lv = compute_liveness_cfg(fn);
+  struct InterferenceGraph interference;
+  struct InterferenceGraph coalesced_graph;
 
-  #ifdef DEBUG_CFG_DOT
-{
-  char *path = mkstr("%s.cfg.dot", fn->name);
-  write_cfg_dot(fn, lv, path);
-  free(path);
-}
-#endif
-
-  types = collect_pseudo_types(fn);
-
-  intervals = build_live_intervals(lv, fn->body.len, &types);
-  sort_live_intervals(&intervals);
+  int *coalesce_parent;
 
 #ifdef DEBUG_INTERVALS
-  print_live_intervals(&intervals);
+  VecLiveInterval intervals;
 #endif
 
-  homes = allocate_pseudo_homes(&intervals, map, used_stack_bytes, fn);
+  /*
+   * 1. Compute liveness on the original pseudo-based asm.
+   *
+   * Save this because later passes mutate fn->body.len.
+   */
+  original_instr_count = fn->body.len;
+  lv = compute_liveness_cfg(fn);
 
+  /*
+   * 2. Remember pseudo types before operands are rewritten.
+   */
+  types = collect_pseudo_types(fn);
+
+  /*
+   * 3. Build original interference graph.
+   *
+   * This should include precolored register nodes and call-clobber edges.
+   */
+  interference = build_interference_graph(fn, lv);
+
+#ifdef DEBUG_INTERFERENCE
+  print_interference_graph(&interference);
+#endif
+
+#ifdef DEBUG_INTERFERENCE_DOT
+  {
+    char *path = mkstr("%s.interference.dot", fn->name);
+    write_interference_graph_dot(&interference, path);
+    free(path);
+  }
+#endif
+
+  /*
+   * 4. Collect pseudo-to-pseudo moves for Briggs coalescing.
+   */
+  moves = collect_moves_from_graph(fn, &interference);
+
+#ifdef DEBUG_MOVES
+  print_moves(&interference, &moves);
+#endif
+
+#ifdef DEBUG_MOVES_DOT
+  {
+    char *path = mkstr("%s.moves.dot", fn->name);
+    write_moves_dot(&interference, &moves, path);
+    free(path);
+  }
+#endif
+
+#ifdef DEBUG_BRIGGS
+  debug_briggs_moves(&interference, &moves);
+#endif
+
+#ifdef DEBUG_INTERVALS
+  intervals = build_live_intervals(lv, original_instr_count, &types);
+  sort_live_intervals(&intervals);
+  print_live_intervals(&intervals);
+  free_live_intervals(&intervals);
+#endif
+
+  /*
+   * 5. Conservative Briggs coalescing.
+   */
+  coalesce_parent = coalesce_briggs_george(&interference, &types, &moves);
+
+  /*
+   * 6. Build the coalesced interference graph.
+   */
+  coalesced_graph =
+      build_aliased_interference_graph(&interference, coalesce_parent);
+
+#ifdef DEBUG_COALESCED_INTERFERENCE
+  printf("Coalesced ");
+  print_interference_graph(&coalesced_graph);
+#endif
+
+#ifdef DEBUG_COALESCED_INTERFERENCE_DOT
+  {
+    char *path = mkstr("%s.coalesced.interference.dot", fn->name);
+    write_interference_graph_dot(&coalesced_graph, path);
+    free(path);
+  }
+#endif
+
+  /*
+   * 7. Color the coalesced graph.
+   *
+   * The force_stack argument is NULL because call-live handling now happens
+   * through precolored call-clobber interference edges.
+   */
+  coalesced_homes = color_interference_graph(&coalesced_graph, &types, NULL,
+                                             map, used_stack_bytes);
+
+  /*
+   * 8. Expand coalesced homes back to every original pseudo.
+   */
+  homes =
+      expand_coalesced_homes(&interference, coalesce_parent, &coalesced_homes);
+
+  /*
+   * 9. Verify coloring against the original graph.
+   */
+  verify_coloring(&interference, &homes);
+
+#ifdef DEBUG_HOMES
+  print_pseudo_homes(&homes);
+#endif
+
+  /*
+   * 10. Track callee-saved registers used by assigned homes.
+   *
+   * regalloc() needs the count so it can patch the prologue stack allocation
+   * with alignment that accounts for callee-saved PUSH instructions.
+   */
+  used_callee_saved = collect_used_callee_saved_regs(&homes);
+  *used_callee_saved_count = used_callee_saved.len;
+
+  /*
+   * 11. Rewrite pseudos to their assigned homes.
+   */
   for (int i = 0; i < fn->body.len; i++) {
     regalloc_instr_from_homes(&fn->body.data[i], &homes, map, used_stack_bytes);
   }
 
+  /*
+   * 12. Cleanup generated asm and insert callee-saved save/restore.
+   *
+   * These mutate fn->body.len, so `free_liveness` must use
+   * original_instr_count, not fn->body.len.
+   */
+  remove_redundant_moves(fn);
+  save_restore_callee_saved_regs(fn, &used_callee_saved);
+
+  /*
+   * 13. Cleanup.
+   */
+  vec_free(&used_callee_saved);
+
   free_pseudo_homes(&homes);
-  free_live_intervals(&intervals);
+  free_pseudo_homes(&coalesced_homes);
+
+  free_interference_graph(&coalesced_graph);
+  free_interference_graph(&interference);
+
+  free(coalesce_parent);
+
+  free_moves(&moves);
   free_pseudo_types(&types);
-  free_liveness(lv, fn->body.len);
+
+  free_liveness(lv, original_instr_count);
 
   return fn;
+}
+
+static int compute_frame_stack_adjustment(int local_stack_bytes,
+                                          int used_callee_saved_count)
+{
+  int callee_saved_bytes = 8 * used_callee_saved_count;
+  int frame_bytes = local_stack_bytes + callee_saved_bytes;
+
+  int padding = frame_bytes % 16 != 0 ? 16 - (frame_bytes % 16) : 0;
+
+  /*
+   * Only return the amount for `subq $N, %rsp`.
+   * The callee-saved bytes are created by actual PUSH instructions.
+   */
+  return local_stack_bytes + padding;
 }
 
 struct AsmProgram *regalloc(struct AsmProgram *asmcode)
@@ -13255,11 +15097,14 @@ struct AsmProgram *regalloc(struct AsmProgram *asmcode)
     map->next = NULL;
 
     int used_stack_bytes = 0;
+    int used_callee_saved_count = 0;
 
-    regalloc_fn(&asmcode->funcs.data[i], map, &used_stack_bytes);
+    regalloc_fn(&asmcode->funcs.data[i], map, &used_stack_bytes,
+                &used_callee_saved_count);
 
-    int stack_size = align_up_int(used_stack_bytes, 16);
-    asmcode->funcs.data[i].body.data[2].as.binary.lhs.as.imm = stack_size;
+    int stack_size = compute_frame_stack_adjustment(used_stack_bytes,
+                                                    used_callee_saved_count);
+    patch_stack_alloc(&asmcode->funcs.data[i], stack_size);
   }
   return asmcode;
 }
@@ -13609,6 +15454,9 @@ void emit_operand(FILE *f, struct AsmOperand *op)
         case AX:
           fprintf(f, "%%rax");
           break;
+        case BX:
+          fprintf(f, "%%rbx");
+          break;
         case DI:
           fprintf(f, "%%rdi");
           break;
@@ -13629,6 +15477,21 @@ void emit_operand(FILE *f, struct AsmOperand *op)
           break;
         case R10:
           fprintf(f, "%%r10");
+          break;
+        case R11:
+          fprintf(f, "%%r11");
+          break;
+        case R12:
+          fprintf(f, "%%r12");
+          break;
+        case R13:
+          fprintf(f, "%%r13");
+          break;
+        case R14:
+          fprintf(f, "%%r14");
+          break;
+        case R15:
+          fprintf(f, "%%r15");
           break;
         case BP:
           fprintf(f, "%%rbp");
@@ -13737,6 +15600,30 @@ void emit_operand(FILE *f, struct AsmOperand *op)
             }
             case AsmType_QUADWORD: {
               fprintf(f, "%%rax");
+              break;
+            }
+            default:
+              assert(0);
+          }
+
+          break;
+        }
+        case BX: {
+          switch (op->asm_type.kind) {
+            case AsmType_BYTE: {
+              fprintf(f, "%%bl");
+              break;
+            }
+            case AsmType_WORD: {
+              fprintf(f, "%%bx");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              fprintf(f, "%%ebx");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              fprintf(f, "%%rbx");
               break;
             }
             default:
@@ -13899,6 +15786,121 @@ void emit_operand(FILE *f, struct AsmOperand *op)
             }
             case AsmType_QUADWORD: {
               fprintf(f, "%%r10");
+              break;
+            }
+            default:
+              assert(0);
+          }
+          break;
+        }
+        case R11: {
+          switch (op->asm_type.kind) {
+            case AsmType_BYTE: {
+              fprintf(f, "%%r11b");
+              break;
+            }
+            case AsmType_WORD: {
+              fprintf(f, "%%r11w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              fprintf(f, "%%r11d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              fprintf(f, "%%r11");
+              break;
+            }
+            default:
+              assert(0);
+          }
+          break;
+        }
+        case R12: {
+          switch (op->asm_type.kind) {
+            case AsmType_BYTE: {
+              fprintf(f, "%%r12b");
+              break;
+            }
+            case AsmType_WORD: {
+              fprintf(f, "%%r12w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              fprintf(f, "%%r12d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              fprintf(f, "%%r12");
+              break;
+            }
+            default:
+              assert(0);
+          }
+          break;
+        }
+        case R13: {
+          switch (op->asm_type.kind) {
+            case AsmType_BYTE: {
+              fprintf(f, "%%r13b");
+              break;
+            }
+            case AsmType_WORD: {
+              fprintf(f, "%%r13w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              fprintf(f, "%%r13d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              fprintf(f, "%%r13");
+              break;
+            }
+            default:
+              assert(0);
+          }
+          break;
+        }
+        case R14: {
+          switch (op->asm_type.kind) {
+            case AsmType_BYTE: {
+              fprintf(f, "%%r14b");
+              break;
+            }
+            case AsmType_WORD: {
+              fprintf(f, "%%r14w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              fprintf(f, "%%r14d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              fprintf(f, "%%r14");
+              break;
+            }
+            default:
+              assert(0);
+          }
+          break;
+        }
+        case R15: {
+          switch (op->asm_type.kind) {
+            case AsmType_BYTE: {
+              fprintf(f, "%%r15b");
+              break;
+            }
+            case AsmType_WORD: {
+              fprintf(f, "%%r15w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              fprintf(f, "%%r15d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              fprintf(f, "%%r15");
               break;
             }
             default:
