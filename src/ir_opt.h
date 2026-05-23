@@ -1,6 +1,7 @@
 #ifndef X_IR_OPT_H
 #define X_IR_OPT_H
 
+#include "ir.h"
 #include "vector.h"
 
 #define MAX_OPTIMIZATION_PASSES 100

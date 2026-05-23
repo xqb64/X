@@ -119,9 +119,10 @@ ifeq (emitter,$(findstring emitter,$(debug)))
 endif
 
 all: $(BIN)
+obj:
+	mkdir -p obj
 
-obj/%.o: src/%.c $(HDR)
-	mkdir -vp obj
+obj/%.o: src/%.c $(HDR) | obj
 	$(CC) -c $(CFLAGS) $< -o $@
 
 $(BIN): $(OBJ)
