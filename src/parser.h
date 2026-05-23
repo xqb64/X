@@ -1,8 +1,8 @@
 #ifndef X_PARSER_H
 #define X_PARSER_H
 
-#include "vector.h"
 #include "tokenizer.h"
+#include "vector.h"
 
 enum LiteralKind {
   LITERAL_NUM,
@@ -64,7 +64,6 @@ struct Literal {
   } as;
   Type type;
 };
-
 
 enum ExprKind {
   EXPR_LITERAL,

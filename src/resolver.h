@@ -2,6 +2,7 @@
 #define X_RESOLVER_H
 
 #include <stdbool.h>
+
 #include "parser.h"
 
 struct ResolveResult {

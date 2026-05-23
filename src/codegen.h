@@ -2,8 +2,9 @@
 #define X_CODEGEN_H
 
 #include <stdbool.h>
-#include "vector.h"
+
 #include "ir.h"
+#include "vector.h"
 
 enum AsmOperandKind {
   AsmOperand_IMM,
@@ -282,7 +283,6 @@ struct Map {
 };
 
 struct AsmResult codegen(struct IRProgram *ir_prog);
-struct AsmProgram *replace_pseudo(struct AsmProgram *asmcode);
 struct AsmProgram *fixup(struct AsmProgram *prog);
 const char *reg_to_str_64(enum AsmRegister reg);
 void print_asm(struct AsmProgram *prog);
@@ -291,6 +291,5 @@ int asm_type_stack_size(struct AsmType t);
 int asm_type_stack_align(struct AsmType t);
 int align_up_int(int n, int align);
 void print_asm_operand(struct AsmOperand *op);
-bool asm_type_can_live_in_int_reg(struct AsmType type);
 
 #endif

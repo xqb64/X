@@ -1,22 +1,22 @@
-#include "tokenizer.h"
-#include "parser.h"
-#include "labeler.h"
-#include "resolver.h"
-#include "typechecker.h"
-#include "ir.h"
-#include "ir_opt.h"
-#include "regalloc.h"
-#include "codegen.h"
-#include "emitter.h"
-#include "util.h"
-
 #include <getopt.h>
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#include "codegen.h"
+#include "emitter.h"
+#include "ir.h"
+#include "ir_opt.h"
+#include "labeler.h"
+#include "parser.h"
+#include "regalloc.h"
+#include "resolver.h"
+#include "tokenizer.h"
+#include "typechecker.h"
+#include "util.h"
 
 struct ReadFileResult {
   bool is_ok;
@@ -539,4 +539,3 @@ int main(int argc, char **argv)
 
   return 0;
 }
-

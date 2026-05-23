@@ -1,7 +1,8 @@
 #ifndef X_TOKENIZER_H
-#define X_TOKENIZER_H 
+#define X_TOKENIZER_H
 
 #include <stdbool.h>
+
 #include "vector.h"
 
 enum TokenKind {

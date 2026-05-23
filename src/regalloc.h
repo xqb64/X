@@ -174,7 +174,6 @@ struct SpillCost {
 
 typedef Vector(struct SpillCost) VecSpillCost;
 
-
 enum RegClass {
   REGCLASS_NONE,
   REGCLASS_INT,

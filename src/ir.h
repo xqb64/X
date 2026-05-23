@@ -2,6 +2,7 @@
 #define X_IR_H
 
 #include <stddef.h>
+
 #include "parser.h"
 
 enum IRValueKind {

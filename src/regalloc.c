@@ -1,10 +1,32 @@
 #include "regalloc.h"
-#include "util.h"
 
 #include <assert.h>
-#include <string.h>
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "util.h"
+
+bool asm_type_can_live_in_int_reg(struct AsmType type)
+{
+  switch (type.kind) {
+    case AsmType_BYTE:
+    case AsmType_WORD:
+    case AsmType_LONGWORD:
+    case AsmType_QUADWORD:
+      return true;
+
+    case AsmType_FLOAT:
+    case AsmType_DOUBLE:
+    case AsmType_BYTE_ARRAY:
+      return false;
+
+    default:
+      assert(0);
+  }
+
+  assert(0 && "unhandled asm type");
+}
 
 bool map_get_offset(struct Map *map, char *name, int *out_offset)
 {
@@ -56,9 +78,8 @@ int get_offset(struct Map *map, char *name, struct AsmType asm_type,
   return new_offset;
 }
 
-void replace_operand_pseudo(struct AsmOperand *op,
-                                          struct Map *map,
-                                          int *used_stack_bytes)
+void replace_operand_pseudo(struct AsmOperand *op, struct Map *map,
+                            int *used_stack_bytes)
 {
   if (op->kind == AsmOperand_PSEUDO) {
     for (int k = 0; k < global_constants.len; k++) {
@@ -92,7 +113,7 @@ struct AsmType *pseudo_type_get(VecPseudoType *types, char *pseudo)
 }
 
 void pseudo_type_add(VecPseudoType *types, char *pseudo,
-                            struct AsmType asm_type)
+                     struct AsmType asm_type)
 {
   if (pseudo_type_get(types, pseudo)) {
     return;
@@ -207,7 +228,7 @@ int find_live_interval(VecLiveInterval *intervals, char *pseudo)
 }
 
 void touch_live_interval(VecLiveInterval *intervals, char *pseudo,
-                                struct AsmType asm_type, int instr_idx)
+                         struct AsmType asm_type, int instr_idx)
 {
   int idx = find_live_interval(intervals, pseudo);
 
@@ -239,7 +260,7 @@ void touch_live_interval(VecLiveInterval *intervals, char *pseudo,
 }
 
 void touch_pseudo_set(VecLiveInterval *intervals, VecPseudoType *types,
-                             VecPseudo *set, int instr_idx)
+                      VecPseudo *set, int instr_idx)
 {
   for (int i = 0; i < set->len; i++) {
     struct AsmType *asm_type = pseudo_type_get(types, set->data[i]);
@@ -251,7 +272,7 @@ void touch_pseudo_set(VecLiveInterval *intervals, VecPseudoType *types,
 }
 
 VecLiveInterval build_live_intervals(struct InstrLiveness *lv, int n,
-                                            VecPseudoType *types)
+                                     VecPseudoType *types)
 {
   VecLiveInterval intervals = {0};
 
@@ -689,9 +710,8 @@ struct CFG build_cfg(struct AsmFunction *fn)
   return cfg;
 }
 
-void compute_block_use_def(struct AsmFunction *fn,
-                                  struct BasicBlock *block,
-                                  struct InstrLiveness *lv)
+void compute_block_use_def(struct AsmFunction *fn, struct BasicBlock *block,
+                           struct InstrLiveness *lv)
 {
   (void) fn;
 
@@ -792,7 +812,7 @@ void dot_print_instr_summary(FILE *out, int idx, struct AsmInstr *instr)
 }
 
 void dump_cfg_dot(FILE *out, struct AsmFunction *fn, struct CFG *cfg,
-                         struct InstrLiveness *lv)
+                  struct InstrLiveness *lv)
 {
   fprintf(out, "digraph \"cfg_%s\" {\n", fn->name);
   fprintf(out, "  graph [fontname=\"monospace\"];\n");
@@ -889,7 +909,7 @@ void free_cfg(struct CFG *cfg)
 }
 
 void write_cfg_dot(struct AsmFunction *fn, struct InstrLiveness *lv,
-                          const char *path)
+                   const char *path)
 {
   FILE *out;
   struct CFG cfg;
@@ -915,8 +935,7 @@ void write_cfg_dot(struct AsmFunction *fn, struct InstrLiveness *lv,
   free_cfg(&cfg);
 }
 
-void release_dead_regs(struct RegAllocState *state,
-                              VecPseudo *live_after)
+void release_dead_regs(struct RegAllocState *state, VecPseudo *live_after)
 {
   struct AllocatedReg **link = &state->allocated_regs;
 
@@ -1012,7 +1031,7 @@ void add_def_operand(VecPseudo *def, struct AsmOperand *op)
 }
 
 void compute_instr_use_def(struct AsmInstr *instr, VecPseudo *use,
-                                  VecPseudo *def)
+                           VecPseudo *def)
 {
   switch (instr->kind) {
     case AsmInstr_MOV: {
@@ -1100,9 +1119,8 @@ void compute_instr_use_def(struct AsmInstr *instr, VecPseudo *use,
   }
 }
 
-void compute_instr_liveness_from_blocks(struct AsmFunction *fn,
-                                               struct CFG *cfg,
-                                               struct InstrLiveness *lv)
+void compute_instr_liveness_from_blocks(struct AsmFunction *fn, struct CFG *cfg,
+                                        struct InstrLiveness *lv)
 {
   (void) fn;
 
@@ -1217,7 +1235,7 @@ struct PseudoHome *pseudo_home_get(VecPseudoHome *homes, char *pseudo)
 }
 
 void pseudo_home_add_reg(VecPseudoHome *homes, char *pseudo,
-                                enum AsmRegister reg)
+                         enum AsmRegister reg)
 {
   struct PseudoHome home;
 
@@ -1235,8 +1253,7 @@ void pseudo_home_add_reg(VecPseudoHome *homes, char *pseudo,
   vec_insert(homes, home);
 }
 
-void pseudo_home_add_stack(VecPseudoHome *homes, char *pseudo,
-                                  int stack_offset)
+void pseudo_home_add_stack(VecPseudoHome *homes, char *pseudo, int stack_offset)
 {
   struct PseudoHome home;
 
@@ -1303,8 +1320,7 @@ bool fixed_reg_is_used(VecActiveInterval *active, enum AsmRegister reg)
   return false;
 }
 
-bool fixed_find_free_reg(VecActiveInterval *active,
-                                enum AsmRegister *out_reg)
+bool fixed_find_free_reg(VecActiveInterval *active, enum AsmRegister *out_reg)
 {
   for (int i = 0; i < NUM_ALLOCATABLE_INT_REGS; i++) {
     enum AsmRegister reg = allocatable_int_regs[i];
@@ -1332,10 +1348,9 @@ void expire_old_intervals(VecActiveInterval *active, int start)
   }
 }
 
-VecPseudoHome allocate_pseudo_homes(VecLiveInterval *intervals,
-                                           struct Map *map,
-                                           int *used_stack_bytes,
-                                           struct AsmFunction *fn)
+VecPseudoHome allocate_pseudo_homes(VecLiveInterval *intervals, struct Map *map,
+                                    int *used_stack_bytes,
+                                    struct AsmFunction *fn)
 {
   (void) fn;
 
@@ -1392,8 +1407,7 @@ VecPseudoHome allocate_pseudo_homes(VecLiveInterval *intervals,
   return homes;
 }
 
-int interference_node_index(struct InterferenceGraph *graph,
-                                   char *pseudo)
+int interference_node_index(struct InterferenceGraph *graph, char *pseudo)
 {
   for (int i = 0; i < graph->nodes.len; i++) {
     if (strcmp(graph->nodes.data[i].pseudo, pseudo) == 0) {
@@ -1509,7 +1523,7 @@ char *precolored_reg_name(enum AsmRegister reg)
 }
 
 int interference_add_precolored_reg(struct InterferenceGraph *graph,
-                                           enum AsmRegister reg)
+                                    enum AsmRegister reg)
 {
   char *name = precolored_reg_name(reg);
   int idx = interference_node_index(graph, name);
@@ -1548,8 +1562,8 @@ void add_precolored_register_nodes(struct InterferenceGraph *graph)
   }
 }
 
-void interference_add_edge_by_index(struct InterferenceGraph *graph,
-                                           int ai, int bi)
+void interference_add_edge_by_index(struct InterferenceGraph *graph, int ai,
+                                    int bi)
 {
   if (ai == bi) {
     return;
@@ -1564,8 +1578,7 @@ void interference_add_edge_by_index(struct InterferenceGraph *graph,
   }
 }
 
-void interference_add_edge(struct InterferenceGraph *graph, char *a,
-                                  char *b)
+void interference_add_edge(struct InterferenceGraph *graph, char *a, char *b)
 {
   int ai;
   int bi;
@@ -1584,7 +1597,7 @@ void interference_add_edge(struct InterferenceGraph *graph, char *a,
   ((int) (sizeof(callee_saved_int_regs) / sizeof(callee_saved_int_regs[0])))
 
 void interference_add_nodes_from_set(struct InterferenceGraph *graph,
-                                            VecPseudo *set)
+                                     VecPseudo *set)
 {
   for (int i = 0; i < set->len; i++) {
     interference_add_node(graph, set->data[i]);
@@ -1609,8 +1622,8 @@ char *mov_pseudo_src(struct AsmInstr *instr)
 }
 
 void add_interferences_for_instr(struct InterferenceGraph *graph,
-                                        struct AsmInstr *instr,
-                                        struct InstrLiveness *lv)
+                                 struct AsmInstr *instr,
+                                 struct InstrLiveness *lv)
 {
   VecPseudo live = {0};
   char *move_src;
@@ -1678,7 +1691,7 @@ bool same_reg_class(enum AsmRegister a, enum AsmRegister b)
 }
 
 void add_abi_param_copy_interference(struct InterferenceGraph *graph,
-                                            struct AsmFunction *fn)
+                                     struct AsmFunction *fn)
 {
   VecAbiRegParamMove moves = {0};
 
@@ -1774,8 +1787,7 @@ void print_interference_graph(struct InterferenceGraph *graph)
   }
 }
 
-void dump_interference_graph_dot(FILE *out,
-                                        struct InterferenceGraph *graph)
+void dump_interference_graph_dot(FILE *out, struct InterferenceGraph *graph)
 {
   fprintf(out, "graph interference {\n");
   fprintf(out, "  graph [fontname=\"monospace\"];\n");
@@ -1818,7 +1830,7 @@ void dump_interference_graph_dot(FILE *out,
 }
 
 void write_interference_graph_dot(struct InterferenceGraph *graph,
-                                         const char *path)
+                                  const char *path)
 {
   FILE *out = fopen(path, "w");
 
@@ -1877,9 +1889,8 @@ bool convert_global_constant_operand(struct AsmOperand *op)
   return true;
 }
 
-void regalloc_addr_op_from_homes(struct AsmOperand *op,
-                                        VecPseudoHome *homes, struct Map *map,
-                                        int *used_stack_bytes)
+void regalloc_addr_op_from_homes(struct AsmOperand *op, VecPseudoHome *homes,
+                                 struct Map *map, int *used_stack_bytes)
 {
   struct PseudoHome *home;
 
@@ -1914,7 +1925,7 @@ void regalloc_addr_op_from_homes(struct AsmOperand *op,
 }
 
 void regalloc_op_from_homes(struct AsmOperand *op, VecPseudoHome *homes,
-                                   struct Map *map, int *used_stack_bytes)
+                            struct Map *map, int *used_stack_bytes)
 {
   struct PseudoHome *home;
 
@@ -1950,9 +1961,9 @@ void regalloc_op_from_homes(struct AsmOperand *op, VecPseudoHome *homes,
 }
 
 struct AsmInstr *regalloc_instr_from_homes(struct AsmInstr *instr,
-                                                  VecPseudoHome *homes,
-                                                  struct Map *map,
-                                                  int *used_stack_bytes)
+                                           VecPseudoHome *homes,
+                                           struct Map *map,
+                                           int *used_stack_bytes)
 {
   switch (instr->kind) {
     case AsmInstr_MOV: {
@@ -2058,8 +2069,7 @@ enum AsmRegister allocatable_reg_at(enum RegClass cls, int i)
   }
 }
 
-int allocatable_reg_index_in_class(enum RegClass cls,
-                                          enum AsmRegister reg)
+int allocatable_reg_index_in_class(enum RegClass cls, enum AsmRegister reg)
 {
   int n = allocatable_reg_count(cls);
 
@@ -2118,8 +2128,7 @@ void free_spill_costs(VecSpillCost *costs)
   costs->data = NULL;
 }
 
-VecSpillCost compute_spill_costs(struct InstrLiveness *lv,
-                                        int instr_count)
+VecSpillCost compute_spill_costs(struct InstrLiveness *lv, int instr_count)
 {
   VecSpillCost costs = {0};
 
@@ -2184,7 +2193,7 @@ enum RegClass asm_type_reg_class(struct AsmType type)
 }
 
 enum RegClass graph_node_reg_class(struct InterferenceGraph *graph,
-                                          VecPseudoType *types, int idx)
+                                   VecPseudoType *types, int idx)
 {
   struct InterferenceNode *node = &graph->nodes.data[idx];
 
@@ -2199,8 +2208,8 @@ enum RegClass graph_node_reg_class(struct InterferenceGraph *graph,
 }
 
 int graph_degree_after_removal(struct InterferenceGraph *graph,
-                                      VecPseudoType *types, bool *removed,
-                                      int node_idx)
+                               VecPseudoType *types, bool *removed,
+                               int node_idx)
 {
   int degree = 0;
   enum RegClass cls = graph_node_reg_class(graph, types, node_idx);
@@ -2223,9 +2232,8 @@ int graph_degree_after_removal(struct InterferenceGraph *graph,
   return degree;
 }
 
-int pick_low_degree_node(struct InterferenceGraph *graph,
-                                VecPseudoType *types, bool *removed,
-                                VecSpillCost *spill_costs)
+int pick_low_degree_node(struct InterferenceGraph *graph, VecPseudoType *types,
+                         bool *removed, VecSpillCost *spill_costs)
 {
   int best_idx = -1;
   double best_score = 0.0;
@@ -2274,8 +2282,8 @@ int pick_low_degree_node(struct InterferenceGraph *graph,
 }
 
 double spill_score_for_node(struct InterferenceGraph *graph,
-                                   VecPseudoType *types, bool *removed,
-                                   int node_idx, VecSpillCost *spill_costs)
+                            VecPseudoType *types, bool *removed, int node_idx,
+                            VecSpillCost *spill_costs)
 {
   char *pseudo = graph->nodes.data[node_idx].pseudo;
   int degree = graph_degree_after_removal(graph, types, removed, node_idx);
@@ -2284,9 +2292,8 @@ double spill_score_for_node(struct InterferenceGraph *graph,
   return cost / (double) (degree > 0 ? degree : 1);
 }
 
-int pick_spill_candidate(struct InterferenceGraph *graph,
-                                VecPseudoType *types, bool *removed,
-                                VecSpillCost *spill_costs)
+int pick_spill_candidate(struct InterferenceGraph *graph, VecPseudoType *types,
+                         bool *removed, VecSpillCost *spill_costs)
 {
   int best_idx = -1;
   double best_score = 0.0;
@@ -2335,8 +2342,8 @@ int pick_spill_candidate(struct InterferenceGraph *graph,
 }
 
 bool choose_color_for_node(struct InterferenceGraph *graph,
-                                  VecPseudoType *types, VecPseudoHome *homes,
-                                  int node_idx, enum AsmRegister *out_reg)
+                           VecPseudoType *types, VecPseudoHome *homes,
+                           int node_idx, enum AsmRegister *out_reg)
 {
   enum RegClass cls = graph_node_reg_class(graph, types, node_idx);
   int reg_count = allocatable_reg_count(cls);
@@ -2387,8 +2394,7 @@ bool choose_color_for_node(struct InterferenceGraph *graph,
 }
 
 void assign_stack_home(VecPseudoHome *homes, VecPseudoType *types,
-                              struct Map *map, int *used_stack_bytes,
-                              char *pseudo)
+                       struct Map *map, int *used_stack_bytes, char *pseudo)
 {
   struct AsmType *asm_type;
   int stack_offset;
@@ -2405,10 +2411,12 @@ void assign_stack_home(VecPseudoHome *homes, VecPseudoType *types,
   pseudo_home_add_stack(homes, pseudo, stack_offset);
 }
 
-VecPseudoHome color_interference_graph(
-    struct InterferenceGraph *graph, VecPseudoType *types,
-    VecPseudo *force_stack, VecPseudo *out_spilled, VecSpillCost *spill_costs,
-    struct Map *map, int *used_stack_bytes)
+VecPseudoHome color_interference_graph(struct InterferenceGraph *graph,
+                                       VecPseudoType *types,
+                                       VecPseudo *force_stack,
+                                       VecPseudo *out_spilled,
+                                       VecSpillCost *spill_costs,
+                                       struct Map *map, int *used_stack_bytes)
 {
   VecPseudoHome homes = {0};
   VecSelectStack select_stack = {0};
@@ -2547,8 +2555,7 @@ void print_pseudo_homes(VecPseudoHome *homes)
   }
 }
 
-void verify_coloring(struct InterferenceGraph *graph,
-                            VecPseudoHome *homes)
+void verify_coloring(struct InterferenceGraph *graph, VecPseudoHome *homes)
 {
   for (int i = 0; i < graph->nodes.len; i++) {
     struct InterferenceNode *a_node = &graph->nodes.data[i];
@@ -2607,8 +2614,8 @@ char *move_node_name(struct InterferenceGraph *graph, int idx)
   return graph->nodes.data[idx].pseudo;
 }
 
-bool interference_has_edge_idx(struct InterferenceGraph *graph,
-                                      int a_idx, int b_idx)
+bool interference_has_edge_idx(struct InterferenceGraph *graph, int a_idx,
+                               int b_idx)
 {
   if (a_idx < 0 || b_idx < 0) {
     return false;
@@ -2617,8 +2624,8 @@ bool interference_has_edge_idx(struct InterferenceGraph *graph,
   return int_vec_contains(&graph->nodes.data[a_idx].neighbors, b_idx);
 }
 
-bool move_operand_node(struct InterferenceGraph *graph,
-                              struct AsmOperand *op, int *out_idx)
+bool move_operand_node(struct InterferenceGraph *graph, struct AsmOperand *op,
+                       int *out_idx)
 {
   if (op->kind == AsmOperand_PSEUDO) {
     *out_idx = interference_node_index(graph, op->as.pseudo);
@@ -2635,7 +2642,7 @@ bool move_operand_node(struct InterferenceGraph *graph,
 }
 
 bool is_pseudo_to_pseudo_move(struct AsmInstr *instr, char **out_src,
-                                     char **out_dst)
+                              char **out_dst)
 {
   if (instr->kind != AsmInstr_MOV) {
     return false;
@@ -2660,7 +2667,7 @@ bool is_pseudo_to_pseudo_move(struct AsmInstr *instr, char **out_src,
 }
 
 VecMove collect_moves_from_graph(struct AsmFunction *fn,
-                                        struct InterferenceGraph *graph)
+                                 struct InterferenceGraph *graph)
 {
   VecMove moves = {0};
 
@@ -2716,8 +2723,7 @@ void free_moves(VecMove *moves)
   moves->data = NULL;
 }
 
-void dump_moves_dot(FILE *out, struct InterferenceGraph *graph,
-                           VecMove *moves)
+void dump_moves_dot(FILE *out, struct InterferenceGraph *graph, VecMove *moves)
 {
   fprintf(out, "digraph moves {\n");
   fprintf(out, "  graph [fontname=\"monospace\"];\n");
@@ -2739,7 +2745,7 @@ void dump_moves_dot(FILE *out, struct InterferenceGraph *graph,
 }
 
 void write_moves_dot(struct InterferenceGraph *graph, VecMove *moves,
-                            const char *path)
+                     const char *path)
 {
   FILE *out = fopen(path, "w");
 
@@ -2765,8 +2771,7 @@ bool is_redundant_mov(struct AsmInstr *instr)
          is_same_reg_operand(&instr->as.mov.src, &instr->as.mov.dst);
 }
 
-bool interference_has_edge(struct InterferenceGraph *graph, char *a,
-                                  char *b)
+bool interference_has_edge(struct InterferenceGraph *graph, char *a, char *b)
 {
   int ai = interference_node_index(graph, a);
   int bi = interference_node_index(graph, b);
@@ -2789,8 +2794,8 @@ int interference_degree(struct InterferenceGraph *graph, char *pseudo)
   return graph->nodes.data[idx].neighbors.len;
 }
 
-bool briggs_can_coalesce(struct InterferenceGraph *graph, char *a,
-                                char *b, int k)
+bool briggs_can_coalesce(struct InterferenceGraph *graph, char *a, char *b,
+                         int k)
 {
   int ai = interference_node_index(graph, a);
   int bi = interference_node_index(graph, b);
@@ -2830,8 +2835,7 @@ bool briggs_can_coalesce(struct InterferenceGraph *graph, char *a,
 }
 
 int aliased_index_for_orig_rep(struct InterferenceGraph *aliased,
-                                      struct InterferenceGraph *orig,
-                                      int orig_rep_idx)
+                               struct InterferenceGraph *orig, int orig_rep_idx)
 {
   char *name = orig->nodes.data[orig_rep_idx].pseudo;
 
@@ -2857,8 +2861,7 @@ void uf_union(int *parent, int a, int b)
   }
 }
 
-bool george_ok(struct InterferenceGraph *graph, int t_idx, int r_idx,
-                      int k)
+bool george_ok(struct InterferenceGraph *graph, int t_idx, int r_idx, int k)
 {
   struct InterferenceNode *t = &graph->nodes.data[t_idx];
 
@@ -2878,7 +2881,7 @@ bool george_ok(struct InterferenceGraph *graph, int t_idx, int r_idx,
 }
 
 bool george_can_coalesce(struct InterferenceGraph *graph, int pseudo_idx,
-                                int precolored_idx, int k)
+                         int precolored_idx, int k)
 {
   assert(!graph->nodes.data[pseudo_idx].is_precolored);
   assert(graph->nodes.data[precolored_idx].is_precolored);
@@ -3021,7 +3024,7 @@ struct InterferenceGraph build_aliased_interference_graph(
 }
 
 int *coalesce_briggs_george(struct InterferenceGraph *orig,
-                                   VecPseudoType *types, VecMove *moves)
+                            VecPseudoType *types, VecMove *moves)
 {
   int n = orig->nodes.len;
   int *parent = malloc(sizeof(*parent) * n);
@@ -3145,8 +3148,8 @@ int *coalesce_briggs_george(struct InterferenceGraph *orig,
 }
 
 VecPseudoHome expand_coalesced_homes(struct InterferenceGraph *orig,
-                                            int *parent,
-                                            VecPseudoHome *coalesced_homes)
+                                     int *parent,
+                                     VecPseudoHome *coalesced_homes)
 {
   VecPseudoHome homes = {0};
 
@@ -3249,7 +3252,7 @@ bool pseudo_set_any_contains(VecPseudo *set, char *pseudo)
 }
 
 VecPseudo collect_call_live_pseudos(struct AsmFunction *fn,
-                                           struct InstrLiveness *lv)
+                                    struct InstrLiveness *lv)
 {
   VecPseudo call_live = {0};
 
@@ -3315,7 +3318,7 @@ VecInt collect_used_callee_saved_regs(VecPseudoHome *homes)
 }
 
 struct AsmOperand make_reg_operand(enum AsmRegister reg,
-                                          struct AsmType asm_type)
+                                   struct AsmType asm_type)
 {
   return (struct AsmOperand){
       .kind = AsmOperand_REG,
@@ -3324,8 +3327,7 @@ struct AsmOperand make_reg_operand(enum AsmRegister reg,
   };
 }
 
-struct AsmOperand make_pseudo_operand(char *pseudo,
-                                             struct AsmType asm_type)
+struct AsmOperand make_pseudo_operand(char *pseudo, struct AsmType asm_type)
 {
   return (struct AsmOperand){
       .kind = AsmOperand_PSEUDO,
@@ -3343,9 +3345,8 @@ struct AsmOperand make_stack_operand(int offset, struct AsmType asm_type)
   };
 }
 
-struct AsmInstr make_mov_instr(struct AsmOperand src,
-                                      struct AsmOperand dst,
-                                      struct AsmType asm_type)
+struct AsmInstr make_mov_instr(struct AsmOperand src, struct AsmOperand dst,
+                               struct AsmType asm_type)
 {
   struct AsmInstr instr = {0};
 
@@ -3414,8 +3415,7 @@ bool is_stack_alloc_instr(struct AsmInstr *instr)
          is_reg_operand(&instr->as.binary.rhs, SP);
 }
 
-void save_restore_callee_saved_regs(struct AsmFunction *fn,
-                                           VecInt *used_regs)
+void save_restore_callee_saved_regs(struct AsmFunction *fn, VecInt *used_regs)
 {
   if (used_regs->len == 0) {
     return;
@@ -3469,8 +3469,8 @@ void patch_stack_alloc(struct AsmFunction *fn, int stack_size)
 }
 
 void rewrite_spilled_use(VecAsmInstr *before, struct AsmOperand *op,
-                                VecPseudo *spilled, struct Map *map,
-                                int *used_stack_bytes)
+                         VecPseudo *spilled, struct Map *map,
+                         int *used_stack_bytes)
 {
   if (!is_spilled_pseudo_operand(op, spilled)) {
     return;
@@ -3492,8 +3492,8 @@ void rewrite_spilled_use(VecAsmInstr *before, struct AsmOperand *op,
 }
 
 void rewrite_spilled_def(VecAsmInstr *after, struct AsmOperand *op,
-                                VecPseudo *spilled, struct Map *map,
-                                int *used_stack_bytes)
+                         VecPseudo *spilled, struct Map *map,
+                         int *used_stack_bytes)
 {
   if (!is_spilled_pseudo_operand(op, spilled)) {
     return;
@@ -3515,8 +3515,8 @@ void rewrite_spilled_def(VecAsmInstr *after, struct AsmOperand *op,
 }
 
 void rewrite_spilled_use_def(VecAsmInstr *before, VecAsmInstr *after,
-                                    struct AsmOperand *op, VecPseudo *spilled,
-                                    struct Map *map, int *used_stack_bytes)
+                             struct AsmOperand *op, VecPseudo *spilled,
+                             struct Map *map, int *used_stack_bytes)
 {
   if (!is_spilled_pseudo_operand(op, spilled)) {
     return;
@@ -3549,8 +3549,8 @@ void append_instrs(VecAsmInstr *dst, VecAsmInstr *src)
   }
 }
 
-void rewrite_spills(struct AsmFunction *fn, VecPseudo *spilled,
-                           struct Map *map, int *used_stack_bytes)
+void rewrite_spills(struct AsmFunction *fn, VecPseudo *spilled, struct Map *map,
+                    int *used_stack_bytes)
 {
   if (spilled->len == 0) {
     return;
@@ -3689,8 +3689,8 @@ VecPseudo expand_spilled_reps_to_original_pseudos(
 }
 
 void add_call_clobber_interference(struct InterferenceGraph *graph,
-                                          VecPseudoType *types,
-                                          struct InstrLiveness *lv)
+                                   VecPseudoType *types,
+                                   struct InstrLiveness *lv)
 {
   for (int i = 0; i < lv->live_after.len; i++) {
     char *pseudo = lv->live_after.data[i];
@@ -3729,8 +3729,9 @@ void add_call_clobber_interference(struct InterferenceGraph *graph,
   }
 }
 
-struct InterferenceGraph build_interference_graph(
-    struct AsmFunction *fn, VecPseudoType *types, struct InstrLiveness *lv)
+struct InterferenceGraph build_interference_graph(struct AsmFunction *fn,
+                                                  VecPseudoType *types,
+                                                  struct InstrLiveness *lv)
 {
   struct InterferenceGraph graph = {0};
 
@@ -3992,7 +3993,7 @@ struct AsmFunction *regalloc_fn(struct AsmFunction *fn, struct Map *map,
 }
 
 int compute_frame_stack_adjustment(int local_stack_bytes,
-                                          int used_callee_saved_count)
+                                   int used_callee_saved_count)
 {
   int callee_saved_bytes = 8 * used_callee_saved_count;
   int frame_bytes = local_stack_bytes + callee_saved_bytes;
@@ -4025,4 +4026,3 @@ struct AsmProgram *regalloc(struct AsmProgram *asmcode)
   }
   return asmcode;
 }
-

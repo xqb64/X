@@ -1,12 +1,13 @@
-#include "ir.h"
 #include "ir_opt.h"
-#include "parser.h"
-#include "typechecker.h"
 
 #include <assert.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
+
+#include "ir.h"
+#include "parser.h"
+#include "typechecker.h"
 
 bool is_int_type(enum TypeKind kind)
 {
@@ -122,8 +123,8 @@ struct IRValue *mk_const_int(unsigned long long n, Type type)
 }
 
 struct IRValue *fold_binary_const(enum IRInstrBinaryKind kind,
-                                         struct IRValue *lhs,
-                                         struct IRValue *rhs, Type dst_type)
+                                  struct IRValue *lhs, struct IRValue *rhs,
+                                  Type dst_type)
 {
   if (!is_int_type(lhs->type.kind) && lhs->type.kind != BOOL_T) {
     return NULL;
@@ -207,7 +208,7 @@ struct IRValue *fold_binary_const(enum IRInstrBinaryKind kind,
 }
 
 struct IRValue *fold_unary_const(enum IRInstrUnaryKind kind,
-                                        struct IRValue *src, Type dst_type)
+                                 struct IRValue *src, Type dst_type)
 {
   if (!is_int_type(src->type.kind) && src->type.kind != BOOL_T) {
     return NULL;
@@ -222,7 +223,7 @@ struct IRValue *fold_unary_const(enum IRInstrUnaryKind kind,
 
     case IRInstrUnary_BIT_NOT:
       return mk_const_int(~const_as_u64(src), dst_type);
-    
+
     default:
       assert(0);
   }
@@ -258,8 +259,7 @@ void const_env_remove(VecConstBinding *env, char *name)
   env->len = write;
 }
 
-void const_env_set(VecConstBinding *env, char *name,
-                          struct IRValue *konst)
+void const_env_set(VecConstBinding *env, char *name, struct IRValue *konst)
 {
   const_env_remove(env, name);
 
@@ -366,8 +366,8 @@ bool constant_propagate_ir(struct IRProgram *prog)
           const_env_clear(&env);
           break;
         }
-	default:
-	  assert(0);
+        default:
+          assert(0);
       }
     }
 
@@ -705,9 +705,9 @@ bool copy_propagate_ir(struct IRProgram *prog)
           copy_env_clear(&env);
           break;
         }
-	
-	default:
-	assert(0);
+
+        default:
+          assert(0);
       }
     }
 
@@ -835,8 +835,7 @@ int ir_block_after(struct IRCFG *cfg, int block_idx)
   return next;
 }
 
-int ir_block_for_label(struct IRFunction *fn, struct IRCFG *cfg,
-                              char *label)
+int ir_block_for_label(struct IRFunction *fn, struct IRCFG *cfg, char *label)
 {
   int instr_idx = find_ir_label_instr(fn, label);
 
@@ -1000,7 +999,7 @@ void ir_add_def_val(VecIRNameSet *def, struct IRValue *val)
 }
 
 void compute_ir_instr_use_def(struct IRInstr *instr, VecIRNameSet *use,
-                                     VecIRNameSet *def)
+                              VecIRNameSet *def)
 {
   switch (instr->kind) {
     case IRInstr_BIN:
@@ -1084,15 +1083,14 @@ void compute_ir_instr_use_def(struct IRInstr *instr, VecIRNameSet *use,
       ir_add_use_val(use, instr->as.add_ptr.index);
       ir_add_def_val(def, instr->as.add_ptr.dst);
       break;
-    
+
     default:
       assert(0);
   }
 }
 
-void compute_ir_block_use_def(struct IRFunction *fn,
-                                     struct IRBasicBlock *block,
-                                     struct IRInstrLiveness *lv)
+void compute_ir_block_use_def(struct IRFunction *fn, struct IRBasicBlock *block,
+                              struct IRInstrLiveness *lv)
 {
   for (int i = block->start; i <= block->end; i++) {
     /*
@@ -1158,8 +1156,8 @@ void solve_ir_block_liveness(struct IRCFG *cfg)
 }
 
 void compute_ir_instr_liveness_from_blocks(struct IRFunction *fn,
-                                                  struct IRCFG *cfg,
-                                                  struct IRInstrLiveness *lv)
+                                           struct IRCFG *cfg,
+                                           struct IRInstrLiveness *lv)
 {
   for (int bi = 0; bi < cfg->block_count; bi++) {
     struct IRBasicBlock *block = &cfg->blocks[bi];
@@ -1255,7 +1253,7 @@ struct IRValue *ir_instr_dst(struct IRInstr *instr)
     case IRInstr_STORE:
     case IRInstr_CPY_TO_OFFSET:
       return NULL;
-    
+
     default:
       assert(0);
   }
@@ -1291,7 +1289,7 @@ bool ir_instr_is_removable_dead_def(struct IRInstr *instr)
     case IRInstr_LBL:
     case IRInstr_CPY_TO_OFFSET:
       return false;
-    
+
     default:
       assert(0);
   }
@@ -1458,8 +1456,7 @@ bool simplify_constant_ir_branches(struct IRFunction *fn)
   return changed;
 }
 
-void mark_reachable_ir_blocks(struct IRCFG *cfg, int block_idx,
-                                     bool *reachable)
+void mark_reachable_ir_blocks(struct IRCFG *cfg, int block_idx, bool *reachable)
 {
   if (block_idx < 0 || block_idx >= cfg->block_count) {
     return;
@@ -1612,5 +1609,3 @@ void optimize_ir(struct IRProgram *prog)
     }
   }
 }
-
-

@@ -1,10 +1,11 @@
 #include "labeler.h"
-#include "util.h"
 
 #include <assert.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
+
+#include "util.h"
 
 struct LoopLabelResult loop_label_stmt(struct Stmt *stmt, char *label)
 {
@@ -340,4 +341,3 @@ void free_labels(VecCharPtr *labels)
   }
   vec_free(labels);
 }
-

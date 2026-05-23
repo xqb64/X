@@ -1,9 +1,10 @@
 #include "emitter.h"
-#include "codegen.h"
 
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+
+#include "codegen.h"
 
 static void emit_operand(FILE *f, struct AsmOperand *op)
 {
@@ -519,8 +520,8 @@ static void emit_operand(FILE *f, struct AsmOperand *op)
           }
           break;
         }
-	default:
-	  assert(0);
+        default:
+          assert(0);
       }
       break;
     }
@@ -838,8 +839,8 @@ void emit(struct AsmProgram *prog, char *path)
             case CC_BE:
               suffix = "be";
               break;
-	    default:
-	      assert(0);
+            default:
+              assert(0);
           }
 
           fprintf(f, "j%s .L%s\n", suffix, instr->as.jmpcc.target);
@@ -879,8 +880,8 @@ void emit(struct AsmProgram *prog, char *path)
             case CC_BE:
               suffix = "be";
               break;
-	    default:
-	      assert(0);
+            default:
+              assert(0);
           }
 
           fprintf(f, "set%s ", suffix);
@@ -1063,5 +1064,3 @@ void emit(struct AsmProgram *prog, char *path)
 
   fclose(f);
 }
-
-

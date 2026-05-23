@@ -1,13 +1,13 @@
 #include "ir.h"
-#include "parser.h"
-#include "util.h"
-#include "typechecker.h"
 
 #include <assert.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
 
+#include "parser.h"
+#include "typechecker.h"
+#include "util.h"
 
 /* Module-owned global state. */
 VecStaticConstant global_constants = {0};
@@ -693,7 +693,7 @@ struct IRValue *irfy_expr_and_convert(VecIRInstr *instrs, struct Expr *expr)
       return dst;
     }
     default:
-	assert(0);
+      assert(0);
   }
 
   assert(0);
@@ -1722,7 +1722,7 @@ void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
       break;
     }
     default:
-	assert(0);
+      assert(0);
   }
 }
 
@@ -1771,4 +1771,3 @@ struct IrfyResult irfy_ast(struct AST *ast)
 
   return result;
 }
-

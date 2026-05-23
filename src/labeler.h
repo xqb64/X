@@ -1,10 +1,10 @@
 #ifndef X_LABELER_H
 #define X_LABELER_H
 
-#include "vector.h"
-#include "parser.h"
-
 #include <stdbool.h>
+
+#include "parser.h"
+#include "vector.h"
 
 struct LoopLabelResult {
   bool is_ok;

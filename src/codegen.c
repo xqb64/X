@@ -1,33 +1,13 @@
+#include "codegen.h"
+
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "typechecker.h"
 #include "ir.h"
-#include "codegen.h"
+#include "typechecker.h"
 #include "util.h"
-
-bool asm_type_can_live_in_int_reg(struct AsmType type)
-{
-  switch (type.kind) {
-    case AsmType_BYTE:
-    case AsmType_WORD:
-    case AsmType_LONGWORD:
-    case AsmType_QUADWORD:
-      return true;
-
-    case AsmType_FLOAT:
-    case AsmType_DOUBLE:
-    case AsmType_BYTE_ARRAY:
-      return false;
-    
-    default:
-      assert(0);
-  }
-
-  assert(0 && "unhandled asm type");
-}
 
 void print_asm_type(struct AsmType type)
 {
@@ -672,8 +652,8 @@ void print_asm_operand(struct AsmOperand *op)
           }
           break;
         }
-	default:
-	  assert(0);
+        default:
+          assert(0);
       }
 
       printf(")");
@@ -3073,4 +3053,3 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
 
   return prog;
 }
-

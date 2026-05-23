@@ -1,6 +1,4 @@
 #include "parser.h"
-#include "typechecker.h"
-#include "util.h"
 
 #include <assert.h>
 #include <limits.h>
@@ -8,6 +6,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "typechecker.h"
+#include "util.h"
 
 void print_binary_op(enum ExprBinKind kind)
 {
@@ -323,8 +324,8 @@ void free_expr(struct Expr *expr)
         case LITERAL_STR:
           free(expr->as.literal.as.str);
           break;
-	default:
-	  assert(0);
+        default:
+          assert(0);
       }
       break;
     }
@@ -405,7 +406,7 @@ void free_expr(struct Expr *expr)
       break;
     }
     default:
-     assert(0);
+      assert(0);
   }
 }
 
@@ -2968,4 +2969,3 @@ struct ParseResult parse(struct Parser *parser)
 
   return result;
 }
-

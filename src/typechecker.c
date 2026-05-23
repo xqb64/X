@@ -1,12 +1,13 @@
 #include "typechecker.h"
-#include "ir.h"
-#include "util.h"
 
 #include <assert.h>
 #include <limits.h>
-#include <string.h>
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "ir.h"
+#include "util.h"
 
 /* Module-owned global state. */
 struct StructTable *struct_table = NULL;
@@ -171,7 +172,7 @@ void free_type(Type *t)
       break;
     }
     default:
-	assert(0);
+      assert(0);
   }
 }
 
@@ -1323,7 +1324,7 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
       break;
     }
     default:
-	assert(0);
+      assert(0);
   }
   return res;
 }
@@ -1635,4 +1636,3 @@ struct TypecheckResult typecheck(struct AST *ast)
 
   return (struct TypecheckResult){.is_ok = true, .msg = NULL, .ast = ast};
 }
-

@@ -2,9 +2,9 @@
 
 #include <assert.h>
 #include <stddef.h>
-#include <string.h>
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 static bool is_alpha(char c)
 {
@@ -46,7 +46,8 @@ static int lookahead(struct Tokenizer *tokenizer, int n, char *target)
   return memcmp(tokenizer->src + 1, target, n);
 }
 
-static struct Token mktoken(struct Tokenizer *tokenizer, enum TokenKind kind, int len)
+static struct Token mktoken(struct Tokenizer *tokenizer, enum TokenKind kind,
+                            int len)
 {
   struct Token token;
 
@@ -727,8 +728,7 @@ void print_token(struct Token *token)
 
 void print_tokens(VecToken *tokens)
 {
-for (int i = 0; i < tokens->len; i++) {
+  for (int i = 0; i < tokens->len; i++) {
     print_token(&tokens->data[i]);
   }
 }
-

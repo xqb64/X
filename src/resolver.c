@@ -1,9 +1,11 @@
 #include "resolver.h"
+
+#include <assert.h>
+#include <stdlib.h>
+#include <string.h>
+
 #include "typechecker.h"
 #include "util.h"
-#include <string.h>
-#include <stdlib.h>
-#include <assert.h>
 
 void varmap_insert(struct VariableMap **varmap, char *name, char *uniq_name)
 {
@@ -428,4 +430,3 @@ struct ResolveResult resolve(struct AST *ast)
 
   return (struct ResolveResult){.is_ok = true, .msg = NULL, .as.ast = ast};
 }
-

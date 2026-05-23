@@ -3,9 +3,9 @@
 #include <assert.h>
 #include <stdarg.h>
 #include <stdbool.h>
-#include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 int mktmp(void)
 {
@@ -65,5 +65,3 @@ void print_indent(int spaces)
    * Since the padding defualt to space, we pass an empty string to print.  */
   printf("%*s", spaces, "");
 }
-
-
