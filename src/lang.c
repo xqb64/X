@@ -12085,6 +12085,101 @@ static int block_after(struct CFG *cfg, int block_idx)
   return next;
 }
 
+static bool pseudo_set_contains(VecPseudo *set, char *name)
+{
+  for (int i = 0; i < set->len; i++) {
+    if (strcmp(set->data[i], name) == 0) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static bool pseudo_set_equal(VecPseudo *a, VecPseudo *b)
+{
+  if (a->len != b->len) {
+    return false;
+  }
+
+  for (int i = 0; i < a->len; i++) {
+    if (!pseudo_set_contains(b, a->data[i])) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+static void pseudo_set_add(VecPseudo *set, char *name)
+{
+  if (!name) {
+    return;
+  }
+
+  if (pseudo_set_contains(set, name)) {
+    return;
+  }
+
+  vec_insert(set, name);
+}
+
+static void pseudo_set_copy(VecPseudo *dst, VecPseudo *src)
+{
+  dst->len = 0;
+
+  for (int i = 0; i < src->len; i++) {
+    pseudo_set_add(dst, src->data[i]);
+  }
+}
+
+static void pseudo_set_union_into(VecPseudo *dst, VecPseudo *src)
+{
+  for (int i = 0; i < src->len; i++) {
+    pseudo_set_add(dst, src->data[i]);
+  }
+}
+
+static void pseudo_set_remove(VecPseudo *set, char *name)
+{
+  for (int i = 0; i < set->len; i++) {
+    if (strcmp(set->data[i], name) == 0) {
+      set->data[i] = set->data[set->len - 1];
+      set->len--;
+      return;
+    }
+  }
+}
+
+static void pseudo_set_subtract(VecPseudo *dst, VecPseudo *to_remove)
+{
+  for (int i = 0; i < to_remove->len; i++) {
+    pseudo_set_remove(dst, to_remove->data[i]);
+  }
+}
+
+static void pseudo_set_free(VecPseudo *set)
+{
+  vec_free(set);
+  set->capacity = 0;
+  set->len = 0;
+  set->data = NULL;
+}
+
+static void pseudo_set_print(VecPseudo *set)
+{
+  printf("{");
+
+  for (int i = 0; i < set->len; i++) {
+    if (i > 0) {
+      printf(", ");
+    }
+
+    printf("%s", set->data[i]);
+  }
+
+  printf("}");
+}
 static int block_for_label(struct AsmFunction *fn, struct CFG *cfg, char *label)
 {
   int instr_idx = find_label_instr(fn, label);
@@ -12093,6 +12188,65 @@ static int block_for_label(struct AsmFunction *fn, struct CFG *cfg, char *label)
 
   return cfg->instr_to_block[instr_idx];
 }
+
+static void dot_escape(FILE *out, const char *s)
+{
+  for (; *s; s++) {
+    switch (*s) {
+      case '\\':
+        fputs("\\\\", out);
+        break;
+      case '"':
+        fputs("\\\"", out);
+        break;
+      case '\n':
+        fputs("\\n", out);
+        break;
+      default:
+        fputc(*s, out);
+        break;
+    }
+  }
+}
+
+static const char *asm_instr_kind_name(enum AsmInstrKind kind)
+{
+  switch (kind) {
+    case AsmInstr_PUSH: return "PUSH";
+    case AsmInstr_POP: return "POP";
+    case AsmInstr_MOV: return "MOV";
+    case AsmInstr_BIN: return "BIN";
+    case AsmInstr_RET: return "RET";
+    case AsmInstr_CALL: return "CALL";
+    case AsmInstr_JMP: return "JMP";
+    case AsmInstr_LBL: return "LBL";
+    case AsmInstr_CMP: return "CMP";
+    case AsmInstr_JmpCC: return "JmpCC";
+    case AsmInstr_SetCC: return "SetCC";
+    case AsmInstr_LEA: return "LEA";
+    case AsmInstr_UNARY: return "UNARY";
+    case AsmInstr_CVT: return "CVT";
+    case AsmInstr_REP_MOVSB: return "REP_MOVSB";
+  }
+
+  assert(0 && "unhandled AsmInstrKind");
+}
+
+static void dot_print_pseudo_set(FILE *out, VecPseudo *set)
+{
+  fputc('{', out);
+
+  for (int i = 0; i < set->len; i++) {
+    if (i > 0) {
+      fputs(", ", out);
+    }
+
+    dot_escape(out, set->data[i]);
+  }
+
+  fputc('}', out);
+}
+
 
 static struct CFG build_cfg(struct AsmFunction *fn)
 {
@@ -12223,100 +12377,231 @@ static struct CFG build_cfg(struct AsmFunction *fn)
   return cfg;
 }
 
-static bool pseudo_set_contains(VecPseudo *set, char *name)
+static void compute_block_use_def(struct AsmFunction *fn,
+                                  struct BasicBlock *block,
+                                  struct InstrLiveness *lv)
 {
-  for (int i = 0; i < set->len; i++) {
-    if (strcmp(set->data[i], name) == 0) {
-      return true;
+  for (int i = block->start; i <= block->end; i++) {
+    /*
+     * use[B] contains values used before being defined inside B.
+     */
+    for (int j = 0; j < lv[i].use.len; j++) {
+      char *name = lv[i].use.data[j];
+
+      if (!pseudo_set_contains(&block->def, name)) {
+        pseudo_set_add(&block->use, name);
+      }
+    }
+
+    /*
+     * def[B] contains values defined inside B.
+     */
+    for (int j = 0; j < lv[i].def.len; j++) {
+      pseudo_set_add(&block->def, lv[i].def.data[j]);
+    }
+  }
+}
+
+static void solve_block_liveness(struct CFG *cfg)
+{
+  bool changed = true;
+
+  while (changed) {
+    changed = false;
+
+    /*
+     * Backward order usually converges faster.
+     */
+    for (int bi = cfg->block_count - 1; bi >= 0; bi--) {
+      struct BasicBlock *block = &cfg->blocks[bi];
+
+      VecPseudo new_live_out = {0};
+      VecPseudo new_live_in = {0};
+
+      /*
+       * live_out[B] = union(live_in[S]) for each successor S.
+       */
+      for (int i = 0; i < block->succs.len; i++) {
+        int succ_idx = block->succs.data[i];
+        pseudo_set_union_into(&new_live_out, &cfg->blocks[succ_idx].live_in);
+      }
+
+      /*
+       * live_in[B] = use[B] union (live_out[B] - def[B])
+       */
+      pseudo_set_copy(&new_live_in, &new_live_out);
+      pseudo_set_subtract(&new_live_in, &block->def);
+      pseudo_set_union_into(&new_live_in, &block->use);
+
+      if (!pseudo_set_equal(&block->live_out, &new_live_out) ||
+          !pseudo_set_equal(&block->live_in, &new_live_in)) {
+        changed = true;
+      }
+
+      pseudo_set_free(&block->live_out);
+      pseudo_set_free(&block->live_in);
+
+      block->live_out = new_live_out;
+      block->live_in = new_live_in;
+    }
+  }
+}
+
+static void dot_print_instr_summary(FILE *out, int idx, struct AsmInstr *instr)
+{
+  fprintf(out, "%04d: %s", idx, asm_instr_kind_name(instr->kind));
+
+  switch (instr->kind) {
+    case AsmInstr_LBL:
+      fputs(" ", out);
+      dot_escape(out, instr->as.lbl.name);
+      break;
+
+    case AsmInstr_JMP:
+      fputs(" -> ", out);
+      dot_escape(out, instr->as.jmp.target);
+      break;
+
+    case AsmInstr_JmpCC:
+      fputs(" -> ", out);
+      dot_escape(out, instr->as.jmpcc.target);
+      break;
+
+    case AsmInstr_CALL:
+      fputs(" ", out);
+      dot_escape(out, instr->as.call.target);
+      break;
+
+    default:
+      break;
+  }
+}
+
+static void dump_cfg_dot(FILE *out,
+                         struct AsmFunction *fn,
+                         struct CFG *cfg,
+                         struct InstrLiveness *lv)
+{
+  fprintf(out, "digraph \"cfg_%s\" {\n", fn->name);
+  fprintf(out, "  graph [fontname=\"monospace\"];\n");
+  fprintf(out, "  node [shape=box, fontname=\"monospace\"];\n");
+  fprintf(out, "  edge [fontname=\"monospace\"];\n\n");
+
+  for (int bi = 0; bi < cfg->block_count; bi++) {
+    struct BasicBlock *block = &cfg->blocks[bi];
+
+    fprintf(out, "  B%d [label=\"", bi);
+
+    fprintf(out, "B%d [%d..%d]\\l", bi, block->start, block->end);
+
+    fputs("use = ", out);
+    dot_print_pseudo_set(out, &block->use);
+    fputs("\\l", out);
+
+    fputs("def = ", out);
+    dot_print_pseudo_set(out, &block->def);
+    fputs("\\l", out);
+
+    fputs("live_in = ", out);
+    dot_print_pseudo_set(out, &block->live_in);
+    fputs("\\l", out);
+
+    fputs("live_out = ", out);
+    dot_print_pseudo_set(out, &block->live_out);
+    fputs("\\l\\l", out);
+
+    for (int i = block->start; i <= block->end; i++) {
+      dot_print_instr_summary(out, i, &fn->body.data[i]);
+
+      if (lv) {
+        fputs("\\l    before=", out);
+        dot_print_pseudo_set(out, &lv[i].live_before);
+        fputs("\\l    after =", out);
+        dot_print_pseudo_set(out, &lv[i].live_after);
+      }
+
+      fputs("\\l", out);
+    }
+
+    fprintf(out, "\"];\n");
+  }
+
+  fprintf(out, "\n");
+
+  for (int bi = 0; bi < cfg->block_count; bi++) {
+    struct BasicBlock *block = &cfg->blocks[bi];
+
+    for (int i = 0; i < block->succs.len; i++) {
+      int succ = block->succs.data[i];
+
+      fprintf(out, "  B%d -> B%d", bi, succ);
+
+      struct AsmInstr *last = &fn->body.data[block->end];
+
+      if (last->kind == AsmInstr_JMP) {
+        fprintf(out, " [label=\"jmp\"]");
+      } else if (last->kind == AsmInstr_JmpCC) {
+        if (succ == block_for_label(fn, cfg, last->as.jmpcc.target)) {
+          fprintf(out, " [label=\"true\"]");
+        } else {
+          fprintf(out, " [label=\"false\"]");
+        }
+      } else {
+        fprintf(out, " [label=\"fallthrough\"]");
+      }
+
+      fprintf(out, ";\n");
     }
   }
 
-  return false;
+  fprintf(out, "}\n");
 }
 
-static bool pseudo_set_equal(VecPseudo *a, VecPseudo *b)
+static void free_cfg(struct CFG *cfg)
 {
-  if (a->len != b->len) {
-    return false;
+  for (int i = 0; i < cfg->block_count; i++) {
+    vec_free(&cfg->blocks[i].succs);
+
+    pseudo_set_free(&cfg->blocks[i].use);
+    pseudo_set_free(&cfg->blocks[i].def);
+    pseudo_set_free(&cfg->blocks[i].live_in);
+    pseudo_set_free(&cfg->blocks[i].live_out);
   }
 
-  for (int i = 0; i < a->len; i++) {
-    if (!pseudo_set_contains(b, a->data[i])) {
-      return false;
-    }
-  }
+  free(cfg->blocks);
+  free(cfg->instr_to_block);
 
-  return true;
+  cfg->blocks = NULL;
+  cfg->instr_to_block = NULL;
+  cfg->block_count = 0;
 }
 
-static void pseudo_set_add(VecPseudo *set, char *name)
+static void write_cfg_dot(struct AsmFunction *fn,
+                          struct InstrLiveness *lv,
+                          const char *path)
 {
-  if (!name) {
+  FILE *out;
+  struct CFG cfg;
+
+  cfg = build_cfg(fn);
+
+  for (int bi = 0; bi < cfg.block_count; bi++) {
+    compute_block_use_def(fn, &cfg.blocks[bi], lv);
+  }
+
+  solve_block_liveness(&cfg);
+
+  out = fopen(path, "w");
+  if (!out) {
+    perror("fopen");
+    free_cfg(&cfg);
     return;
   }
 
-  if (pseudo_set_contains(set, name)) {
-    return;
-  }
+  dump_cfg_dot(out, fn, &cfg, lv);
 
-  vec_insert(set, name);
-}
-
-static void pseudo_set_copy(VecPseudo *dst, VecPseudo *src)
-{
-  dst->len = 0;
-
-  for (int i = 0; i < src->len; i++) {
-    pseudo_set_add(dst, src->data[i]);
-  }
-}
-
-static void pseudo_set_union_into(VecPseudo *dst, VecPseudo *src)
-{
-  for (int i = 0; i < src->len; i++) {
-    pseudo_set_add(dst, src->data[i]);
-  }
-}
-
-static void pseudo_set_remove(VecPseudo *set, char *name)
-{
-  for (int i = 0; i < set->len; i++) {
-    if (strcmp(set->data[i], name) == 0) {
-      set->data[i] = set->data[set->len - 1];
-      set->len--;
-      return;
-    }
-  }
-}
-
-static void pseudo_set_subtract(VecPseudo *dst, VecPseudo *to_remove)
-{
-  for (int i = 0; i < to_remove->len; i++) {
-    pseudo_set_remove(dst, to_remove->data[i]);
-  }
-}
-
-static void pseudo_set_free(VecPseudo *set)
-{
-  vec_free(set);
-  set->capacity = 0;
-  set->len = 0;
-  set->data = NULL;
-}
-
-static void pseudo_set_print(VecPseudo *set)
-{
-  printf("{");
-
-  for (int i = 0; i < set->len; i++) {
-    if (i > 0) {
-      printf(", ");
-    }
-
-    printf("%s", set->data[i]);
-  }
-
-  printf("}");
+  fclose(out);
+  free_cfg(&cfg);
 }
 
 static void release_dead_regs(struct RegAllocState *state,
@@ -12504,76 +12789,6 @@ static void compute_instr_use_def(struct AsmInstr *instr, VecPseudo *use,
   }
 }
 
-static void compute_block_use_def(struct AsmFunction *fn,
-                                  struct BasicBlock *block,
-                                  struct InstrLiveness *lv)
-{
-  for (int i = block->start; i <= block->end; i++) {
-    /*
-     * use[B] contains values used before being defined inside B.
-     */
-    for (int j = 0; j < lv[i].use.len; j++) {
-      char *name = lv[i].use.data[j];
-
-      if (!pseudo_set_contains(&block->def, name)) {
-        pseudo_set_add(&block->use, name);
-      }
-    }
-
-    /*
-     * def[B] contains values defined inside B.
-     */
-    for (int j = 0; j < lv[i].def.len; j++) {
-      pseudo_set_add(&block->def, lv[i].def.data[j]);
-    }
-  }
-}
-
-static void solve_block_liveness(struct CFG *cfg)
-{
-  bool changed = true;
-
-  while (changed) {
-    changed = false;
-
-    /*
-     * Backward order usually converges faster.
-     */
-    for (int bi = cfg->block_count - 1; bi >= 0; bi--) {
-      struct BasicBlock *block = &cfg->blocks[bi];
-
-      VecPseudo new_live_out = {0};
-      VecPseudo new_live_in = {0};
-
-      /*
-       * live_out[B] = union(live_in[S]) for each successor S.
-       */
-      for (int i = 0; i < block->succs.len; i++) {
-        int succ_idx = block->succs.data[i];
-        pseudo_set_union_into(&new_live_out, &cfg->blocks[succ_idx].live_in);
-      }
-
-      /*
-       * live_in[B] = use[B] union (live_out[B] - def[B])
-       */
-      pseudo_set_copy(&new_live_in, &new_live_out);
-      pseudo_set_subtract(&new_live_in, &block->def);
-      pseudo_set_union_into(&new_live_in, &block->use);
-
-      if (!pseudo_set_equal(&block->live_out, &new_live_out) ||
-          !pseudo_set_equal(&block->live_in, &new_live_in)) {
-        changed = true;
-      }
-
-      pseudo_set_free(&block->live_out);
-      pseudo_set_free(&block->live_in);
-
-      block->live_out = new_live_out;
-      block->live_in = new_live_in;
-    }
-  }
-}
-
 static void compute_instr_liveness_from_blocks(struct AsmFunction *fn,
                                                struct CFG *cfg,
                                                struct InstrLiveness *lv)
@@ -12601,25 +12816,6 @@ static void compute_instr_liveness_from_blocks(struct AsmFunction *fn,
 
     pseudo_set_free(&live);
   }
-}
-
-static void free_cfg(struct CFG *cfg)
-{
-  for (int i = 0; i < cfg->block_count; i++) {
-    vec_free(&cfg->blocks[i].succs);
-
-    pseudo_set_free(&cfg->blocks[i].use);
-    pseudo_set_free(&cfg->blocks[i].def);
-    pseudo_set_free(&cfg->blocks[i].live_in);
-    pseudo_set_free(&cfg->blocks[i].live_out);
-  }
-
-  free(cfg->blocks);
-  free(cfg->instr_to_block);
-
-  cfg->blocks = NULL;
-  cfg->instr_to_block = NULL;
-  cfg->block_count = 0;
 }
 
 static struct InstrLiveness *compute_liveness_cfg(struct AsmFunction *fn)
@@ -13019,6 +13215,14 @@ struct AsmFunction *regalloc_fn(struct AsmFunction *fn, struct Map *map,
   VecPseudoHome homes;
 
   lv = compute_liveness_cfg(fn);
+
+  #ifdef DEBUG_CFG_DOT
+{
+  char *path = mkstr("%s.cfg.dot", fn->name);
+  write_cfg_dot(fn, lv, path);
+  free(path);
+}
+#endif
 
   types = collect_pseudo_types(fn);
 
