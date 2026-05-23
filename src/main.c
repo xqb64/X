@@ -323,7 +323,7 @@ struct RunResult run(struct CompilerOptions *opts)
   }
 
   ast = parse_result.ast;
-  
+
 #ifdef DEBUG_PARSER
   print_ast(ast);
 #endif
@@ -340,7 +340,7 @@ struct RunResult run(struct CompilerOptions *opts)
   }
 
   resolved_ast = resolve_result.as.ast;
-  
+
 #ifdef DEBUG_RESOLVER
   printf("resolved ast:\n");
   print_ast(resolved_ast);
@@ -433,7 +433,7 @@ struct RunResult run(struct CompilerOptions *opts)
   }
 
   asm_prog = asm_result.prog;
- 
+
 #ifdef DEBUG_CODEGEN_RAW
   print_asm(&asm_prog);
 #endif
