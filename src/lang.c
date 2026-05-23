@@ -13896,6 +13896,7 @@ static void assign_stack_home(VecPseudoHome *homes, VecPseudoType *types,
 static VecPseudoHome color_interference_graph(struct InterferenceGraph *graph,
                                               VecPseudoType *types,
                                               VecPseudo *force_stack,
+                                              VecPseudo *out_spilled,
                                               struct Map *map,
                                               int *used_stack_bytes)
 {
@@ -13991,6 +13992,16 @@ static VecPseudoHome color_interference_graph(struct InterferenceGraph *graph,
     if (choose_color_for_node(graph, &homes, entry.node_idx, &reg)) {
       pseudo_home_add_reg(&homes, node->pseudo, reg);
     } else {
+      /*
+       * Optimistic coloring failed for this node.
+       *
+       * Still assign a temporary stack home so debugging works, but also report
+       * it so the caller can rewrite the program and rerun allocation.
+       */
+      if (out_spilled) {
+        pseudo_set_add(out_spilled, node->pseudo);
+      }
+
       assign_stack_home(&homes, types, map, used_stack_bytes, node->pseudo);
     }
   }
@@ -14793,6 +14804,50 @@ static struct AsmOperand make_reg_operand(enum AsmRegister reg,
   };
 }
 
+static char *fresh_spill_tmp(void)
+{
+  return mkstr("tmp.%d", mktmp());
+}
+
+static struct AsmOperand make_pseudo_operand(char *pseudo,
+                                             struct AsmType asm_type)
+{
+  return (struct AsmOperand){
+      .kind = AsmOperand_PSEUDO,
+      .asm_type = asm_type,
+      .as.pseudo = strdup(pseudo),
+  };
+}
+
+static struct AsmOperand make_stack_operand(int offset, struct AsmType asm_type)
+{
+  return (struct AsmOperand){
+      .kind = AsmOperand_STACK,
+      .asm_type = asm_type,
+      .as.stack_offset = offset,
+  };
+}
+
+static struct AsmInstr make_mov_instr(struct AsmOperand src,
+                                      struct AsmOperand dst,
+                                      struct AsmType asm_type)
+{
+  struct AsmInstr instr = {0};
+
+  instr.kind = AsmInstr_MOV;
+  instr.asm_type = asm_type;
+  instr.as.mov.src = src;
+  instr.as.mov.dst = dst;
+
+  return instr;
+}
+
+static bool is_spilled_pseudo_operand(struct AsmOperand *op, VecPseudo *spilled)
+{
+  return op->kind == AsmOperand_PSEUDO &&
+         pseudo_set_contains(spilled, op->as.pseudo);
+}
+
 static struct AsmInstr make_push_reg(enum AsmRegister reg)
 {
   return (struct AsmInstr){
@@ -14898,180 +14953,361 @@ static void patch_stack_alloc(struct AsmFunction *fn, int stack_size)
   assert(0 && "could not find prologue stack allocation");
 }
 
+static void rewrite_spilled_use(VecAsmInstr *before, struct AsmOperand *op,
+                                VecPseudo *spilled, struct Map *map,
+                                int *used_stack_bytes)
+{
+  if (!is_spilled_pseudo_operand(op, spilled)) {
+    return;
+  }
+
+  struct AsmType asm_type = op->asm_type;
+  int offset = get_offset(map, op->as.pseudo, asm_type, used_stack_bytes);
+
+  char *tmp = fresh_spill_tmp();
+
+  struct AsmOperand stack_op = make_stack_operand(offset, asm_type);
+  struct AsmOperand tmp_dst = make_pseudo_operand(tmp, asm_type);
+
+  vec_insert(before, make_mov_instr(stack_op, tmp_dst, asm_type));
+
+  *op = make_pseudo_operand(tmp, asm_type);
+
+  free(tmp);
+}
+
+static void rewrite_spilled_def(VecAsmInstr *after, struct AsmOperand *op,
+                                VecPseudo *spilled, struct Map *map,
+                                int *used_stack_bytes)
+{
+  if (!is_spilled_pseudo_operand(op, spilled)) {
+    return;
+  }
+
+  struct AsmType asm_type = op->asm_type;
+  int offset = get_offset(map, op->as.pseudo, asm_type, used_stack_bytes);
+
+  char *tmp = fresh_spill_tmp();
+
+  struct AsmOperand tmp_src = make_pseudo_operand(tmp, asm_type);
+  struct AsmOperand stack_op = make_stack_operand(offset, asm_type);
+
+  *op = make_pseudo_operand(tmp, asm_type);
+
+  vec_insert(after, make_mov_instr(tmp_src, stack_op, asm_type));
+
+  free(tmp);
+}
+
+static void rewrite_spilled_use_def(VecAsmInstr *before, VecAsmInstr *after,
+                                    struct AsmOperand *op, VecPseudo *spilled,
+                                    struct Map *map, int *used_stack_bytes)
+{
+  if (!is_spilled_pseudo_operand(op, spilled)) {
+    return;
+  }
+
+  struct AsmType asm_type = op->asm_type;
+  int offset = get_offset(map, op->as.pseudo, asm_type, used_stack_bytes);
+
+  char *tmp = fresh_spill_tmp();
+
+  struct AsmOperand stack_load = make_stack_operand(offset, asm_type);
+  struct AsmOperand tmp_load_dst = make_pseudo_operand(tmp, asm_type);
+
+  vec_insert(before, make_mov_instr(stack_load, tmp_load_dst, asm_type));
+
+  *op = make_pseudo_operand(tmp, asm_type);
+
+  struct AsmOperand tmp_store_src = make_pseudo_operand(tmp, asm_type);
+  struct AsmOperand stack_store = make_stack_operand(offset, asm_type);
+
+  vec_insert(after, make_mov_instr(tmp_store_src, stack_store, asm_type));
+
+  free(tmp);
+}
+
+static void append_instrs(VecAsmInstr *dst, VecAsmInstr *src)
+{
+  for (int i = 0; i < src->len; i++) {
+    vec_insert(dst, src->data[i]);
+  }
+}
+
+static void rewrite_spills(struct AsmFunction *fn, VecPseudo *spilled,
+                           struct Map *map, int *used_stack_bytes)
+{
+  if (spilled->len == 0) {
+    return;
+  }
+
+  VecAsmInstr new_body = {0};
+
+  for (int i = 0; i < fn->body.len; i++) {
+    struct AsmInstr instr = fn->body.data[i];
+
+    VecAsmInstr before = {0};
+    VecAsmInstr after = {0};
+
+    switch (instr.kind) {
+      case AsmInstr_MOV:
+        rewrite_spilled_use(&before, &instr.as.mov.src, spilled, map,
+                            used_stack_bytes);
+
+        rewrite_spilled_def(&after, &instr.as.mov.dst, spilled, map,
+                            used_stack_bytes);
+        break;
+
+      case AsmInstr_BIN:
+        /*
+         * x86-style binary:
+         *   rhs = rhs OP lhs
+         *
+         * lhs is use-only.
+         * rhs is use+def.
+         */
+        rewrite_spilled_use(&before, &instr.as.binary.lhs, spilled, map,
+                            used_stack_bytes);
+
+        rewrite_spilled_use_def(&before, &after, &instr.as.binary.rhs, spilled,
+                                map, used_stack_bytes);
+        break;
+
+      case AsmInstr_CMP:
+        rewrite_spilled_use(&before, &instr.as.cmp.lhs, spilled, map,
+                            used_stack_bytes);
+
+        rewrite_spilled_use(&before, &instr.as.cmp.rhs, spilled, map,
+                            used_stack_bytes);
+        break;
+
+      case AsmInstr_CVT:
+        rewrite_spilled_use(&before, &instr.as.cvt.src, spilled, map,
+                            used_stack_bytes);
+
+        rewrite_spilled_def(&after, &instr.as.cvt.dst, spilled, map,
+                            used_stack_bytes);
+        break;
+
+      case AsmInstr_SetCC:
+        rewrite_spilled_def(&after, &instr.as.setcc.op, spilled, map,
+                            used_stack_bytes);
+        break;
+
+      case AsmInstr_UNARY:
+        rewrite_spilled_use_def(&before, &after, &instr.as.unary.op, spilled,
+                                map, used_stack_bytes);
+        break;
+
+      case AsmInstr_PUSH:
+        rewrite_spilled_use(&before, &instr.as.push.op, spilled, map,
+                            used_stack_bytes);
+        break;
+
+      case AsmInstr_POP:
+        rewrite_spilled_def(&after, &instr.as.pop.op, spilled, map,
+                            used_stack_bytes);
+        break;
+
+      case AsmInstr_LEA:
+        rewrite_spilled_use(&before, &instr.as.lea.src, spilled, map,
+                            used_stack_bytes);
+
+        rewrite_spilled_def(&after, &instr.as.lea.dst, spilled, map,
+                            used_stack_bytes);
+        break;
+
+      case AsmInstr_CALL:
+      case AsmInstr_RET:
+      case AsmInstr_JMP:
+      case AsmInstr_JmpCC:
+      case AsmInstr_LBL:
+      case AsmInstr_REP_MOVSB:
+        break;
+
+      default:
+        assert(0 && "Unhandled instruction in rewrite_spills");
+    }
+
+    append_instrs(&new_body, &before);
+    vec_insert(&new_body, instr);
+    append_instrs(&new_body, &after);
+
+    vec_free(&before);
+    vec_free(&after);
+  }
+
+  vec_free(&fn->body);
+  fn->body = new_body;
+}
+
+static void print_spilled_pseudos(VecPseudo *spilled)
+{
+  printf("Spilled pseudos:\n");
+
+  for (int i = 0; i < spilled->len; i++) {
+    printf("  %s\n", spilled->data[i]);
+  }
+}
+
+#define MAX_REGALLOC_ATTEMPTS 20
+
 struct AsmFunction *regalloc_fn(struct AsmFunction *fn, struct Map *map,
                                 int *used_stack_bytes,
                                 int *used_callee_saved_count)
 {
-  struct InstrLiveness *lv;
-  int original_instr_count;
+  for (int attempt = 0; attempt < MAX_REGALLOC_ATTEMPTS; attempt++) {
+    printf("regalloc attempt %d\n", attempt);
 
-  VecPseudoType types;
-  VecMove moves;
-  VecPseudoHome homes;
-  VecPseudoHome coalesced_homes;
-  VecInt used_callee_saved;
+    struct InstrLiveness *lv;
+    int original_instr_count;
 
-  struct InterferenceGraph interference;
-  struct InterferenceGraph coalesced_graph;
+    VecPseudoType types;
+    VecMove moves;
+    VecPseudoHome homes;
+    VecPseudoHome coalesced_homes;
+    VecInt used_callee_saved;
+    VecPseudo spilled = {0};
 
-  int *coalesce_parent;
+    struct InterferenceGraph interference;
+    struct InterferenceGraph coalesced_graph;
+
+    int *coalesce_parent;
 
 #ifdef DEBUG_INTERVALS
-  VecLiveInterval intervals;
+    VecLiveInterval intervals;
 #endif
 
-  /*
-   * 1. Compute liveness on the original pseudo-based asm.
-   *
-   * Save this because later passes mutate fn->body.len.
-   */
-  original_instr_count = fn->body.len;
-  lv = compute_liveness_cfg(fn);
+    original_instr_count = fn->body.len;
+    lv = compute_liveness_cfg(fn);
 
-  /*
-   * 2. Remember pseudo types before operands are rewritten.
-   */
-  types = collect_pseudo_types(fn);
+    types = collect_pseudo_types(fn);
 
-  /*
-   * 3. Build original interference graph.
-   *
-   * This should include precolored register nodes and call-clobber edges.
-   */
-  interference = build_interference_graph(fn, lv);
+    interference = build_interference_graph(fn, lv);
 
 #ifdef DEBUG_INTERFERENCE
-  print_interference_graph(&interference);
+    print_interference_graph(&interference);
 #endif
 
 #ifdef DEBUG_INTERFERENCE_DOT
-  {
-    char *path = mkstr("%s.interference.dot", fn->name);
-    write_interference_graph_dot(&interference, path);
-    free(path);
-  }
+    {
+      char *path = mkstr("%s.interference.%d.dot", fn->name, attempt);
+      write_interference_graph_dot(&interference, path);
+      free(path);
+    }
 #endif
 
-  /*
-   * 4. Collect pseudo-to-pseudo moves for Briggs coalescing.
-   */
-  moves = collect_moves_from_graph(fn, &interference);
+    moves = collect_moves_from_graph(fn, &interference);
 
 #ifdef DEBUG_MOVES
-  print_moves(&interference, &moves);
+    print_moves(&interference, &moves);
 #endif
 
 #ifdef DEBUG_MOVES_DOT
-  {
-    char *path = mkstr("%s.moves.dot", fn->name);
-    write_moves_dot(&interference, &moves, path);
-    free(path);
-  }
+    {
+      char *path = mkstr("%s.moves.%d.dot", fn->name, attempt);
+      write_moves_dot(&interference, &moves, path);
+      free(path);
+    }
 #endif
 
 #ifdef DEBUG_BRIGGS
-  debug_briggs_moves(&interference, &moves);
+    debug_briggs_moves(&interference, &moves);
 #endif
 
 #ifdef DEBUG_INTERVALS
-  intervals = build_live_intervals(lv, original_instr_count, &types);
-  sort_live_intervals(&intervals);
-  print_live_intervals(&intervals);
-  free_live_intervals(&intervals);
+    intervals = build_live_intervals(lv, original_instr_count, &types);
+    sort_live_intervals(&intervals);
+    print_live_intervals(&intervals);
+    free_live_intervals(&intervals);
 #endif
 
-  /*
-   * 5. Conservative Briggs coalescing.
-   */
-  coalesce_parent = coalesce_briggs_george(&interference, &types, &moves);
+    coalesce_parent = coalesce_briggs_george(&interference, &types, &moves);
 
-  /*
-   * 6. Build the coalesced interference graph.
-   */
-  coalesced_graph =
-      build_aliased_interference_graph(&interference, coalesce_parent);
+    coalesced_graph =
+        build_aliased_interference_graph(&interference, coalesce_parent);
 
 #ifdef DEBUG_COALESCED_INTERFERENCE
-  printf("Coalesced ");
-  print_interference_graph(&coalesced_graph);
+    printf("Coalesced ");
+    print_interference_graph(&coalesced_graph);
 #endif
 
-#ifdef DEBUG_COALESCED_INTERFERENCE_DOT
-  {
-    char *path = mkstr("%s.coalesced.interference.dot", fn->name);
-    write_interference_graph_dot(&coalesced_graph, path);
-    free(path);
-  }
+    coalesced_homes = color_interference_graph(&coalesced_graph, &types, NULL,
+                                               &spilled, map, used_stack_bytes);
+
+    homes = expand_coalesced_homes(&interference, coalesce_parent,
+                                   &coalesced_homes);
+
+    /*
+     * If coloring spilled anything, rewrite the pseudo program and retry.
+     */
+    if (spilled.len > 0) {
+#ifdef DEBUG_SPILLS
+      print_spilled_pseudos(&spilled);
 #endif
 
-  /*
-   * 7. Color the coalesced graph.
-   *
-   * The force_stack argument is NULL because call-live handling now happens
-   * through precolored call-clobber interference edges.
-   */
-  coalesced_homes = color_interference_graph(&coalesced_graph, &types, NULL,
-                                             map, used_stack_bytes);
+      rewrite_spills(fn, &spilled, map, used_stack_bytes);
 
-  /*
-   * 8. Expand coalesced homes back to every original pseudo.
-   */
-  homes =
-      expand_coalesced_homes(&interference, coalesce_parent, &coalesced_homes);
+      free_pseudo_homes(&homes);
+      free_pseudo_homes(&coalesced_homes);
 
-  /*
-   * 9. Verify coloring against the original graph.
-   */
-  verify_coloring(&interference, &homes);
+      free_interference_graph(&coalesced_graph);
+      free_interference_graph(&interference);
+
+      free(coalesce_parent);
+
+      free_moves(&moves);
+      free_pseudo_types(&types);
+      free_liveness(lv, original_instr_count);
+      pseudo_set_free(&spilled);
+
+      /*
+       * Restart on the rewritten program.
+       */
+      continue;
+    }
+
+    /*
+     * No spills: this is the final allocation.
+     */
+    verify_coloring(&interference, &homes);
 
 #ifdef DEBUG_HOMES
-  print_pseudo_homes(&homes);
+    print_pseudo_homes(&homes);
 #endif
 
-  /*
-   * 10. Track callee-saved registers used by assigned homes.
-   *
-   * regalloc() needs the count so it can patch the prologue stack allocation
-   * with alignment that accounts for callee-saved PUSH instructions.
-   */
-  used_callee_saved = collect_used_callee_saved_regs(&homes);
-  *used_callee_saved_count = used_callee_saved.len;
+    used_callee_saved = collect_used_callee_saved_regs(&homes);
+    *used_callee_saved_count = used_callee_saved.len;
 
-  /*
-   * 11. Rewrite pseudos to their assigned homes.
-   */
-  for (int i = 0; i < fn->body.len; i++) {
-    regalloc_instr_from_homes(&fn->body.data[i], &homes, map, used_stack_bytes);
+    for (int i = 0; i < fn->body.len; i++) {
+      regalloc_instr_from_homes(&fn->body.data[i], &homes, map,
+                                used_stack_bytes);
+    }
+
+    remove_redundant_moves(fn);
+    save_restore_callee_saved_regs(fn, &used_callee_saved);
+
+    vec_free(&used_callee_saved);
+
+    free_pseudo_homes(&homes);
+    free_pseudo_homes(&coalesced_homes);
+
+    free_interference_graph(&coalesced_graph);
+    free_interference_graph(&interference);
+
+    free(coalesce_parent);
+
+    free_moves(&moves);
+    free_pseudo_types(&types);
+    free_liveness(lv, original_instr_count);
+    pseudo_set_free(&spilled);
+
+    return fn;
   }
 
-  /*
-   * 12. Cleanup generated asm and insert callee-saved save/restore.
-   *
-   * These mutate fn->body.len, so `free_liveness` must use
-   * original_instr_count, not fn->body.len.
-   */
-  remove_redundant_moves(fn);
-  save_restore_callee_saved_regs(fn, &used_callee_saved);
-
-  /*
-   * 13. Cleanup.
-   */
-  vec_free(&used_callee_saved);
-
-  free_pseudo_homes(&homes);
-  free_pseudo_homes(&coalesced_homes);
-
-  free_interference_graph(&coalesced_graph);
-  free_interference_graph(&interference);
-
-  free(coalesce_parent);
-
-  free_moves(&moves);
-  free_pseudo_types(&types);
-
-  free_liveness(lv, original_instr_count);
-
-  return fn;
+  fprintf(stderr, "register allocation did not converge after %d attempts\n",
+          MAX_REGALLOC_ATTEMPTS);
+  abort();
 }
 
 static int compute_frame_stack_adjustment(int local_stack_bytes,
