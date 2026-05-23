@@ -4010,9 +4010,7 @@ int compute_frame_stack_adjustment(int local_stack_bytes,
 struct AsmProgram *regalloc(struct AsmProgram *asmcode)
 {
   for (int i = 0; i < asmcode->funcs.len; i++) {
-    struct Map *map = malloc(sizeof(struct Map));
-    memset(map, 0, sizeof(struct Map));
-    map->next = NULL;
+    struct Map *map = calloc(1, sizeof(struct Map));
 
     int used_stack_bytes = 0;
     int used_callee_saved_count = 0;
@@ -4023,6 +4021,8 @@ struct AsmProgram *regalloc(struct AsmProgram *asmcode)
     int stack_size = compute_frame_stack_adjustment(used_stack_bytes,
                                                     used_callee_saved_count);
     patch_stack_alloc(&asmcode->funcs.data[i], stack_size);
+
+    free(map);
   }
   return asmcode;
 }
