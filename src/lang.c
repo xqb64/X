@@ -12320,9 +12320,13 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
          * use a mov via a scratch register. */
         if (ir_instr->as.call.args.data[i]->type.kind != STRUCT_T &&
             size <= 8) {
-          struct AsmOperand scratch_reg = {.kind = AsmOperand_REG,
-                                           .as.reg = R10,
-                                           .asm_type = src_op.asm_type};
+          bool use_sse_scratch = src_op.asm_type.kind == AsmType_FLOAT ||
+                                 src_op.asm_type.kind == AsmType_DOUBLE;
+
+          struct AsmOperand scratch_reg = {
+              .kind = AsmOperand_REG,
+              .as.reg = use_sse_scratch ? XMM8 : R10,
+              .asm_type = src_op.asm_type};
 
           vec_insert(instrs, ((struct AsmInstr){
                                  .kind = AsmInstr_MOV,
@@ -13267,8 +13271,14 @@ struct AsmFunction codegen_fn(struct IRFunction *ir_func)
       /* If it is a struct, but smaller or equal to 8 bytes, then we can just
        * use mov. */
       if (param->type.kind != STRUCT_T && size <= 8) {
+        bool use_sse_scratch = param_asm_type.kind == AsmType_FLOAT ||
+                               param_asm_type.kind == AsmType_DOUBLE;
+
         struct AsmOperand scratch_reg = {
-            .kind = AsmOperand_REG, .as.reg = R10, .asm_type = param_asm_type};
+            .kind = AsmOperand_REG,
+            .as.reg = use_sse_scratch ? XMM8 : R10,
+            .asm_type = param_asm_type,
+        };
 
         vec_insert(
             &func.body,
@@ -13534,6 +13544,28 @@ struct RegAllocState {
   struct AllocatedReg *allocated_regs;
   bool reg_used[NUM_ALLOCATABLE_INT_REGS];
 };
+
+static enum AsmRegister allocatable_sse_regs[] = {
+    XMM0,
+    XMM1,
+    XMM2,
+    XMM3,
+    XMM4,
+    XMM5,
+    XMM6,
+    XMM7,
+    /* XMM8 reserved for fixup scratch */
+    XMM9,
+    XMM10,
+    XMM11,
+    XMM12,
+    XMM13,
+    XMM14,
+    XMM15,
+};
+
+#define NUM_ALLOCATABLE_SSE_REGS \
+  ((int) (sizeof(allocatable_sse_regs) / sizeof(allocatable_sse_regs[0])))
 
 struct LiveInterval {
   char *pseudo;
@@ -15007,6 +15039,38 @@ static char *precolored_reg_name(enum AsmRegister reg)
       return "bp";
     case SP:
       return "sp";
+    case XMM0:
+      return "xmm0";
+    case XMM1:
+      return "xmm1";
+    case XMM2:
+      return "xmm2";
+    case XMM3:
+      return "xmm3";
+    case XMM4:
+      return "xmm4";
+    case XMM5:
+      return "xmm5";
+    case XMM6:
+      return "xmm6";
+    case XMM7:
+      return "xmm7";
+    case XMM8:
+      return "xmm8";
+    case XMM9:
+      return "xmm9";
+    case XMM10:
+      return "xmm10";
+    case XMM11:
+      return "xmm11";
+    case XMM12:
+      return "xmm12";
+    case XMM13:
+      return "xmm13";
+    case XMM14:
+      return "xmm14";
+    case XMM15:
+      return "xmm15";
     default:
       assert(0 && "unhandled precolored register");
   }
@@ -15041,6 +15105,17 @@ static int interference_add_precolored_reg(struct InterferenceGraph *graph,
   return graph->nodes.len - 1;
 }
 
+static void add_precolored_register_nodes(struct InterferenceGraph *graph)
+{
+  for (int i = 0; i < NUM_ALLOCATABLE_INT_REGS; i++) {
+    interference_add_precolored_reg(graph, allocatable_int_regs[i]);
+  }
+
+  for (int i = 0; i < NUM_ALLOCATABLE_SSE_REGS; i++) {
+    interference_add_precolored_reg(graph, allocatable_sse_regs[i]);
+  }
+}
+
 static void interference_add_edge_by_index(struct InterferenceGraph *graph,
                                            int ai, int bi)
 {
@@ -15073,42 +15148,27 @@ static void interference_add_edge(struct InterferenceGraph *graph, char *a,
   interference_add_edge_by_index(graph, ai, bi);
 }
 
-static enum AsmRegister caller_saved_regs[] = {
+static enum AsmRegister caller_saved_int_regs[] = {
     AX, DX, CX, SI, DI, R8, R9,
 };
 
-#define NUM_CALLER_SAVED_REGS \
-  ((int) (sizeof(caller_saved_regs) / sizeof(caller_saved_regs[0])))
+#define NUM_CALLER_SAVED_INT_REGS \
+  ((int) (sizeof(caller_saved_int_regs) / sizeof(caller_saved_int_regs[0])))
 
-static enum AsmRegister callee_saved_regs[] = {
+static enum AsmRegister caller_saved_sse_regs[] = {
+    XMM0, XMM1,  XMM2,  XMM3,  XMM4,  XMM5,  XMM6,  XMM7,
+    XMM9, XMM10, XMM11, XMM12, XMM13, XMM14, XMM15,
+};
+
+#define NUM_CALLER_SAVED_SSE_REGS \
+  ((int) (sizeof(caller_saved_sse_regs) / sizeof(caller_saved_sse_regs[0])))
+
+static enum AsmRegister callee_saved_int_regs[] = {
     BX, R12, R13, R14, R15,
 };
 
-#define NUM_CALLEE_SAVED_REGS \
-  ((int) (sizeof(callee_saved_regs) / sizeof(callee_saved_regs[0])))
-
-static void add_precolored_register_nodes(struct InterferenceGraph *graph)
-{
-  for (int i = 0; i < NUM_ALLOCATABLE_INT_REGS; i++) {
-    interference_add_precolored_reg(graph, allocatable_int_regs[i]);
-  }
-}
-
-static void add_call_clobber_interference(struct InterferenceGraph *graph,
-                                          struct InstrLiveness *lv)
-{
-  for (int i = 0; i < lv->live_after.len; i++) {
-    char *pseudo = lv->live_after.data[i];
-    int pseudo_idx = interference_add_node(graph, pseudo);
-
-    for (int r = 0; r < NUM_CALLER_SAVED_REGS; r++) {
-      int reg_idx =
-          interference_add_precolored_reg(graph, caller_saved_regs[r]);
-
-      interference_add_edge_by_index(graph, pseudo_idx, reg_idx);
-    }
-  }
-}
+#define NUM_CALLEE_SAVED_INT_REGS \
+  ((int) (sizeof(callee_saved_int_regs) / sizeof(callee_saved_int_regs[0])))
 
 static void interference_add_nodes_from_set(struct InterferenceGraph *graph,
                                             VecPseudo *set)
@@ -15182,22 +15242,109 @@ static void add_interferences_for_instr(struct InterferenceGraph *graph,
   pseudo_set_free(&live);
 }
 
-static struct InterferenceGraph build_interference_graph(
-    struct AsmFunction *fn, struct InstrLiveness *lv)
+struct AbiRegParamMove {
+  enum AsmRegister src_reg;
+  char *dst_pseudo;
+  struct AsmType asm_type;
+};
+
+typedef Vector(struct AbiRegParamMove) VecAbiRegParamMove;
+
+static bool is_abi_int_arg_reg(enum AsmRegister reg)
 {
-  struct InterferenceGraph graph = {0};
+  return reg == DI || reg == SI || reg == DX || reg == CX || reg == R8 ||
+         reg == R9;
+}
 
-  add_precolored_register_nodes(&graph);
+static bool is_abi_sse_arg_reg(enum AsmRegister reg)
+{
+  return reg >= XMM0 && reg <= XMM7;
+}
 
+static bool is_abi_arg_reg(enum AsmRegister reg)
+{
+  return is_abi_int_arg_reg(reg) || is_abi_sse_arg_reg(reg);
+}
+
+static bool same_reg_class(enum AsmRegister a, enum AsmRegister b)
+{
+  return (is_abi_sse_arg_reg(a) && is_abi_sse_arg_reg(b)) ||
+         (is_abi_int_arg_reg(a) && is_abi_int_arg_reg(b));
+}
+
+static void add_abi_param_copy_interference(struct InterferenceGraph *graph,
+                                            struct AsmFunction *fn)
+{
+  VecAbiRegParamMove moves = {0};
+
+  /*
+   * Collect initial ABI register-param imports:
+   *
+   *   mov %xmm0, pseudo.a0
+   *   mov %xmm1, pseudo.a1
+   *   ...
+   *
+   * Stop at the first CALL so we do not mistake call-return moves for
+   * function-entry parameter moves.
+   */
   for (int i = 0; i < fn->body.len; i++) {
-    add_interferences_for_instr(&graph, &fn->body.data[i], &lv[i]);
+    struct AsmInstr *instr = &fn->body.data[i];
 
-    if (fn->body.data[i].kind == AsmInstr_CALL) {
-      add_call_clobber_interference(&graph, &lv[i]);
+    if (instr->kind == AsmInstr_CALL) {
+      break;
+    }
+
+    if (instr->kind != AsmInstr_MOV) {
+      continue;
+    }
+
+    if (instr->as.mov.src.kind != AsmOperand_REG) {
+      continue;
+    }
+
+    if (instr->as.mov.dst.kind != AsmOperand_PSEUDO) {
+      continue;
+    }
+
+    if (!is_abi_arg_reg(instr->as.mov.src.as.reg)) {
+      continue;
+    }
+
+    vec_insert(&moves, ((struct AbiRegParamMove){
+                           .src_reg = instr->as.mov.src.as.reg,
+                           .dst_pseudo = instr->as.mov.dst.as.pseudo,
+                           .asm_type = instr->asm_type,
+                       }));
+  }
+
+  /*
+   * These entry copies are sequential, not parallel.
+   *
+   * For:
+   *
+   *   mov %xmm0, a0
+   *   mov %xmm1, a1
+   *
+   * `a0` must not be colored as `%xmm1`, because that would clobber
+   * the still-unread incoming value for `a1`.
+   */
+  for (int i = 0; i < moves.len; i++) {
+    int pseudo_idx = interference_add_node(graph, moves.data[i].dst_pseudo);
+
+    for (int j = i + 1; j < moves.len; j++) {
+      int reg_idx;
+
+      if (!same_reg_class(moves.data[i].src_reg, moves.data[j].src_reg)) {
+        continue;
+      }
+
+      reg_idx = interference_add_precolored_reg(graph, moves.data[j].src_reg);
+
+      interference_add_edge_by_index(graph, pseudo_idx, reg_idx);
     }
   }
 
-  return graph;
+  vec_free(&moves);
 }
 
 static void print_interference_graph(struct InterferenceGraph *graph)
@@ -15294,6 +15441,73 @@ static void free_interference_graph(struct InterferenceGraph *graph)
   graph->nodes.data = NULL;
 }
 
+static bool pseudo_is_global_constant(char *pseudo)
+{
+  for (int k = 0; k < global_constants.len; k++) {
+    if (strcmp(pseudo, global_constants.data[k].name) == 0) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static bool convert_global_constant_operand(struct AsmOperand *op)
+{
+  if (op->kind != AsmOperand_PSEUDO) {
+    return false;
+  }
+
+  if (!pseudo_is_global_constant(op->as.pseudo)) {
+    return false;
+  }
+
+  op->kind = AsmOperand_DATA;
+  op->as.data = strdup(op->as.pseudo);
+  if (!op->as.data) {
+    perror("strdup");
+    exit(1);
+  }
+
+  return true;
+}
+
+static void regalloc_addr_op_from_homes(struct AsmOperand *op,
+                                        VecPseudoHome *homes, struct Map *map,
+                                        int *used_stack_bytes)
+{
+  struct PseudoHome *home;
+
+  if (op->kind != AsmOperand_PSEUDO) {
+    return;
+  }
+
+  if (convert_global_constant_operand(op)) {
+    return;
+  }
+
+  home = pseudo_home_get(homes, op->as.pseudo);
+
+  if (!home) {
+    op->kind = AsmOperand_STACK;
+    op->as.stack_offset =
+        get_offset(map, op->as.pseudo, op->asm_type, used_stack_bytes);
+    return;
+  }
+
+  /*
+   * LEA needs an addressable object. Stack homes are addressable;
+   * register homes are not.
+   */
+  if (home->kind == PSEUDO_HOME_STACK) {
+    op->kind = AsmOperand_STACK;
+    op->as.stack_offset = home->as.stack_offset;
+    return;
+  }
+
+  assert(0 && "LEA source pseudo was allocated to a register");
+}
+
 static void regalloc_op_from_homes(struct AsmOperand *op, VecPseudoHome *homes,
                                    struct Map *map, int *used_stack_bytes)
 {
@@ -15303,10 +15517,14 @@ static void regalloc_op_from_homes(struct AsmOperand *op, VecPseudoHome *homes,
     return;
   }
 
+  if (convert_global_constant_operand(op)) {
+    return;
+  }
+
   home = pseudo_home_get(homes, op->as.pseudo);
 
   /*
-   * Conservative fallback: pseudo did not appear in intervals.
+   * Conservative fallback: pseudo did not appear in allocation.
    * Put it on the stack.
    */
   if (!home) {
@@ -15379,6 +15597,8 @@ static struct AsmInstr *regalloc_instr_from_homes(struct AsmInstr *instr,
     }
 
     case AsmInstr_LEA: {
+      regalloc_addr_op_from_homes(&instr->as.lea.src, homes, map,
+                                  used_stack_bytes);
       regalloc_op_from_homes(&instr->as.lea.dst, homes, map, used_stack_bytes);
       break;
     }
@@ -15413,21 +15633,58 @@ struct SpillCost {
 
 typedef Vector(struct SpillCost) VecSpillCost;
 
-static int graph_degree_after_removal(struct InterferenceGraph *graph,
-                                      bool *removed, int node_idx)
+enum RegClass {
+  REGCLASS_NONE,
+  REGCLASS_INT,
+  REGCLASS_SSE,
+};
+
+static bool reg_is_sse(enum AsmRegister reg)
 {
-  int degree = 0;
-  struct InterferenceNode *node = &graph->nodes.data[node_idx];
+  return reg >= XMM0 && reg <= XMM15;
+}
 
-  for (int i = 0; i < node->neighbors.len; i++) {
-    int neighbor_idx = node->neighbors.data[i];
+static enum RegClass reg_class_of_reg(enum AsmRegister reg)
+{
+  return reg_is_sse(reg) ? REGCLASS_SSE : REGCLASS_INT;
+}
 
-    if (!removed[neighbor_idx]) {
-      degree++;
+static int allocatable_reg_count(enum RegClass cls)
+{
+  switch (cls) {
+    case REGCLASS_INT:
+      return NUM_ALLOCATABLE_INT_REGS;
+    case REGCLASS_SSE:
+      return NUM_ALLOCATABLE_SSE_REGS;
+    default:
+      return 0;
+  }
+}
+
+static enum AsmRegister allocatable_reg_at(enum RegClass cls, int i)
+{
+  switch (cls) {
+    case REGCLASS_INT:
+      return allocatable_int_regs[i];
+    case REGCLASS_SSE:
+      return allocatable_sse_regs[i];
+    default:
+      assert(0 && "no registers for this class");
+  }
+}
+
+static int allocatable_reg_index_in_class(enum RegClass cls,
+                                          enum AsmRegister reg)
+{
+  int n = allocatable_reg_count(cls);
+
+  for (int i = 0; i < n; i++) {
+    if (allocatable_reg_at(cls, i) == reg) {
+      return i;
     }
   }
 
-  return degree;
+  return -1;
 }
 
 static struct SpillCost *spill_cost_get(VecSpillCost *costs, char *pseudo)
@@ -15521,17 +15778,80 @@ static bool is_spill_tmp_name(char *pseudo)
   return strncmp(pseudo, "spilltmp.", strlen("spilltmp.")) == 0;
 }
 
-static int pick_low_degree_node(struct InterferenceGraph *graph, bool *removed,
-                                int k, VecSpillCost *spill_costs)
+static enum RegClass asm_type_reg_class(struct AsmType type)
+{
+  switch (type.kind) {
+    case AsmType_BYTE:
+    case AsmType_WORD:
+    case AsmType_LONGWORD:
+    case AsmType_QUADWORD:
+      return REGCLASS_INT;
+
+    case AsmType_FLOAT:
+    case AsmType_DOUBLE:
+      return REGCLASS_SSE;
+
+    case AsmType_BYTE_ARRAY:
+      return REGCLASS_NONE;
+  }
+
+  assert(0 && "unhandled asm type");
+}
+
+static enum RegClass graph_node_reg_class(struct InterferenceGraph *graph,
+                                          VecPseudoType *types, int idx)
+{
+  struct InterferenceNode *node = &graph->nodes.data[idx];
+
+  if (node->is_precolored) {
+    return reg_class_of_reg(node->precolored_reg);
+  }
+
+  struct AsmType *asm_type = pseudo_type_get(types, node->pseudo);
+  assert(asm_type && "node has no known AsmType");
+
+  return asm_type_reg_class(*asm_type);
+}
+
+static int graph_degree_after_removal(struct InterferenceGraph *graph,
+                                      VecPseudoType *types, bool *removed,
+                                      int node_idx)
+{
+  int degree = 0;
+  enum RegClass cls = graph_node_reg_class(graph, types, node_idx);
+  struct InterferenceNode *node = &graph->nodes.data[node_idx];
+
+  for (int i = 0; i < node->neighbors.len; i++) {
+    int neighbor_idx = node->neighbors.data[i];
+
+    if (removed[neighbor_idx]) {
+      continue;
+    }
+
+    if (graph_node_reg_class(graph, types, neighbor_idx) != cls) {
+      continue;
+    }
+
+    degree++;
+  }
+
+  return degree;
+}
+
+static int pick_low_degree_node(struct InterferenceGraph *graph,
+                                VecPseudoType *types, bool *removed,
+                                VecSpillCost *spill_costs)
 {
   int best_idx = -1;
   double best_score = 0.0;
 
   for (int i = 0; i < graph->nodes.len; i++) {
     int degree;
+    int k;
     char *pseudo;
     double cost;
     double score;
+    enum RegClass cls;
 
     if (removed[i]) {
       continue;
@@ -15541,7 +15861,14 @@ static int pick_low_degree_node(struct InterferenceGraph *graph, bool *removed,
       continue;
     }
 
-    degree = graph_degree_after_removal(graph, removed, i);
+    cls = graph_node_reg_class(graph, types, i);
+    k = allocatable_reg_count(cls);
+
+    if (k == 0) {
+      continue;
+    }
+
+    degree = graph_degree_after_removal(graph, types, removed, i);
 
     if (degree >= k) {
       continue;
@@ -15549,13 +15876,6 @@ static int pick_low_degree_node(struct InterferenceGraph *graph, bool *removed,
 
     pseudo = graph->nodes.data[i].pseudo;
 
-    /*
-     * Low-degree nodes are guaranteed-colorable in the simplified graph,
-     * but the order still matters when precolored registers remove colors.
-     *
-     * Push cheap nodes first so expensive nodes remain on the stack longer
-     * and are colored earlier during select.
-     */
     cost = spill_cost_of(spill_costs, pseudo);
     score = cost / (double) (degree > 0 ? degree : 1);
 
@@ -15569,26 +15889,22 @@ static int pick_low_degree_node(struct InterferenceGraph *graph, bool *removed,
 }
 
 static double spill_score_for_node(struct InterferenceGraph *graph,
-                                   bool *removed, int node_idx,
-                                   VecSpillCost *spill_costs)
+                                   VecPseudoType *types, bool *removed,
+                                   int node_idx, VecSpillCost *spill_costs)
 {
   char *pseudo = graph->nodes.data[node_idx].pseudo;
-  int degree = graph_degree_after_removal(graph, removed, node_idx);
+  int degree = graph_degree_after_removal(graph, types, removed, node_idx);
   double cost = spill_cost_of(spill_costs, pseudo);
 
   return cost / (double) (degree > 0 ? degree : 1);
 }
 
-static int pick_spill_candidate(struct InterferenceGraph *graph, bool *removed,
+static int pick_spill_candidate(struct InterferenceGraph *graph,
+                                VecPseudoType *types, bool *removed,
                                 VecSpillCost *spill_costs)
 {
   int best_idx = -1;
   double best_score = 0.0;
-
-#ifdef DEBUG_SPILL_SCORE_TABLE
-  printf("Spill candidate scores:\n");
-  printf("  %-24s %-8s %-8s %-8s\n", "pseudo", "cost", "degree", "score");
-#endif
 
   for (int i = 0; i < graph->nodes.len; i++) {
     char *pseudo;
@@ -15606,28 +15922,13 @@ static int pick_spill_candidate(struct InterferenceGraph *graph, bool *removed,
 
     pseudo = graph->nodes.data[i].pseudo;
 
-    /*
-     * Try hard not to spill reload/store temps created by spill rewriting.
-     * They are supposed to be short-lived helpers.
-     */
     if (is_spill_tmp_name(pseudo)) {
       continue;
     }
 
-    degree = graph_degree_after_removal(graph, removed, i);
+    degree = graph_degree_after_removal(graph, types, removed, i);
     cost = spill_cost_of(spill_costs, pseudo);
-
-    /*
-     * Lower score is better to spill:
-     *
-     *   low cost  => cheap to spill
-     *   high degree => helps simplify the graph
-     */
     score = cost / (double) (degree > 0 ? degree : 1);
-
-#ifdef DEBUG_SPILL_SCORE_TABLE
-    printf("  %-24s %-8.2f %-8d %-8.4f\n", pseudo, cost, degree, score);
-#endif
 
     if (best_idx < 0 || score < best_score) {
       best_idx = i;
@@ -15635,16 +15936,9 @@ static int pick_spill_candidate(struct InterferenceGraph *graph, bool *removed,
     }
   }
 
-  /*
-   * Fallback: if all remaining nodes are spill temps, pick any non-precolored
-   * node so allocation can still make progress.
-   */
   if (best_idx < 0) {
     for (int i = 0; i < graph->nodes.len; i++) {
       if (!removed[i] && !graph->nodes.data[i].is_precolored) {
-#ifdef DEBUG_SPILL_SCORES
-        printf("  fallback spill candidate: %s\n", graph->nodes.data[i].pseudo);
-#endif
         return i;
       }
     }
@@ -15652,33 +15946,31 @@ static int pick_spill_candidate(struct InterferenceGraph *graph, bool *removed,
     return -1;
   }
 
-#ifdef DEBUG_SPILL_SCORES
-  {
-    char *pseudo = graph->nodes.data[best_idx].pseudo;
-    int degree = graph_degree_after_removal(graph, removed, best_idx);
-    double cost = spill_cost_of(spill_costs, pseudo);
-
-    printf("  chosen spill candidate: %s cost %.2f degree %d score %.4f\n",
-           pseudo, cost, degree, best_score);
-  }
-#endif
-
   return best_idx;
 }
 
 static bool choose_color_for_node(struct InterferenceGraph *graph,
-                                  VecPseudoHome *homes, int node_idx,
-                                  enum AsmRegister *out_reg)
+                                  VecPseudoType *types, VecPseudoHome *homes,
+                                  int node_idx, enum AsmRegister *out_reg)
 {
-  bool used[NUM_ALLOCATABLE_INT_REGS] = {0};
+  enum RegClass cls = graph_node_reg_class(graph, types, node_idx);
+  int reg_count = allocatable_reg_count(cls);
+  bool used[32] = {0};
+
   struct InterferenceNode *node = &graph->nodes.data[node_idx];
 
   for (int i = 0; i < node->neighbors.len; i++) {
     int neighbor_idx = node->neighbors.data[i];
+
+    if (graph_node_reg_class(graph, types, neighbor_idx) != cls) {
+      continue;
+    }
+
     struct InterferenceNode *neighbor = &graph->nodes.data[neighbor_idx];
 
     if (neighbor->is_precolored) {
-      int reg_idx = allocatable_reg_index(neighbor->precolored_reg);
+      int reg_idx =
+          allocatable_reg_index_in_class(cls, neighbor->precolored_reg);
 
       if (reg_idx >= 0) {
         used[reg_idx] = true;
@@ -15689,30 +15981,25 @@ static bool choose_color_for_node(struct InterferenceGraph *graph,
 
     struct PseudoHome *neighbor_home = pseudo_home_get(homes, neighbor->pseudo);
 
-    /*
-     * If the neighbor is not colored yet, ignore it.
-     * If it spilled to stack, it does not occupy a register.
-     */
     if (!neighbor_home || neighbor_home->kind != PSEUDO_HOME_REG) {
       continue;
     }
 
-    int reg_idx = allocatable_reg_index(neighbor_home->as.reg);
-    assert(reg_idx >= 0 && "colored with non-allocatable register");
+    int reg_idx = allocatable_reg_index_in_class(cls, neighbor_home->as.reg);
+    assert(reg_idx >= 0 && "colored with register from wrong class");
 
     used[reg_idx] = true;
   }
 
-  for (int i = 0; i < NUM_ALLOCATABLE_INT_REGS; i++) {
+  for (int i = 0; i < reg_count; i++) {
     if (!used[i]) {
-      *out_reg = allocatable_int_regs[i];
+      *out_reg = allocatable_reg_at(cls, i);
       return true;
     }
   }
 
   return false;
 }
-
 static void assign_stack_home(VecPseudoHome *homes, VecPseudoType *types,
                               struct Map *map, int *used_stack_bytes,
                               char *pseudo)
@@ -15740,7 +16027,6 @@ static VecPseudoHome color_interference_graph(
   VecPseudoHome homes = {0};
   VecSelectStack select_stack = {0};
 
-  int k = NUM_ALLOCATABLE_INT_REGS;
   int n = graph->nodes.len;
   int remaining = n;
 
@@ -15777,7 +16063,7 @@ static VecPseudoHome color_interference_graph(
       continue;
     }
 
-    if (!asm_type_can_live_in_int_reg(*asm_type)) {
+    if (asm_type_reg_class(*asm_type) == REGCLASS_NONE) {
       /*
        * Non-integer-register values are not classic register-pressure spills.
        * Keep assigning them stack homes directly.
@@ -15790,19 +16076,14 @@ static VecPseudoHome color_interference_graph(
     }
   }
 
-  /*
-   * Simplify phase.
-   *
-   * Push removable nodes onto the select stack.
-   */
   while (remaining > 0) {
     int node_idx;
     bool was_spill_candidate = false;
 
-    node_idx = pick_low_degree_node(graph, removed, k, spill_costs);
+    node_idx = pick_low_degree_node(graph, types, removed, spill_costs);
 
     if (node_idx < 0) {
-      node_idx = pick_spill_candidate(graph, removed, spill_costs);
+      node_idx = pick_spill_candidate(graph, types, removed, spill_costs);
       was_spill_candidate = true;
     }
 
@@ -15836,7 +16117,7 @@ static VecPseudoHome color_interference_graph(
       continue;
     }
 
-    if (choose_color_for_node(graph, &homes, entry.node_idx, &reg)) {
+    if (choose_color_for_node(graph, types, &homes, entry.node_idx, &reg)) {
       pseudo_home_add_reg(&homes, node->pseudo, reg);
     } else {
       if (out_spilled) {
@@ -16608,8 +16889,8 @@ static VecPseudo collect_call_live_pseudos(struct AsmFunction *fn,
 
 static bool is_callee_saved_reg(enum AsmRegister reg)
 {
-  for (int i = 0; i < NUM_CALLEE_SAVED_REGS; i++) {
-    if (callee_saved_regs[i] == reg) {
+  for (int i = 0; i < NUM_CALLEE_SAVED_INT_REGS; i++) {
+    if (callee_saved_int_regs[i] == reg) {
       return true;
     }
   }
@@ -17037,6 +17318,67 @@ static VecPseudo expand_spilled_reps_to_original_pseudos(
   return out;
 }
 
+static void add_call_clobber_interference(struct InterferenceGraph *graph,
+                                          VecPseudoType *types,
+                                          struct InstrLiveness *lv)
+{
+  for (int i = 0; i < lv->live_after.len; i++) {
+    char *pseudo = lv->live_after.data[i];
+    struct AsmType *asm_type;
+    enum RegClass cls;
+    int pseudo_idx;
+
+    asm_type = pseudo_type_get(types, pseudo);
+    if (!asm_type) {
+      continue;
+    }
+
+    cls = asm_type_reg_class(*asm_type);
+
+    if (cls == REGCLASS_NONE) {
+      continue;
+    }
+
+    pseudo_idx = interference_add_node(graph, pseudo);
+
+    if (cls == REGCLASS_INT) {
+      for (int r = 0; r < NUM_CALLER_SAVED_INT_REGS; r++) {
+        int reg_idx =
+            interference_add_precolored_reg(graph, caller_saved_int_regs[r]);
+
+        interference_add_edge_by_index(graph, pseudo_idx, reg_idx);
+      }
+    } else if (cls == REGCLASS_SSE) {
+      for (int r = 0; r < NUM_CALLER_SAVED_SSE_REGS; r++) {
+        int reg_idx =
+            interference_add_precolored_reg(graph, caller_saved_sse_regs[r]);
+
+        interference_add_edge_by_index(graph, pseudo_idx, reg_idx);
+      }
+    }
+  }
+}
+
+static struct InterferenceGraph build_interference_graph(
+    struct AsmFunction *fn, VecPseudoType *types, struct InstrLiveness *lv)
+{
+  struct InterferenceGraph graph = {0};
+
+  add_precolored_register_nodes(&graph);
+
+  for (int i = 0; i < fn->body.len; i++) {
+    add_interferences_for_instr(&graph, &fn->body.data[i], &lv[i]);
+
+    if (fn->body.data[i].kind == AsmInstr_CALL) {
+      add_call_clobber_interference(&graph, types, &lv[i]);
+    }
+  }
+
+  add_abi_param_copy_interference(&graph, fn);
+
+  return graph;
+}
+
 struct AsmFunction *regalloc_fn(struct AsmFunction *fn, struct Map *map,
                                 int *used_stack_bytes,
                                 int *used_callee_saved_count)
@@ -17092,7 +17434,7 @@ struct AsmFunction *regalloc_fn(struct AsmFunction *fn, struct Map *map,
     /*
      * 4. Build interference graph.
      */
-    interference = build_interference_graph(fn, lv);
+    interference = build_interference_graph(fn, &types, lv);
 
 #ifdef DEBUG_INTERFERENCE
     print_interference_graph(&interference);
