@@ -1,51 +1,52 @@
-#include "compiler.h"
+#include "tokenizer.h"
 
-void init_tokenizer(struct Tokenizer *tokenizer, char *src)
-{
-  tokenizer->src = src;
-}
+#include <assert.h>
+#include <stddef.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
 
-bool is_alpha(char c)
+static bool is_alpha(char c)
 {
   return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
 }
 
-bool is_digit(char c)
+static bool is_digit(char c)
 {
   return c >= '0' && c <= '9';
 }
 
-bool is_space(char c)
+static bool is_space(char c)
 {
   return c == ' ' || c == '\t' || c == '\n';
 }
 
-bool is_underscore(char c)
+static bool is_underscore(char c)
 {
   return c == '_';
 }
 
-bool is_dot(char c)
+static bool is_dot(char c)
 {
   return c == '.';
 }
 
-bool is_at_end(struct Tokenizer *tokenizer)
+static bool is_at_end(struct Tokenizer *tokenizer)
 {
   return *tokenizer->src == '\0';
 }
 
-void advance(struct Tokenizer *tokenizer)
+static void advance(struct Tokenizer *tokenizer)
 {
   tokenizer->src++;
 }
 
-int lookahead(struct Tokenizer *tokenizer, int n, char *target)
+static int lookahead(struct Tokenizer *tokenizer, int n, char *target)
 {
   return memcmp(tokenizer->src + 1, target, n);
 }
 
-struct Token mktoken(struct Tokenizer *tokenizer, enum TokenKind kind, int len)
+static struct Token mktoken(struct Tokenizer *tokenizer, enum TokenKind kind, int len)
 {
   struct Token token;
 
@@ -58,7 +59,7 @@ struct Token mktoken(struct Tokenizer *tokenizer, enum TokenKind kind, int len)
   return token;
 }
 
-struct Token number(struct Tokenizer *tokenizer)
+static struct Token number(struct Tokenizer *tokenizer)
 {
   int len;
   char *start;
@@ -90,7 +91,7 @@ struct Token number(struct Tokenizer *tokenizer)
                         .start = start};
 }
 
-struct Token identifier(struct Tokenizer *tokenizer)
+static struct Token identifier(struct Tokenizer *tokenizer)
 {
   int len;
   char *start;
@@ -106,7 +107,7 @@ struct Token identifier(struct Tokenizer *tokenizer)
   return (struct Token){.kind = TOKEN_IDENTIFIER, .len = len, .start = start};
 }
 
-struct Token string(struct Tokenizer *tokenizer)
+static struct Token string(struct Tokenizer *tokenizer)
 {
   int len;
   char *start;
@@ -128,6 +129,11 @@ struct Token string(struct Tokenizer *tokenizer)
   advance(tokenizer);
 
   return (struct Token){.kind = TOKEN_STRING, .len = len, .start = start};
+}
+
+void init_tokenizer(struct Tokenizer *tokenizer, char *src)
+{
+  tokenizer->src = src;
 }
 
 struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
@@ -721,7 +727,7 @@ void print_token(struct Token *token)
 
 void print_tokens(VecToken *tokens)
 {
-  for (int i = 0; i < tokens->len; i++) {
+for (int i = 0; i < tokens->len; i++) {
     print_token(&tokens->data[i]);
   }
 }

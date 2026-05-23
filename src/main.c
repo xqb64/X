@@ -1,4 +1,169 @@
-#include "compiler.h"
+#include "tokenizer.h"
+#include "parser.h"
+#include "labeler.h"
+#include "resolver.h"
+#include "typechecker.h"
+#include "ir.h"
+#include "ir_opt.h"
+#include "regalloc.h"
+#include "codegen.h"
+#include "emitter.h"
+#include "util.h"
+
+#include <getopt.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+struct ReadFileResult {
+  bool is_ok;
+  char *msg;
+  char *contents;
+};
+
+struct ReadFileResult read_file(const char *path)
+{
+  struct ReadFileResult result;
+  FILE *f;
+  int seek_result;
+  long offset;
+  size_t bytes_read;
+  char *buf;
+
+  result.is_ok = true;
+  result.msg = NULL;
+  result.contents = NULL;
+
+  f = fopen(path, "r");
+  if (!f) {
+    result.is_ok = false;
+    result.msg = "fopen";
+    goto end;
+  }
+
+  seek_result = fseek(f, 0L, SEEK_END);
+  if (seek_result != 0) {
+    result.is_ok = false;
+    result.msg = "fseek";
+    goto close_then_end;
+  }
+
+  offset = ftell(f);
+  if (offset == -1) {
+    result.is_ok = false;
+    result.msg = "ftell";
+    goto close_then_end;
+  }
+
+  rewind(f);
+
+  buf = malloc(offset + 1);
+  if (!buf) {
+    result.is_ok = false;
+    result.msg = "malloc";
+    goto close_then_end;
+  }
+
+  bytes_read = fread(buf, 1, offset, f);
+  if (bytes_read < (size_t) offset) {
+    result.is_ok = false;
+    if (ferror(f) != 0) {
+      result.msg = "ferror";
+    } else {
+      if (feof(f) != 0) {
+        result.msg = "feof";
+      } else {
+        result.msg = "unknown error during fread";
+      }
+      goto dealloc_then_close_then_end;
+    }
+  } else {
+    buf[offset] = '\0';
+    result.contents = buf;
+    goto close_then_end;
+  }
+
+dealloc_then_close_then_end:
+  free(buf);
+
+close_then_end:
+  fclose(f);
+
+end:
+  return result;
+}
+
+struct AssembleLinkResult {
+  bool is_ok;
+  char *msg;
+};
+
+struct AssembleLinkResult assemble_and_link(const char *path,
+                                            const char *out_path,
+                                            bool assemble_only)
+{
+  struct AssembleLinkResult result;
+  result.is_ok = true;
+  result.msg = NULL;
+
+  pid_t pid = fork();
+
+  if (pid < 0) {
+    result.is_ok = false;
+    result.msg = "Fork failed";
+    return result;
+  } else if (pid == 0) {
+    if (assemble_only) {
+      execlp("gcc", "gcc", "-c", path, "-o", out_path, NULL);
+    } else {
+      execlp("gcc", "gcc", path, "-o", out_path, NULL);
+    }
+
+    exit(EXIT_FAILURE);
+  } else {
+    int status;
+    waitpid(pid, &status, 0);
+
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+      return result;
+    } else {
+      result.is_ok = false;
+      result.msg = assemble_only
+                       ? "gcc failed at the assemble stage\n"
+                       : "gcc failed at the assemble-and-link stage\n";
+      return result;
+    }
+  }
+}
+
+enum TargetStage {
+  STAGE_FULL,
+  STAGE_TOKENIZE,
+  STAGE_PARSE,
+  STAGE_RESOLVE,
+  STAGE_TYPECHECK,
+  STAGE_IR,
+  STAGE_IR_OPT,
+  STAGE_CODEGEN_RAW,
+  STAGE_CODEGEN_REPLACE_PSEUDO,
+  STAGE_CODEGEN_FIXUP,
+  STAGE_EMIT,
+  STAGE_ASM,
+  STAGE_LINK,
+};
+
+struct CompilerOptions {
+  enum TargetStage target_stage;
+  char *path;
+};
+
+struct RunResult {
+  bool is_ok;
+  char *msg;
+};
 
 struct CompilerOptions parse_args(int argc, char **argv)
 {

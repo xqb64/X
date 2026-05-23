@@ -1,4 +1,12 @@
-#include "compiler.h"
+#include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "typechecker.h"
+#include "ir.h"
+#include "codegen.h"
+#include "util.h"
 
 bool asm_type_can_live_in_int_reg(struct AsmType type)
 {
@@ -2805,82 +2813,6 @@ struct AsmResult codegen(struct IRProgram *ir_prog)
   result.prog = prog;
 
   return result;
-}
-
-struct AsmProgram *replace_pseudo(struct AsmProgram *asmcode)
-{
-  for (int i = 0; i < asmcode->funcs.len; i++) {
-    struct Map *map = malloc(sizeof(struct Map));
-    memset(map, 0, sizeof(struct Map));
-    map->next = NULL;
-
-    int used_stack_bytes = 0;
-
-    for (int j = 0; j < asmcode->funcs.data[i].body.len; j++) {
-      struct AsmInstr *asminstr = &asmcode->funcs.data[i].body.data[j];
-
-      switch (asminstr->kind) {
-	case AsmInstr_REP_MOVSB:
-	  break;
-        case AsmInstr_CVT:
-          replace_operand_pseudo(&asminstr->as.cvt.src, map, &used_stack_bytes);
-          replace_operand_pseudo(&asminstr->as.cvt.dst, map, &used_stack_bytes);
-          break;
-        case AsmInstr_UNARY:
-          replace_operand_pseudo(&asminstr->as.unary.op, map,
-                                 &used_stack_bytes);
-          break;
-        case AsmInstr_LEA:
-          replace_operand_pseudo(&asminstr->as.lea.src, map, &used_stack_bytes);
-          replace_operand_pseudo(&asminstr->as.lea.dst, map, &used_stack_bytes);
-          break;
-        case AsmInstr_SetCC:
-          replace_operand_pseudo(&asminstr->as.setcc.op, map,
-                                 &used_stack_bytes);
-          break;
-        case AsmInstr_MOV:
-          replace_operand_pseudo(&asminstr->as.mov.src, map, &used_stack_bytes);
-          replace_operand_pseudo(&asminstr->as.mov.dst, map, &used_stack_bytes);
-          break;
-        case AsmInstr_BIN:
-          replace_operand_pseudo(&asminstr->as.binary.lhs, map,
-                                 &used_stack_bytes);
-          replace_operand_pseudo(&asminstr->as.binary.rhs, map,
-                                 &used_stack_bytes);
-          break;
-        case AsmInstr_CMP:
-          replace_operand_pseudo(&asminstr->as.cmp.lhs, map, &used_stack_bytes);
-          replace_operand_pseudo(&asminstr->as.cmp.rhs, map, &used_stack_bytes);
-          break;
-        case AsmInstr_PUSH:
-          replace_operand_pseudo(&asminstr->as.push.op, map, &used_stack_bytes);
-          break;
-        case AsmInstr_POP:
-          replace_operand_pseudo(&asminstr->as.pop.op, map, &used_stack_bytes);
-          break;
-        case AsmInstr_RET:
-        case AsmInstr_CALL:
-        case AsmInstr_JMP:
-        case AsmInstr_JmpCC:
-        case AsmInstr_LBL:
-          break;
-	default:
-	  assert(0 && "Unhandled instr in replace_pseudo");
-      }
-    }
-
-    int stack_size = align_up_int(used_stack_bytes, 16);
-    asmcode->funcs.data[i].body.data[2].as.binary.lhs.as.imm = stack_size;
-
-    struct Map *curr = map, *tmp;
-    while (curr) {
-      tmp = curr;
-      curr = tmp->next;
-      free(tmp);
-    }
-  }
-
-  return asmcode;
 }
 
 struct AsmProgram *fixup(struct AsmProgram *prog)

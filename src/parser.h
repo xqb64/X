@@ -1,10 +1,405 @@
-#ifndef MINI_COMPILER_PARSER_H
-#define MINI_COMPILER_PARSER_H
+#ifndef X_PARSER_H
+#define X_PARSER_H
 
-#include "common.h"
+#include "vector.h"
+#include "tokenizer.h"
 
-/* parser */
+enum LiteralKind {
+  LITERAL_NUM,
+  LITERAL_BOOL,
+  LITERAL_STR,
+};
 
+enum TypeKind {
+  I8_T,
+  I16_T,
+  I32_T,
+  I64_T,
+  U8_T,
+  U16_T,
+  U32_T,
+  U64_T,
+  F32_T,
+  F64_T,
+  BOOL_T,
+  STR_T,
+  FN_T,
+  VOID_T,
+  PTR_T,
+  STRUCT_T,
+  UNKNOWN_T,
+};
+
+typedef struct Type Type;
+typedef Vector(Type) VecType;
+
+struct Type {
+  enum TypeKind kind;
+  union {
+    struct {
+      VecType params;
+      Type *retval;
+      bool is_variadic;
+    } func;
+    struct Type *base;
+    char *struct_name;
+  } as;
+};
+
+struct Literal {
+  enum LiteralKind kind;
+  union {
+    char *str;
+    unsigned char u8;
+    char i8;
+    unsigned short u16;
+    short i16;
+    unsigned int u32;
+    int i32;
+    unsigned long long u64;
+    long long i64;
+    float f32;
+    double f64;
+    bool boolean;
+  } as;
+  Type type;
+};
+
+
+enum ExprKind {
+  EXPR_LITERAL,
+  EXPR_VARIABLE,
+  EXPR_UNARY,
+  EXPR_BINARY,
+  EXPR_ASSIGN,
+  EXPR_COMPOUND_ASSIGN,
+  EXPR_CALL,
+  EXPR_SIZEOF,
+  EXPR_ADDROF,
+  EXPR_DEREF,
+  EXPR_CAST,
+  EXPR_STRUCT_INIT,
+  EXPR_MEMBER,
+};
+
+enum ExprBinKind {
+  EXPR_BIN_ADD,
+  EXPR_BIN_SUB,
+  EXPR_BIN_MUL,
+  EXPR_BIN_DIV,
+  EXPR_BIN_LESS,
+  EXPR_BIN_GREATER,
+  EXPR_BIN_LESS_EQUAL,
+  EXPR_BIN_GREATER_EQUAL,
+  EXPR_BIN_EQUAL_EQUAL,
+  EXPR_BIN_BANG_EQUAL,
+  EXPR_BIN_BITWISE_AND,
+  EXPR_BIN_BITWISE_XOR,
+  EXPR_BIN_BITWISE_OR,
+  EXPR_BIN_SHIFT_LEFT,
+  EXPR_BIN_SHIFT_RIGHT,
+  EXPR_BIN_LOGICAL_AND,
+  EXPR_BIN_LOGICAL_OR,
+};
+
+struct ExprVar {
+  char *name;
+  Type type;
+};
+
+struct ExprUnary {
+  char *op;
+  struct Expr *expr;
+};
+
+struct ExprBin {
+  enum ExprBinKind kind;
+  struct Expr *lhs;
+  struct Expr *rhs;
+};
+
+struct ExprAssign {
+  struct Expr *lhs;
+  struct Expr *rhs;
+};
+
+struct ExprCompoundAssign {
+  enum ExprBinKind kind;
+  struct Expr *lhs;
+  struct Expr *rhs;
+};
+
+typedef Vector(struct Expr) VecExpr;
+
+struct ExprCall {
+  struct Expr *target;
+  VecExpr arguments;
+};
+
+struct ExprDeref {
+  struct Expr *expr;
+};
+
+struct ExprAddrOf {
+  struct Expr *expr;
+};
+
+struct ExprSizeof {
+  struct Expr *expr;
+};
+
+struct ExprCast {
+  struct Expr *expr;
+  Type target_type;
+};
+
+struct StructInitItem {
+  char *designator;
+  struct Expr *expr;
+  int resolved_offset;
+};
+
+typedef Vector(struct StructInitItem) VecStructInitItem;
+
+struct ExprStructInit {
+  char *struct_name;
+  VecStructInitItem values;
+};
+
+struct ExprMember {
+  struct Expr *target;
+  char *field_name;
+  bool is_arrow;
+};
+
+struct ExprAs {
+  struct Expr *target;
+  Type target_type;
+};
+
+struct Expr {
+  enum ExprKind kind;
+  union {
+    struct Literal literal;
+    struct ExprBin binary;
+    struct ExprVar var;
+    struct ExprCall call;
+    struct ExprAssign assign;
+    struct ExprCompoundAssign compound_assign;
+    struct ExprUnary unary;
+    struct ExprAddrOf addrof;
+    struct ExprSizeof sizeof_expr;
+    struct ExprDeref deref;
+    struct ExprCast cast;
+    struct ExprStructInit struct_init;
+    struct ExprMember member;
+    struct ExprAs as;
+  } as;
+  Type type;
+};
+
+struct Parameter {
+  char *name;
+  Type type;
+  bool is_mut;
+};
+
+typedef Vector(struct Stmt) VecStmt;
+typedef Vector(struct Parameter) VecParam;
+
+enum StmtKind {
+  STMT_FN,
+  STMT_LET,
+  STMT_RET,
+  STMT_IF,
+  STMT_WHILE,
+  STMT_LOOP,
+  STMT_BREAK,
+  STMT_CONTINUE,
+  STMT_GOTO,
+  STMT_LABELED,
+  STMT_BLOCK,
+  STMT_EXTERN,
+  STMT_EXPR,
+  STMT_STRUCT,
+  STMT_ENUM,
+};
+
+struct StmtFn {
+  char *name;
+  VecParam params;
+  Type retval;
+  VecStmt body;
+};
+
+struct StmtLet {
+  char *name;
+  Type type;
+  struct Expr *init;
+  bool is_mut;
+};
+
+struct StmtRet {
+  struct Expr *val;
+  Type expected_retval;
+};
+
+struct StmtIf {
+  struct Expr cond;
+  struct Stmt *then_block;
+  struct Stmt *else_block;
+};
+
+struct StmtWhile {
+  struct Expr cond;
+  struct Stmt *body;
+  char *label;
+};
+
+struct StmtLoop {
+  struct Stmt *body;
+  char *label;
+};
+
+struct StmtBreak {
+  char *label;
+};
+
+struct StmtContinue {
+  char *label;
+};
+
+struct StmtGoto {
+  char *label;
+};
+
+struct StmtLabeled {
+  char *label;
+  struct Stmt *stmt;
+};
+
+struct StmtBlock {
+  VecStmt stmts;
+};
+
+struct StmtExtern {
+  char *name;
+  VecParam params;
+  Type retval;
+  bool is_variadic;
+};
+
+struct StmtExpr {
+  struct Expr expr;
+};
+
+struct StructField {
+  char *name;
+  Type type;
+  int offset;
+};
+
+typedef Vector(struct StructField) VecStructField;
+
+struct StructDef {
+  char *name;
+  VecStructField fields;
+  int size;
+  int alignment;
+  bool is_union;
+};
+
+struct StructTable {
+  struct StructTable *next;
+  struct StructDef def;
+};
+
+extern struct StructTable *struct_table;
+
+struct EnumTypeItem {
+  char *name;
+  struct EnumTypeItem *next;
+};
+
+extern struct EnumTypeItem *enum_types;
+
+struct EnumVariantItem {
+  char *name;
+  int value;
+  struct EnumVariantItem *next;
+};
+
+extern struct EnumVariantItem *enum_variants;
+
+struct StmtStruct {
+  char *name;
+  VecStructField fields;
+  bool is_union;
+};
+
+struct EnumVariant {
+  char *name;
+  int value;
+};
+
+typedef Vector(struct EnumVariant) VecEnumVariant;
+
+struct StmtEnum {
+  char *name;
+  VecEnumVariant variants;
+};
+
+struct Stmt {
+  enum StmtKind kind;
+  union {
+    struct StmtFn fn;
+    struct StmtLet let;
+    struct StmtRet ret;
+    struct StmtIf if_stmt;
+    struct StmtWhile while_stmt;
+    struct StmtLoop loop;
+    struct StmtBreak break_stmt;
+    struct StmtContinue continue_stmt;
+    struct StmtGoto goto_stmt;
+    struct StmtLabeled labeled;
+    struct StmtBlock block;
+    struct StmtExtern extern_stmt;
+    struct StmtExpr expr_stmt;
+    struct StmtStruct struct_stmt;
+    struct StmtEnum enum_stmt;
+  } as;
+};
+
+struct AST {
+  VecStmt stmts;
+};
+
+struct Parser {
+  struct StmtFn *current_fn;
+  struct Token *curr;
+  struct Token *prev;
+  VecToken *tokens;
+  int idx;
+  VecStmt *global_stmts;
+};
+
+struct ParseFnResult {
+  bool is_ok;
+  char *msg;
+  union {
+    struct Expr expr;
+    struct Stmt stmt;
+  } as;
+};
+
+struct ParseResult {
+  bool is_ok;
+  char *msg;
+  struct AST *ast;
+};
+
+void init_parser(struct Parser *parser, VecToken *tokens);
+struct Token *advance_parser(struct Parser *parser);
 void print_binary_op(enum ExprBinKind kind);
 void print_expr(struct Expr *expr, int spaces);
 void free_expr(struct Expr *expr);
@@ -12,44 +407,10 @@ void print_stmt(struct Stmt *stmt, int spaces);
 void free_stmt(struct Stmt *stmt);
 void print_ast(struct AST *ast);
 void free_ast(struct AST *ast);
-void init_parser(struct Parser *parser, VecToken *tokens);
-struct Token *next_token(struct Parser *parser);
-bool check(struct Parser *parser, enum TokenKind kind);
-bool check2(struct Parser *parser, enum TokenKind kind1, enum TokenKind kind2);
-bool check_next(struct Parser *parser, enum TokenKind kind);
-bool match(struct Parser *parser, int size, ...);
-struct Token *consume(struct Parser *parser, enum TokenKind kind);
-struct Token *consume_any(struct Parser *parser, int n, ...);
-struct ParseFnResult primary(struct Parser *parser);
-struct ParseFnResult finish_call(struct Parser *parser, struct Expr callee);
-bool parse_enum_body(struct Parser *parser, VecEnumVariant *out_variants);
 Type parse_type(struct Parser *parser);
-struct ParseFnResult postfix(struct Parser *parser);
-struct ParseFnResult unary(struct Parser *parser);
-struct ParseFnResult factor(struct Parser *parser);
-struct ParseFnResult term(struct Parser *parser);
-struct ParseFnResult shift(struct Parser *parser);
-struct ParseFnResult comparison(struct Parser *parser);
-struct ParseFnResult bitwise_and(struct Parser *parser);
-struct ParseFnResult bitwise_xor(struct Parser *parser);
-struct ParseFnResult bitwise_or(struct Parser *parser);
-struct ParseFnResult logical_and(struct Parser *parser);
-struct ParseFnResult logical_or(struct Parser *parser);
-struct ParseFnResult assignment(struct Parser *parser);
-struct ParseFnResult block(struct Parser *parser);
-struct ParseFnResult parse_fn_stmt(struct Parser *parser);
-struct ParseFnResult parse_let_stmt(struct Parser *parser);
-struct ParseFnResult parse_ret_stmt(struct Parser *parser);
-struct ParseFnResult parse_if_stmt(struct Parser *parser);
-struct ParseFnResult parse_while_stmt(struct Parser *parser);
-struct ParseFnResult parse_loop_stmt(struct Parser *parser);
-struct ParseFnResult parse_break_stmt(struct Parser *parser);
-struct ParseFnResult parse_continue_stmt(struct Parser *parser);
-struct ParseFnResult parse_extern_stmt(struct Parser *parser);
-struct ParseFnResult parse_expr_stmt(struct Parser *parser);
-struct ParseFnResult parse_struct_stmt(struct Parser *parser);
-struct ParseFnResult parse_goto_stmt(struct Parser *parser);
-struct ParseFnResult parse_enum_stmt(struct Parser *parser);
+struct ParseFnResult parse_stmt(struct Parser *parser);
+struct ParseFnResult parse_expr(struct Parser *parser);
 struct ParseResult parse(struct Parser *parser);
+bool types_equal(Type a, Type b);
 
-#endif /* MINI_COMPILER_PARSER_H */
+#endif

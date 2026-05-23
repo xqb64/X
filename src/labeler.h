@@ -1,9 +1,30 @@
-#ifndef MINI_COMPILER_LABELER_H
-#define MINI_COMPILER_LABELER_H
+#ifndef X_LABELER_H
+#define X_LABELER_H
 
-#include "common.h"
+#include "vector.h"
+#include "parser.h"
 
-/* labeler */
+#include <stdbool.h>
+
+struct LoopLabelResult {
+  bool is_ok;
+  char *msg;
+  struct AST *ast;
+};
+
+typedef Vector(char *) VecCharPtr;
+
+struct CollectLabelsResult {
+  bool is_ok;
+  char *msg;
+  VecCharPtr labels;
+  ;
+};
+
+struct LabelCheckResult {
+  bool is_ok;
+  char *msg;
+};
 
 struct LoopLabelResult loop_label_stmt(struct Stmt *stmt, char *label);
 struct LoopLabelResult loop_label(struct AST *ast);
@@ -16,4 +37,4 @@ struct LabelCheckResult check_labels_stmt(struct Stmt *stmt, VecCharPtr *labels,
 struct LabelCheckResult check_labels(struct AST *ast, VecCharPtr *labels);
 void free_labels(VecCharPtr *labels);
 
-#endif /* MINI_COMPILER_LABELER_H */
+#endif

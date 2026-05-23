@@ -1,4 +1,10 @@
-#include "compiler.h"
+#include "regalloc.h"
+#include "util.h"
+
+#include <assert.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
 
 bool map_get_offset(struct Map *map, char *name, int *out_offset)
 {

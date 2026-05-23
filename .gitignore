@@ -2,4 +2,7 @@ a.out
 compiler
 *.o
 *.s
+*.dot
+*.png
+spam
 

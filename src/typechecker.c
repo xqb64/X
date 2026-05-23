@@ -1,4 +1,12 @@
-#include "compiler.h"
+#include "typechecker.h"
+#include "ir.h"
+#include "util.h"
+
+#include <assert.h>
+#include <limits.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
 
 /* Module-owned global state. */
 struct StructTable *struct_table = NULL;

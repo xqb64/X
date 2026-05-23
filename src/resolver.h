@@ -1,18 +1,30 @@
-#ifndef MINI_COMPILER_RESOLVER_H
-#define MINI_COMPILER_RESOLVER_H
+#ifndef X_RESOLVER_H
+#define X_RESOLVER_H
 
-#include "common.h"
+#include <stdbool.h>
+#include "parser.h"
 
-/* resolver */
+struct ResolveResult {
+  bool is_ok;
+  char *msg;
+  union {
+    struct AST *ast;
+    struct Stmt *stmt;
+    struct Expr *expr;
+    struct Parameter *param;
+  } as;
+};
 
-void varmap_insert(struct VariableMap **varmap, char *name, char *uniq_name);
-char *varmap_get(struct VariableMap *varmap, char *name);
-struct ResolveResult resolve_expr(struct VariableMap **varmap,
-                                  struct Expr *expr);
-struct ResolveResult resolve_param(struct VariableMap **varmap,
-                                   struct Parameter *param);
-struct ResolveResult resolve_stmt(struct VariableMap **varmap,
-                                  struct Stmt *stmt);
+struct Variable {
+  char *uniq_name;
+};
+
+struct VariableMap {
+  struct VariableMap *next;
+  char *name;
+  struct Variable value;
+};
+
 struct ResolveResult resolve(struct AST *ast);
 
-#endif /* MINI_COMPILER_RESOLVER_H */
+#endif

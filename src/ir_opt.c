@@ -1,4 +1,12 @@
-#include "compiler.h"
+#include "ir.h"
+#include "ir_opt.h"
+#include "parser.h"
+#include "typechecker.h"
+
+#include <assert.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
 
 bool is_int_type(enum TypeKind kind)
 {

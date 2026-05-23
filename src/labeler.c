@@ -1,4 +1,10 @@
-#include "compiler.h"
+#include "labeler.h"
+#include "util.h"
+
+#include <assert.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
 
 struct LoopLabelResult loop_label_stmt(struct Stmt *stmt, char *label)
 {

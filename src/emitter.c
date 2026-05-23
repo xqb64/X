@@ -1,6 +1,11 @@
-#include "compiler.h"
+#include "emitter.h"
+#include "codegen.h"
 
-void emit_operand(FILE *f, struct AsmOperand *op)
+#include <assert.h>
+#include <stdio.h>
+#include <string.h>
+
+static void emit_operand(FILE *f, struct AsmOperand *op)
 {
   switch (op->kind) {
     case AsmOperand_INDEXED: {
@@ -1059,41 +1064,4 @@ void emit(struct AsmProgram *prog, char *path)
   fclose(f);
 }
 
-struct AssembleLinkResult assemble_and_link(const char *path,
-                                            const char *out_path,
-                                            bool assemble_only)
-{
-  struct AssembleLinkResult result;
-  result.is_ok = true;
-  result.msg = NULL;
-
-  pid_t pid = fork();
-
-  if (pid < 0) {
-    result.is_ok = false;
-    result.msg = "Fork failed";
-    return result;
-  } else if (pid == 0) {
-    if (assemble_only) {
-      execlp("gcc", "gcc", "-c", path, "-o", out_path, NULL);
-    } else {
-      execlp("gcc", "gcc", path, "-o", out_path, NULL);
-    }
-
-    exit(EXIT_FAILURE);
-  } else {
-    int status;
-    waitpid(pid, &status, 0);
-
-    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
-      return result;
-    } else {
-      result.is_ok = false;
-      result.msg = assemble_only
-                       ? "gcc failed at the assemble stage\n"
-                       : "gcc failed at the assemble-and-link stage\n";
-      return result;
-    }
-  }
-}
 

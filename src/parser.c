@@ -1,4 +1,13 @@
-#include "compiler.h"
+#include "parser.h"
+#include "typechecker.h"
+#include "util.h"
+
+#include <assert.h>
+#include <limits.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 void print_binary_op(enum ExprBinKind kind)
 {

@@ -1,4 +1,9 @@
-#include "compiler.h"
+#include "resolver.h"
+#include "typechecker.h"
+#include "util.h"
+#include <string.h>
+#include <stdlib.h>
+#include <assert.h>
 
 void varmap_insert(struct VariableMap **varmap, char *name, char *uniq_name)
 {

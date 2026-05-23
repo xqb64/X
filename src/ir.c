@@ -1,4 +1,13 @@
-#include "compiler.h"
+#include "ir.h"
+#include "parser.h"
+#include "util.h"
+#include "typechecker.h"
+
+#include <assert.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+
 
 /* Module-owned global state. */
 VecStaticConstant global_constants = {0};

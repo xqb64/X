@@ -1,9 +1,7 @@
-#ifndef MINI_COMPILER_UTIL_H
-#define MINI_COMPILER_UTIL_H
+#ifndef X_UTIL_H
+#define X_UTIL_H
 
-#include "common.h"
-
-/* util */
+#define ALLOC(obj) (memcpy(malloc(sizeof((obj))), &(obj), sizeof(obj)))
 
 int mktmp(void);
 char *mkstr(const char *fmt, ...);
@@ -12,4 +10,4 @@ char *mklbl(char *s, int d);
 void print_indent(int spaces);
 struct ReadFileResult read_file(const char *path);
 
-#endif /* MINI_COMPILER_UTIL_H */
+#endif
