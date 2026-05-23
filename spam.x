@@ -1,31 +1,27 @@
-extern fn printf(fmt: str, ...) -> i32;
-
-struct Spam {
-  a: u8,
-  b: i32,
-  c: u64,
-}
+extern fn putchar(c: u32) -> u32;
 
 fn main(void) -> u32 {
-  let mut x: u32 = 0;
-  let y: u32 = 1;
+  let hot: u32 = 1;
 
-  let z: Spam = Spam {a: 0, b: 0, c: 0};
+  let a: u32 = 2;
+  let b: u32 = 3;
+  let c: u32 = 4;
+  let d: u32 = 5;
+  let e: u32 = 6;
+  let f: u32 = 7;
+  let g: u32 = 8;
+  let h: u32 = 9;
+  let i: u32 = 10;
+  let j: u32 = 11;
+  let k: u32 = 12;
+  let l: u32 = 13;
+  let m: u32 = 14;
+  let n: u32 = 15;
+  let o: u32 = 16;
+  let p: u32 = 17;
 
-  loop {
-    printf("Hello, world!  %d\n", x);
-    if (x == 10) {
-      break;
-    }
-    x += 1;
-  }
- 
-  printf("sizeof(x) is: %d\n", sizeof(z));
- 
-  goto spam;
+  putchar(65);
 
-  ret x;
-
-spam:
-  ret y+1;
+  ret hot + hot + hot + hot + hot + hot + hot + hot
+    + a + b + c + d + e + f + g + h + i + j + k + l + m + n + o + p;
 }
