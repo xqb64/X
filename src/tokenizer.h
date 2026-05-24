@@ -121,7 +121,9 @@ void print_token(struct Token *token);
 
 #ifdef DEBUG_TOKENIZER
 struct TokenizeResult tokenize(struct Tokenizer *tokenizer);
-void print_tokens(VecToken *tokens);
 #endif
 
+#if defined(DEBUG_TOKENIZER) && defined(DEBUG_ENABLE_DUMPS)
+void print_tokens(VecToken *tokens);
+#endif
 #endif

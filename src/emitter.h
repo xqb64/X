@@ -3,6 +3,11 @@
 
 #include "codegen.h"
 
-void emit(struct AsmProgram *prog, char *path);
+struct EmitResult {
+  bool is_ok;
+  char *msg;
+};
+
+struct EmitResult emit(struct AsmProgram *prog, char *path);
 
 #endif

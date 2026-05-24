@@ -7,7 +7,13 @@
 #include <unistd.h>
 
 #include "codegen.h"
+
+#ifdef DEBUG_ENABLE_DUMPS
+#include "dump.h"
+#endif
+
 #include "emitter.h"
+#include "fixup.h"
 #include "ir.h"
 #include "ir_opt.h"
 #include "labeler.h"
@@ -274,7 +280,11 @@ static struct RunResult run(struct CompilerOptions *opts)
   struct IrfyResult irfy_result;
   struct IRProgram ir_prog;
   struct AsmResult asm_result;
+  struct RegallocResult regalloc_result;
+  struct FixupResult fixup_result;
   struct AsmProgram asm_prog;
+  struct AsmProgram *regallocd_asm_prog, *fixed_up_asm_prog;
+  struct EmitResult emit_result;
   struct RunResult r;
   char *asm_path, *o_path, *exe_path;
 
@@ -300,16 +310,21 @@ static struct RunResult run(struct CompilerOptions *opts)
   init_tokenizer(&tokenizer, src);
 
 #ifdef DEBUG_TOKENIZER
+  struct Tokenizer debug_tokenizer;
   struct TokenizeResult tokenize_result;
 
-  tokenize_result = tokenize(&tokenizer);
+  init_tokenizer(&debug_tokenizer, src);
+
+  tokenize_result = tokenize(&debug_tokenizer);
   if (!tokenize_result.is_ok) {
     r.msg = tokenize_result.msg;
     r.is_ok = false;
     goto free_up2_tokenize;
   }
 
+#ifdef DEBUG_ENABLE_DUMPS
   print_tokens(&tokenize_result.tokens);
+#endif
 
   if (target_stage == STAGE_TOKENIZE) {
     goto free_up2_tokenize;
@@ -445,7 +460,12 @@ static struct RunResult run(struct CompilerOptions *opts)
     goto free_up2_asm;
   }
 
-  asm_prog = *regalloc(&asm_prog);
+  regalloc_result = regalloc(&asm_prog);
+  if (!regalloc_result.is_ok) {
+    goto free_up2_asm;
+  }
+
+  regallocd_asm_prog = regalloc_result.prog;
 
 #ifdef DEBUG_CODEGEN_REGALLOC
   printf("regalloc\n");
@@ -456,7 +476,12 @@ static struct RunResult run(struct CompilerOptions *opts)
     goto free_up2_asm;
   }
 
-  asm_prog = *fixup(&asm_prog);
+  fixup_result = fixup(regallocd_asm_prog);
+  if (!fixup_result.is_ok) {
+    goto free_up2_asm;
+  }
+
+  fixed_up_asm_prog = fixup_result.prog;
 
 #ifdef DEBUG_CODEGEN_FIXUP
   printf("fixup...\n");
@@ -469,7 +494,13 @@ static struct RunResult run(struct CompilerOptions *opts)
 
   asm_path = replace_ext(path, "s");
 
-  emit(&asm_prog, asm_path);
+  fixed_up_asm_prog = fixup_result.prog;
+
+  emit_result = emit(fixed_up_asm_prog, asm_path);
+  if (!emit_result.is_ok) {
+    goto free_up2_asm;
+  }
+
   if (target_stage == STAGE_EMIT) {
     goto free_up2_asm;
   }

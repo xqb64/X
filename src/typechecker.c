@@ -210,13 +210,13 @@ bool types_equal(Type a, Type b)
   }
 }
 
-void free_symbol(struct Symbol *sym)
+static void free_symbol(struct Symbol *sym)
 {
   free_type(&sym->type);
   free(sym);
 }
 
-void sym_insert(struct Symbol **sym, char *name, Type type, bool is_mut)
+static void sym_insert(struct Symbol **sym, char *name, Type type, bool is_mut)
 {
   struct Symbol *node;
 
@@ -230,7 +230,7 @@ void sym_insert(struct Symbol **sym, char *name, Type type, bool is_mut)
   *sym = node;
 }
 
-struct Symbol *sym_get(struct Symbol *sym, char *name)
+static struct Symbol *sym_get(struct Symbol *sym, char *name)
 {
   while (sym) {
     if (strcmp(sym->name, name) == 0) {
@@ -239,95 +239,6 @@ struct Symbol *sym_get(struct Symbol *sym, char *name)
     sym = sym->next;
   }
   return NULL;
-}
-
-void print_type(Type *type, int spaces)
-{
-  switch (type->kind) {
-    case STRUCT_T:
-      printf("%s", type->as.struct_name);
-      break;
-    case VOID_T:
-      printf("void");
-      break;
-    case PTR_T:
-      printf("*");
-      print_type(type->as.base, spaces);
-      break;
-    case U8_T:
-      printf("u8");
-      break;
-    case U16_T:
-      printf("u16");
-      break;
-    case U32_T:
-      printf("u32");
-      break;
-    case U64_T:
-      printf("u64");
-      break;
-    case I8_T:
-      printf("i8");
-      break;
-    case I16_T:
-      printf("i16");
-      break;
-    case I32_T:
-      printf("i32");
-      break;
-    case I64_T:
-      printf("i64");
-      break;
-    case F32_T:
-      printf("f32");
-      break;
-    case F64_T:
-      printf("f64");
-      break;
-    case BOOL_T:
-      printf("bool");
-      break;
-    case STR_T:
-      printf("str");
-      break;
-    case FN_T: {
-      printf("fn(\n");
-
-      print_indent(spaces + 2);
-      printf("args: [\n");
-      for (int i = 0; i < type->as.func.params.len; i++) {
-        print_indent(spaces + 4);
-        print_type(&type->as.func.params.data[i], spaces + 4);
-        printf(",\n");
-      }
-
-      if (type->as.func.is_variadic) {
-        print_indent(spaces + 4);
-        printf("...\n");
-      }
-
-      print_indent(spaces + 2);
-      printf("],\n");
-
-      print_indent(spaces + 2);
-      printf("retval: ");
-      if (type->as.func.retval) {
-        print_type(type->as.func.retval, spaces + 2);
-      } else {
-        printf("void");
-      }
-      printf("\n");
-
-      print_indent(spaces);
-      printf(")");
-      break;
-    }
-    case UNKNOWN_T:
-      printf("unknown");
-      break;
-    default:
-      assert(0);
-  }
 }
 
 #define IN_RANGE(val, min, max) ((val) >= (min) && (val) <= (max))

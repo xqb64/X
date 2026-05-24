@@ -17,6 +17,7 @@ LDLIBS += -lm
 # Optional build switches:
 #   make debug=all
 #   make debug=sym
+#   make debug=dumps
 #   make debug=tokenizer
 #   make debug=parser
 #   make debug=resolver
@@ -49,6 +50,7 @@ ifeq ($(debug),all)
 	CFLAGS += -DDEBUG_MOVES
 	CFLAGS += -DDEBUG_BRIGGS
 	CFLAGS += -DDEBUG_HOMES
+	CFLAGS += -DDEBUG_ENABLE_DUMPS
 	CFLAGS += -g3
 endif
 
@@ -118,6 +120,10 @@ endif
 
 ifeq (emitter,$(findstring emitter,$(debug)))
 	CFLAGS += -DDEBUG_EMITTER
+endif
+
+ifeq (dumps,$(findstring dumps,$(debug)))
+	CFLAGS += -DDEBUG_ENABLE_DUMPS
 endif
 
 all: $(BIN)

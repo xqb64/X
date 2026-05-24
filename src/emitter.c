@@ -534,9 +534,13 @@ static void emit_operand(FILE *f, struct AsmOperand *op)
   }
 }
 
-void emit(struct AsmProgram *prog, char *path)
+struct EmitResult emit(struct AsmProgram *prog, char *path)
 {
+  struct EmitResult r;
   FILE *f;
+
+  r.is_ok = true;
+  r.msg = NULL;
 
   f = fopen(path, "w");
   if (global_constants.len > 0) {
@@ -1098,4 +1102,6 @@ void emit(struct AsmProgram *prog, char *path)
   }
 
   fclose(f);
+  
+  return r;
 }

@@ -24,7 +24,6 @@ void get_type_size_and_align(Type *type, int *size, int *align);
 void struct_insert(struct StructTable **table, struct StructDef def);
 struct StructDef *struct_get(struct StructTable *table, char *name);
 Type clone_type(Type t);
-void print_type(Type *type, int spaces);
 void free_type(Type *t);
 void free_enum_types(void);
 void free_enum_variants(void);

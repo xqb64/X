@@ -296,7 +296,6 @@ struct Map {
 };
 
 struct AsmResult codegen(struct IRProgram *ir_prog);
-struct AsmProgram *fixup(struct AsmProgram *prog);
 const char *reg_to_str_64(enum AsmRegister reg);
 void print_asm(struct AsmProgram *prog);
 void free_asm(struct AsmProgram *prog);

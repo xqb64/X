@@ -815,7 +815,7 @@ static int find_ir_label_instr(struct IRFunction *fn, char *label)
   return -1;
 }
 
-int ir_block_after(struct IRCFG *cfg, int block_idx)
+static int ir_block_after(struct IRCFG *cfg, int block_idx)
 {
   int next = block_idx + 1;
 
