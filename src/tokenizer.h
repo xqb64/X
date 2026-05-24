@@ -13,6 +13,7 @@ enum TokenKind {
   TOKEN_AS,
   TOKEN_IF,
   TOKEN_ELSE,
+  TOKEN_DO,
   TOKEN_WHILE,
   TOKEN_LOOP,
   TOKEN_BREAK,

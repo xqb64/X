@@ -211,6 +211,7 @@ enum StmtKind {
   STMT_LET,
   STMT_RET,
   STMT_IF,
+  STMT_DO_WHILE,
   STMT_WHILE,
   STMT_LOOP,
   STMT_BREAK,
@@ -247,6 +248,12 @@ struct StmtIf {
   struct Expr cond;
   struct Stmt *then_block;
   struct Stmt *else_block;
+};
+
+struct StmtDoWhile {
+  struct Expr cond;
+  struct Stmt *body;
+  char *label;
 };
 
 struct StmtWhile {
@@ -355,6 +362,7 @@ struct Stmt {
     struct StmtLet let;
     struct StmtRet ret;
     struct StmtIf if_stmt;
+    struct StmtDoWhile do_while_stmt;
     struct StmtWhile while_stmt;
     struct StmtLoop loop;
     struct StmtBreak break_stmt;

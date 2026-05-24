@@ -1661,6 +1661,21 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
 
       break;
     }
+    case STMT_DO_WHILE: {
+      struct TypecheckResult cond_res, body_res;
+
+      cond_res = typecheck_expr(&stmt->as.do_while_stmt.cond, *sym_table);
+      if (!cond_res.is_ok) {
+        return cond_res;
+      }
+
+      body_res = typecheck_stmt(stmt->as.do_while_stmt.body, sym_table);
+      if (!body_res.is_ok) {
+        return body_res;
+      }
+
+      break;
+    }
     case STMT_WHILE: {
       struct TypecheckResult cond_res, body_res;
 

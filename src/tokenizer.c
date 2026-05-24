@@ -186,6 +186,15 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
 
         break;
       }
+      case 'd': {
+        if (lookahead(tokenizer, 1, "o") == 0) {
+          vec_insert(&tokens, mktoken(tokenizer, TOKEN_DO, 2));
+        } else {
+          vec_insert(&tokens, identifier(tokenizer));
+        }
+
+        break;
+      }
       case 'e': {
         if (lookahead(tokenizer, 3, "num") == 0) {
           vec_insert(&tokens, mktoken(tokenizer, TOKEN_ENUM, 4));
@@ -510,6 +519,9 @@ void print_token(struct Token *token)
       break;
     case TOKEN_ELSE:
       printf("else");
+      break;
+    case TOKEN_DO:
+      printf("do");
       break;
     case TOKEN_WHILE:
       printf("while");

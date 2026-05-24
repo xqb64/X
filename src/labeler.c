@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "parser.h"
 #include "util.h"
 
 struct LoopLabelResult loop_label_stmt(struct Stmt *stmt, char *label)
@@ -21,6 +22,19 @@ struct LoopLabelResult loop_label_stmt(struct Stmt *stmt, char *label)
       stmt->as.loop.label = new_label;
 
       loop_label_stmt(stmt->as.loop.body, new_label);
+      break;
+    }
+    case STMT_DO_WHILE: {
+      char *new_label;
+      int tmp;
+
+      tmp = mktmp();
+
+      new_label = mklbl("DoWhile", tmp);
+
+      stmt->as.do_while_stmt.label = new_label;
+
+      loop_label_stmt(stmt->as.do_while_stmt.body, new_label);
       break;
     }
     case STMT_WHILE: {

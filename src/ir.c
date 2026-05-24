@@ -1608,6 +1608,46 @@ void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
       free(cond);
       break;
     }
+    case STMT_DO_WHILE: {
+      int tmp;
+      struct IRValue *cond;
+      struct IRInstr i1 = {0}, i2 = {0}, i3 = {0}, i4 = {0}, i5 = {0};
+
+      tmp = extract_label_number(stmt->as.do_while_stmt.label);
+
+      i1.kind = IRInstr_LBL;
+      i1.as.label.name = mklbl("DoWhile", tmp);
+
+      vec_insert(instrs, i1);
+
+      irfy_stmt(instrs, stmt->as.do_while_stmt.body);
+
+      i5.kind = IRInstr_LBL;
+      i5.as.label.name = mklbl("Cond", tmp);
+
+      vec_insert(instrs, i5);
+
+      cond = irfy_expr_and_convert(instrs, &stmt->as.do_while_stmt.cond);
+
+      i2.kind = IRInstr_JZ;
+      i2.as.jz.cond = *cond;
+      i2.as.jz.target = mklbl("End", tmp);
+
+      free(cond);
+
+      vec_insert(instrs, i2);
+
+      i3.kind = IRInstr_JMP;
+      i3.as.jmp.target = mklbl("DoWhile", tmp);
+
+      vec_insert(instrs, i3);
+
+      i4.kind = IRInstr_LBL;
+      i4.as.label.name = mklbl("End", tmp);
+
+      vec_insert(instrs, i4);
+      break;
+    }
     case STMT_WHILE: {
       int tmp;
       struct IRValue *cond;

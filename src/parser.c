@@ -515,6 +515,28 @@ void print_stmt(struct Stmt *stmt, int spaces)
       printf(")\n");
       break;
     }
+    case STMT_DO_WHILE: {
+      print_indent(spaces);
+      printf("STMT_DO_WHILE(\n");
+
+      print_indent(spaces + 2);
+      printf("label = %s,\n", stmt->as.do_while_stmt.label
+                                  ? stmt->as.do_while_stmt.label
+                                  : "NULL");
+
+      print_indent(spaces + 2);
+      printf("cond = ");
+      print_expr(&stmt->as.do_while_stmt.cond, spaces + 2);
+      printf(",\n");
+
+      print_indent(spaces + 2);
+      printf("body = \n");
+      print_stmt(stmt->as.do_while_stmt.body, spaces + 2);
+
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
     case STMT_WHILE: {
       print_indent(spaces);
       printf("STMT_WHILE(\n");
@@ -755,6 +777,15 @@ void free_stmt(struct Stmt *stmt)
       free_expr(stmt->as.let.init);
       free(stmt->as.let.init);
       free_type(&stmt->as.let.type);
+      break;
+    }
+    case STMT_DO_WHILE: {
+      free_expr(&stmt->as.do_while_stmt.cond);
+      free_stmt(stmt->as.do_while_stmt.body);
+      free(stmt->as.do_while_stmt.body);
+      if (stmt->as.do_while_stmt.label) {
+        free(stmt->as.do_while_stmt.label);
+      }
       break;
     }
     case STMT_WHILE: {
@@ -1107,10 +1138,7 @@ struct ParseFnResult primary(struct Parser *parser)
     res = expr_res;
   } else {
     return (struct ParseFnResult){
-      .is_ok = false, 
-      .msg = "Expected primary expression", 
-      .as.expr = {0}
-    };
+        .is_ok = false, .msg = "Expected primary expression", .as.expr = {0}};
   }
 
   return res;
@@ -2350,6 +2378,79 @@ struct ParseFnResult parse_if_stmt(struct Parser *parser)
   return result;
 }
 
+struct ParseFnResult parse_do_while_stmt(struct Parser *parser)
+{
+  struct ParseFnResult result, body_result, cond_result;
+  struct Token *token_do, *token_while, *token_lparen, *token_rparen,
+      *token_semicolon;
+  struct Stmt body;
+  struct Expr cond;
+
+  result.is_ok = true;
+  result.msg = NULL;
+
+  /* 1. Consume 'do' */
+  token_do = consume(parser, TOKEN_DO);
+  if (!token_do) {
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Expected 'do'", .as.stmt = {0}};
+  }
+
+  body_result = block(parser);
+  if (!body_result.is_ok) {
+    return body_result;
+  }
+  body = body_result.as.stmt;
+
+  token_while = consume(parser, TOKEN_WHILE);
+  if (!token_while) {
+    return (struct ParseFnResult){.is_ok = false,
+                                  .msg = "Expected 'while' after do block",
+                                  .as.stmt = {0}};
+  }
+
+  token_lparen = consume(parser, TOKEN_LPAREN);
+  if (!token_lparen) {
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Expected '(' after 'while'", .as.stmt = {0}};
+  }
+
+  cond_result = parse_expr(parser);
+  if (!cond_result.is_ok) {
+    return cond_result;
+  }
+  cond = cond_result.as.expr;
+
+  token_rparen = consume(parser, TOKEN_RPAREN);
+  if (!token_rparen) {
+    return (struct ParseFnResult){
+        .is_ok = false,
+        .msg = "Expected ')' after do-while condition",
+        .as.stmt = {0}};
+  }
+
+  token_semicolon = consume(parser, TOKEN_SEMICOLON);
+  if (!token_semicolon) {
+    return (struct ParseFnResult){
+        .is_ok = false,
+        .msg = "Expected ';' after do-while statement",
+        .as.stmt = {0}};
+  }
+
+  struct StmtDoWhile do_while_stmt;
+  do_while_stmt.body = ALLOC(body);
+  do_while_stmt.cond = cond;
+  do_while_stmt.label = NULL;
+
+  struct Stmt s;
+  s.kind = STMT_DO_WHILE;
+  s.as.do_while_stmt = do_while_stmt;
+
+  result.as.stmt = s;
+
+  return result;
+}
+
 struct ParseFnResult parse_while_stmt(struct Parser *parser)
 {
   struct ParseFnResult result, cond_result, body_result;
@@ -2426,7 +2527,7 @@ struct ParseFnResult parse_loop_stmt(struct Parser *parser)
 
   struct StmtLoop loop_stmt;
   loop_stmt.body = ALLOC(body_res.as.stmt);
-  loop_stmt.label = "";
+  loop_stmt.label = NULL;
 
   struct Stmt s;
   s.kind = STMT_LOOP;
@@ -2886,6 +2987,14 @@ struct ParseFnResult parse_stmt(struct Parser *parser)
         return if_res;
       }
       result.as.stmt = if_res.as.stmt;
+      break;
+    }
+    case TOKEN_DO: {
+      struct ParseFnResult do_res = parse_do_while_stmt(parser);
+      if (!do_res.is_ok) {
+        return do_res;
+      }
+      result.as.stmt = do_res.as.stmt;
       break;
     }
     case TOKEN_WHILE: {
