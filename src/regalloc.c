@@ -3798,8 +3798,6 @@ struct AsmFunction *regalloc_fn(struct AsmFunction *fn, struct Map *map,
 
 #ifdef DEBUG_REGALLOC
     printf("regalloc attempt %d\n", attempt);
-#else
-    printf("regalloc attempt %d\n", attempt);
 #endif
 
     /*
