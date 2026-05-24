@@ -1953,9 +1953,6 @@ struct ParseFnResult assignment(struct Parser *parser)
 
       expr = (struct Expr){.kind = EXPR_COMPOUND_ASSIGN,
                            .as.compound_assign = comp};
-
-      printf("from compound assign: \n");
-      print_expr(&expr, 0);
     }
   }
 
