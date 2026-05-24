@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "ir.h"
+#include "parser.h"
 #include "util.h"
 
 /* Module-owned global state. */
@@ -1011,7 +1012,13 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
       }
 
       if (expr->as.binary.kind == EXPR_BIN_LOGICAL_AND ||
-          expr->as.binary.kind == EXPR_BIN_LOGICAL_OR) {
+          expr->as.binary.kind == EXPR_BIN_LOGICAL_OR ||
+          expr->as.binary.kind == EXPR_BIN_LESS ||
+          expr->as.binary.kind == EXPR_BIN_LESS_EQUAL ||
+          expr->as.binary.kind == EXPR_BIN_GREATER ||
+          expr->as.binary.kind == EXPR_BIN_GREATER_EQUAL ||
+          expr->as.binary.kind == EXPR_BIN_EQUAL_EQUAL ||
+          expr->as.binary.kind == EXPR_BIN_BANG_EQUAL) {
         expr->type = (Type){.kind = BOOL_T};
         break;
       }

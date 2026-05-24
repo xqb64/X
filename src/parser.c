@@ -172,7 +172,12 @@ void print_expr(struct Expr *expr, int spaces)
       print_indent(spaces + 2);
       printf("kind = ");
       print_binary_op(expr->as.binary.kind);
-      printf("\n");
+      printf(",\n");
+
+      print_indent(spaces + 2);
+      printf("type = ");
+      print_type(&expr->type, spaces);
+      printf(",\n");
 
       print_indent(spaces);
       printf(")");
