@@ -2062,3 +2062,845 @@ struct AsmResult codegen(struct IRProgram *ir_prog)
   return result;
 }
 
+#if defined (DEBUG_CODEGEN_RAW) || defined (DEBUG_CODEGEN_REGALLOC) || defined (DEBUG_CODEGEN_FIXUP)
+static void print_asm_type(struct AsmType type)
+{
+  switch (type.kind) {
+    case AsmType_BYTE:
+      printf("AsmType_BYTE");
+      break;
+    case AsmType_WORD:
+      printf("AsmType_WORD");
+      break;
+    case AsmType_LONGWORD:
+      printf("AsmType_LONGWORD");
+      break;
+    case AsmType_QUADWORD:
+      printf("AsmType_QUADWORD");
+      break;
+    case AsmType_FLOAT:
+      printf("AsmType_FLOAT");
+      break;
+    case AsmType_DOUBLE:
+      printf("AsmType_DOUBLE");
+      break;
+    default:
+      assert(0);
+  }
+}
+
+void print_asm_operand(struct AsmOperand *op)
+{
+  switch (op->kind) {
+    case AsmOperand_INDEXED: {
+      printf("AsmOperand_INDEXED((%s, %s, %d)",
+             reg_to_str_64(op->as.indexed.base),
+             reg_to_str_64(op->as.indexed.index), op->as.indexed.scale);
+      break;
+    }
+    case AsmOperand_MEMORY: {
+      printf("AsmOperand_MEMORY(offset = %d, base = ", op->as.mem.offset);
+      switch (op->as.mem.base) {
+        case AX:
+          printf("%%rax");
+          break;
+        case BX:
+          printf("%%rbx");
+          break;
+        case DI:
+          printf("%%rdi");
+          break;
+        case SI:
+          printf("%%rsi");
+          break;
+        case DX:
+          printf("%%rdx");
+          break;
+        case CX:
+          printf("%%rcx");
+          break;
+        case R8:
+          printf("%%r8");
+          break;
+        case R9:
+          printf("%%r9");
+          break;
+        case R10:
+          printf("%%r10");
+          break;
+        case R11:
+          printf("%%r11");
+          break;
+        case R12:
+          printf("%%r12");
+          break;
+        case R13:
+          printf("%%r13");
+          break;
+        case R14:
+          printf("%%r14");
+          break;
+        case R15:
+          printf("%%r15");
+          break;
+        case BP:
+          printf("%%rbp");
+          break;
+        case SP:
+          printf("%%rsp");
+          break;
+        default:
+          assert(0);
+      }
+      printf(")");
+      break;
+    }
+    case AsmOperand_IMM: {
+      printf("AsmOperand_IMM(%lld)", op->as.imm);
+      break;
+    }
+    case AsmOperand_PSEUDO: {
+      printf("AsmOperand_PSEUDO(%s)", op->as.pseudo);
+      break;
+    }
+    case AsmOperand_REG: {
+      printf("AsmOperand_REG(");
+
+      switch (op->as.reg) {
+        case XMM0: {
+          printf("%%xmm0");
+          break;
+        }
+        case XMM1: {
+          printf("%%xmm1");
+          break;
+        }
+        case XMM2: {
+          printf("%%xmm2");
+          break;
+        }
+        case XMM3: {
+          printf("%%xmm3");
+          break;
+        }
+        case XMM4: {
+          printf("%%xmm4");
+          break;
+        }
+        case XMM5: {
+          printf("%%xmm5");
+          break;
+        }
+        case XMM6: {
+          printf("%%xmm6");
+          break;
+        }
+        case XMM7: {
+          printf("%%xmm7");
+          break;
+        }
+        case XMM8: {
+          printf("%%xmm8");
+          break;
+        }
+        case XMM9: {
+          printf("%%xmm9");
+          break;
+        }
+        case XMM10: {
+          printf("%%xmm10");
+          break;
+        }
+        case XMM11: {
+          printf("%%xmm11");
+          break;
+        }
+        case XMM12: {
+          printf("%%xmm12");
+          break;
+        }
+        case XMM13: {
+          printf("%%xmm13");
+          break;
+        }
+        case XMM14: {
+          printf("%%xmm14");
+          break;
+        }
+        case XMM15: {
+          printf("%%xmm15");
+          break;
+        }
+        case AX: {
+          switch (op->asm_type.kind) {
+            case AsmType_BYTE: {
+              printf("%%al");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%ax");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%eax");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%rax");
+              break;
+            }
+            default:
+              assert(0);
+          }
+
+          break;
+        }
+        case BX: {
+          switch (op->asm_type.kind) {
+            case AsmType_BYTE: {
+              printf("%%bl");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%bx");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%ebx");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%rbx");
+              break;
+            }
+            default:
+              assert(0);
+          }
+
+          break;
+        }
+        case DI: {
+          switch (op->asm_type.kind) {
+            case AsmType_BYTE: {
+              printf("%%dil");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%di");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%edi");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%rdi");
+              break;
+            }
+            default:
+              assert(0);
+          }
+          break;
+        }
+        case SI: {
+          switch (op->asm_type.kind) {
+            case AsmType_BYTE: {
+              printf("%%sil");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%si");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%esi");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%rsi");
+              break;
+            }
+            default:
+              assert(0);
+          }
+          break;
+        }
+        case DX: {
+          switch (op->asm_type.kind) {
+            case AsmType_BYTE: {
+              printf("%%dl");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%dx");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%edx");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%rdx");
+              break;
+            }
+            default:
+              assert(0);
+          }
+          break;
+        }
+        case CX: {
+          switch (op->asm_type.kind) {
+            case AsmType_BYTE: {
+              printf("%%cl");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%cx");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%ecx");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%rcx");
+              break;
+            }
+            default:
+              assert(0);
+          }
+          break;
+        }
+        case R8: {
+          switch (op->asm_type.kind) {
+            case AsmType_BYTE: {
+              printf("%%r8b");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%r8w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%r8d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%r8");
+              break;
+            }
+            default:
+              assert(0);
+          }
+          break;
+        }
+        case R9: {
+          switch (op->asm_type.kind) {
+            case AsmType_BYTE: {
+              printf("%%r9b");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%r9w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%r9d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%r9");
+              break;
+            }
+            default:
+              assert(0);
+          }
+          break;
+        }
+        case R10: {
+          switch (op->asm_type.kind) {
+            case AsmType_BYTE: {
+              printf("%%r10b");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%r10w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%r10d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%r10");
+              break;
+            }
+            default:
+              assert(0);
+          }
+          break;
+        }
+        case R11: {
+          switch (op->asm_type.kind) {
+            case AsmType_BYTE: {
+              printf("%%r11b");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%r11w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%r11d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%r11");
+              break;
+            }
+            default:
+              assert(0);
+          }
+          break;
+        }
+        case R12: {
+          switch (op->asm_type.kind) {
+            case AsmType_BYTE: {
+              printf("%%r12b");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%r12w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%r12d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%r12");
+              break;
+            }
+            default:
+              assert(0);
+          }
+          break;
+        }
+        case R13: {
+          switch (op->asm_type.kind) {
+            case AsmType_BYTE: {
+              printf("%%r13b");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%r13w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%r13d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%r13");
+              break;
+            }
+            default:
+              assert(0);
+          }
+          break;
+        }
+        case R14: {
+          switch (op->asm_type.kind) {
+            case AsmType_BYTE: {
+              printf("%%r14b");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%r14w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%r14d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%r14");
+              break;
+            }
+            default:
+              assert(0);
+          }
+          break;
+        }
+        case R15: {
+          switch (op->asm_type.kind) {
+            case AsmType_BYTE: {
+              printf("%%r15b");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%r15w");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%r15d");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%r15");
+              break;
+            }
+            default:
+              assert(0);
+          }
+          break;
+        }
+        case BP: {
+          switch (op->asm_type.kind) {
+            case AsmType_BYTE: {
+              printf("%%bpl");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%bp");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%ebp");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%rbp");
+              break;
+            }
+            default:
+              assert(0);
+          }
+          break;
+        }
+        case SP: {
+          switch (op->asm_type.kind) {
+            case AsmType_BYTE: {
+              printf("%%spl");
+              break;
+            }
+            case AsmType_WORD: {
+              printf("%%sp");
+              break;
+            }
+            case AsmType_LONGWORD: {
+              printf("%%esp");
+              break;
+            }
+            case AsmType_QUADWORD: {
+              printf("%%rsp");
+              break;
+            }
+            default:
+              assert(0);
+          }
+          break;
+        }
+        default:
+          assert(0);
+      }
+
+      printf(")");
+
+      break;
+    }
+    case AsmOperand_STACK: {
+      printf("AsmOperand_STACK(offset = %d)", op->as.stack_offset);
+      break;
+    }
+    case AsmOperand_DATA: {
+      printf("AsmOperand_DATA(name = %s)", op->as.data);
+      break;
+    }
+    default:
+      assert(0);
+  }
+}
+
+static void print_condition_code(enum ConditionCode cc)
+{
+  switch (cc) {
+    case CC_E:
+      printf("E");
+      break;
+    case CC_NE:
+      printf("NE");
+      break;
+    case CC_L:
+      printf("L");
+      break;
+    case CC_LE:
+      printf("LE");
+      break;
+    case CC_G:
+      printf("G");
+      break;
+    case CC_GE:
+      printf("GE");
+      break;
+    case CC_A:
+      printf("A");
+      break;
+    case CC_AE:
+      printf("AE");
+      break;
+    case CC_B:
+      printf("B");
+      break;
+    case CC_BE:
+      printf("BE");
+      break;
+    default:
+      assert(0);
+  }
+}
+
+static void print_asm_binary_op(enum AsmInstrBinaryKind kind)
+{
+  switch (kind) {
+    case AsmInstrBinary_ADD:
+      printf("ADD");
+      break;
+    case AsmInstrBinary_SUB:
+      printf("SUB");
+      break;
+    case AsmInstrBinary_MUL:
+      printf("MUL");
+      break;
+    case AsmInstrBinary_DIV:
+      printf("DIV");
+      break;
+    case AsmInstrBinary_LESS:
+      printf("LESS");
+      break;
+    case AsmInstrBinary_LESS_EQUAL:
+      printf("LESS EQUAL");
+      break;
+    case AsmInstrBinary_GREATER:
+      printf("GREATER");
+      break;
+    case AsmInstrBinary_GREATER_EQUAL:
+      printf("GREATER EQUAL");
+      break;
+    case AsmInstrBinary_EQUAL_EQUAL:
+      printf("EQUAL EQUAL");
+      break;
+    case AsmInstrBinary_BANG_EQUAL:
+      printf("BANG EQUAL");
+      break;
+    case AsmInstrBinary_BIT_AND:
+      printf("BITWISE AND");
+      break;
+    case AsmInstrBinary_BIT_XOR:
+      printf("BITWISE XOR");
+      break;
+    case AsmInstrBinary_BIT_OR:
+      printf("BITWISE OR");
+      break;
+    case AsmInstrBinary_SHL:
+      printf("SHIFT LEFT");
+      break;
+    case AsmInstrBinary_SHR:
+      printf("SHIFT RIGHT LOGICAL");
+      break;
+    case AsmInstrBinary_SAR:
+      printf("SHIFT RIGHT ARITHMETIC");
+      break;
+    default:
+      assert(0 && "Unhandled AsmInstrBinaryKind");
+  }
+}
+
+static void print_asm_instr(struct AsmInstr *instr, int spaces)
+{
+  print_indent(spaces);
+
+  switch (instr->kind) {
+    case AsmInstr_PUSH: {
+      printf("AsmInstr_PUSH(\n");
+      print_indent(spaces + 2);
+      printf("op = ");
+      print_asm_operand(&instr->as.push.op);
+      printf(",\n");
+      print_indent(spaces);
+      printf("),\n");
+      break;
+    }
+    case AsmInstr_POP: {
+      printf("AsmInstr_POP(\n");
+      print_indent(spaces + 2);
+      printf("op = ");
+      print_asm_operand(&instr->as.pop.op);
+      printf(",\n");
+      print_indent(spaces);
+      printf("),\n");
+      break;
+    }
+    case AsmInstr_MOV: {
+      printf("AsmInstr_MOV(\n");
+      print_indent(spaces + 2);
+      printf("src = ");
+      print_asm_operand(&instr->as.mov.src);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("dst = ");
+      print_asm_operand(&instr->as.mov.dst);
+      printf(",\n");
+      print_indent(spaces);
+      printf("),\n");
+      break;
+    }
+    case AsmInstr_BIN: {
+      printf("AsmInstr_BIN(\n");
+      print_indent(spaces + 2);
+      printf("kind = ");
+      print_asm_binary_op(instr->as.binary.kind);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("lhs = ");
+      print_asm_operand(&instr->as.binary.lhs);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("rhs = ");
+      print_asm_operand(&instr->as.binary.rhs);
+      printf(",\n");
+      print_indent(spaces);
+      printf("),\n");
+      break;
+    }
+    case AsmInstr_RET: {
+      printf("AsmInstr_RET,\n");
+      break;
+    }
+    case AsmInstr_CALL: {
+      printf("AsmInstr_CALL(target = %s),\n", instr->as.call.target);
+      break;
+    }
+    case AsmInstr_JMP: {
+      printf("AsmInstr_JMP(target = %s),\n", instr->as.jmp.target);
+      break;
+    }
+    case AsmInstr_LBL: {
+      printf("AsmInstr_LBL(name = %s),\n", instr->as.lbl.name);
+      break;
+    }
+    case AsmInstr_CMP: {
+      printf("AsmInstr_CMP(\n");
+      print_indent(spaces + 2);
+      printf("asm_type = ");
+      print_asm_type(instr->as.cmp.asm_type);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("lhs = ");
+      print_asm_operand(&instr->as.cmp.lhs);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("rhs = ");
+      print_asm_operand(&instr->as.cmp.rhs);
+      printf(",\n");
+      print_indent(spaces);
+      printf(",)\n");
+      break;
+    }
+    case AsmInstr_JmpCC: {
+      printf("AsmInstr_JmpCC(\n");
+      print_indent(spaces + 2);
+      printf("cc = ");
+      print_condition_code(instr->as.jmpcc.cc);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("target = %s,\n", instr->as.jmpcc.target);
+      print_indent(spaces);
+      printf("),\n");
+      break;
+    }
+    case AsmInstr_SetCC: {
+      printf("AsmInstr_SetCC(\n");
+      print_indent(spaces + 2);
+      printf("cc = ");
+      print_condition_code(instr->as.setcc.cc);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("op = ");
+      print_asm_operand(&instr->as.setcc.op);
+      printf(",\n");
+      print_indent(spaces);
+      printf("),\n");
+      break;
+    }
+
+    case AsmInstr_LEA: {
+      printf("AsmInstr_LEA(\n");
+      print_indent(spaces + 2);
+      printf("src = ");
+      print_asm_operand(&instr->as.lea.src);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("dst = ");
+      print_asm_operand(&instr->as.lea.dst);
+      printf(",\n");
+      print_indent(spaces);
+      printf("),\n");
+      break;
+    }
+    case AsmInstr_UNARY: {
+      printf("AsmInstr_UNARY(\n");
+      print_indent(spaces + 2);
+      printf("op = ");
+      print_asm_operand(&instr->as.unary.op);
+      printf(",\n");
+      print_indent(spaces);
+      printf("),\n");
+      break;
+    }
+    case AsmInstr_CVT: {
+      printf("AsmInstr_CVT(\n");
+      print_indent(spaces + 2);
+      printf("src = ");
+      print_asm_operand(&instr->as.cvt.src);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("dst = ");
+      print_asm_operand(&instr->as.cvt.dst);
+      printf(",\n");
+      print_indent(spaces);
+      printf("),\n");
+      break;
+    }
+    case AsmInstr_REP_MOVSB: {
+      printf("AsmInstr_REP_MOVSB,\n");
+      break;
+    }
+    default:
+      assert(0);
+  }
+}
+
+static void print_asm_fn(struct AsmFunction *fn)
+{
+  printf("AsmFunction(\n");
+  print_indent(2);
+  printf("name = %s,\n", fn->name);
+  print_indent(2);
+  printf("body: [\n");
+
+  for (int i = 0; i < fn->body.len; i++) {
+    print_asm_instr(&fn->body.data[i], 4);
+  }
+
+  print_indent(2);
+  printf("]\n)\n");
+}
+
+void print_asm(struct AsmProgram *prog)
+{
+  for (int i = 0; i < prog->funcs.len; i++) {
+    print_asm_fn(&prog->funcs.data[i]);
+  }
+}
+#endif

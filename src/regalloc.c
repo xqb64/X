@@ -3282,7 +3282,7 @@ static int *coalesce_briggs_george(struct InterferenceGraph *orig,
 
         if (george_can_coalesce(&aliased, pseudo_alias_idx, pre_alias_idx,
                                 NUM_ALLOCATABLE_INT_REGS)) {
-#ifdef DEBUG_COALESCE
+#ifdef DEBUG_CODEGEN_REGALLOC
           printf("george coalesce %s <- %s\n",
                  orig->nodes.data[pre_orig_idx].pseudo,
                  orig->nodes.data[pseudo_orig_idx].pseudo);
@@ -3317,7 +3317,7 @@ static int *coalesce_briggs_george(struct InterferenceGraph *orig,
 
         if (briggs_can_coalesce(&aliased, src_rep, dst_rep,
                                 NUM_ALLOCATABLE_INT_REGS)) {
-#ifdef DEBUG_COALESCE
+#ifdef DEBUG_CODEGEN_REGALLOC
           printf("briggs coalesce %s <- %s\n", src_rep, dst_rep);
 #endif
 
@@ -3940,6 +3940,20 @@ static struct InterferenceGraph build_interference_graph(
   return graph;
 }
 
+#ifdef DEBUG_CODEGEN_REGALLOC
+static void print_spill_costs(VecSpillCost *costs)
+{
+  printf("Spill costs:\n");
+  printf("  %-24s %-8s\n", "pseudo", "cost");
+
+  for (int i = 0; i < costs->len; i++) {
+    printf("  %-24s %-8.2f\n",
+           costs->data[i].pseudo,
+           costs->data[i].cost);
+  }
+}
+#endif
+
 static struct AsmFunction *regalloc_fn(struct AsmFunction *fn, struct Map *map,
                                        int *used_stack_bytes,
                                        int *used_callee_saved_count)
@@ -3962,11 +3976,11 @@ static struct AsmFunction *regalloc_fn(struct AsmFunction *fn, struct Map *map,
 
     int *coalesce_parent;
 
-#ifdef DEBUG_INTERVALS
+#ifdef DEBUG_CODEGEN_REGALLOC
     VecLiveInterval intervals;
 #endif
 
-#ifdef DEBUG_REGALLOC
+#ifdef DEBUG_CODEGEN_REGALLOC
     printf("regalloc attempt %d\n", attempt);
 #endif
 
@@ -3981,7 +3995,7 @@ static struct AsmFunction *regalloc_fn(struct AsmFunction *fn, struct Map *map,
      */
     spill_costs = compute_spill_costs(lv, original_instr_count);
 
-#ifdef DEBUG_SPILL_COSTS
+#ifdef DEBUG_CODEGEN_REGALLOC
     print_spill_costs(&spill_costs);
 #endif
 
@@ -3995,11 +4009,11 @@ static struct AsmFunction *regalloc_fn(struct AsmFunction *fn, struct Map *map,
      */
     interference = build_interference_graph(fn, &types, lv);
 
-#ifdef DEBUG_INTERFERENCE
+#ifdef DEBUG_CODEGEN_REGALLOC
     print_interference_graph(&interference);
 #endif
 
-#ifdef DEBUG_INTERFERENCE_DOT
+#ifdef DEBUG_CODEGEN_REGALLOC
     {
       char *path = mkstr("%s.interference.%d.dot", fn->name, attempt);
       write_interference_graph_dot(&interference, path);
@@ -4012,11 +4026,11 @@ static struct AsmFunction *regalloc_fn(struct AsmFunction *fn, struct Map *map,
      */
     moves = collect_moves_from_graph(fn, &interference);
 
-#ifdef DEBUG_MOVES
+#ifdef DEBUG_CODEGEN_REGALLOC
     print_moves(&interference, &moves);
 #endif
 
-#ifdef DEBUG_MOVES_DOT
+#ifdef DEBUG_CODEGEN_REGALLOC
     {
       char *path = mkstr("%s.moves.%d.dot", fn->name, attempt);
       write_moves_dot(&interference, &moves, path);
@@ -4024,11 +4038,11 @@ static struct AsmFunction *regalloc_fn(struct AsmFunction *fn, struct Map *map,
     }
 #endif
 
-#ifdef DEBUG_BRIGGS
+#ifdef DEBUG_CODEGEN_REGALLOC
     debug_briggs_moves(&interference, &moves);
 #endif
 
-#ifdef DEBUG_INTERVALS
+#ifdef DEBUG_CODEGEN_REGALLOC
     intervals = build_live_intervals(lv, original_instr_count, &types);
     sort_live_intervals(&intervals);
     print_live_intervals(&intervals);
@@ -4046,12 +4060,12 @@ static struct AsmFunction *regalloc_fn(struct AsmFunction *fn, struct Map *map,
     coalesced_graph =
         build_aliased_interference_graph(&interference, coalesce_parent);
 
-#ifdef DEBUG_COALESCED_INTERFERENCE
+#ifdef DEBUG_CODEGEN_REGALLOC
     printf("Coalesced ");
     print_interference_graph(&coalesced_graph);
 #endif
 
-#ifdef DEBUG_COALESCED_INTERFERENCE_DOT
+#ifdef DEBUG_CODEGEN_REGALLOC
     {
       char *path = mkstr("%s.coalesced.interference.%d.dot", fn->name, attempt);
       write_interference_graph_dot(&coalesced_graph, path);
@@ -4068,7 +4082,7 @@ static struct AsmFunction *regalloc_fn(struct AsmFunction *fn, struct Map *map,
         color_interference_graph(&coalesced_graph, &types, NULL, &spilled,
                                  &spill_costs, map, used_stack_bytes);
 
-#ifdef DEBUG_SPILLS
+#ifdef DEBUG_CODEGEN_REGALLOC
     printf("After coloring: spilled.len = %d\n", spilled.len);
     for (int i = 0; i < spilled.len; i++) {
       printf("  spilled rep: %s\n", spilled.data[i]);
@@ -4087,7 +4101,7 @@ static struct AsmFunction *regalloc_fn(struct AsmFunction *fn, struct Map *map,
       original_spilled = expand_spilled_reps_to_original_pseudos(
           &interference, coalesce_parent, &spilled);
 
-#ifdef DEBUG_SPILLS
+#ifdef DEBUG_CODEGEN_REGALLOC
       printf("Spilled original pseudos:\n");
       for (int i = 0; i < original_spilled.len; i++) {
         printf("  %s\n", original_spilled.data[i]);
@@ -4125,7 +4139,7 @@ static struct AsmFunction *regalloc_fn(struct AsmFunction *fn, struct Map *map,
      */
     verify_coloring(&interference, &homes);
 
-#ifdef DEBUG_HOMES
+#ifdef DEBUG_CODEGEN_REGALLOC
     print_pseudo_homes(&homes);
 #endif
 

@@ -17,7 +17,6 @@ LDLIBS += -lm
 # Optional build switches:
 #   make debug=all
 #   make debug=sym
-#   make debug=dumps
 #   make debug=tokenizer
 #   make debug=parser
 #   make debug=resolver
@@ -44,13 +43,6 @@ ifeq ($(debug),all)
 	CFLAGS += -DDEBUG_CODEGEN_REGALLOC
 	CFLAGS += -DDEBUG_CODEGEN_FIXUP
 	CFLAGS += -DDEBUG_EMITTER
-	CFLAGS += -DDEBUG_INTERVALS
-	CFLAGS += -DDEBUG_SPILL_COSTS
-	CFLAGS += -DDEBUG_INTERFERENCE
-	CFLAGS += -DDEBUG_MOVES
-	CFLAGS += -DDEBUG_BRIGGS
-	CFLAGS += -DDEBUG_HOMES
-	CFLAGS += -DDEBUG_ENABLE_DUMPS
 	CFLAGS += -g3
 endif
 
@@ -91,39 +83,15 @@ ifeq (codegen_raw,$(findstring codegen_raw,$(debug)))
 endif
 
 ifeq (codegen_regalloc,$(findstring codegen_regalloc,$(debug)))
-	CFLAGS += -DDEBUG_INTERVALS
-	CFLAGS += -DDEBUG_SPILL_COSTS
-	CFLAGS += -DDEBUG_INTERFERENCE
-	CFLAGS += -DDEBUG_MOVES
-	CFLAGS += -DDEBUG_BRIGGS
-	CFLAGS += -DDEBUG_HOMES
+	CFLAGS += -DDEBUG_CODEGEN_REGALLOC
 endif
 
 ifeq (codegen_fixup,$(findstring codegen_fixup,$(debug)))
 	CFLAGS += -DDEBUG_CODEGEN_FIXUP
 endif
 
-ifeq (codegen_regalloc_dot,$(findstring codegen_regalloc_dot,$(debug)))
-	CFLAGS += -DDEBUG_INTERFERENCE_DOT
-	CFLAGS += -DDEBUG_MOVES_DOT
-	CFLAGS += -DDEBUG_COALESCED_INTERFERENCE_DOT
-endif
-
-ifeq (coalesce,$(findstring coalesce,$(debug)))
-	CFLAGS += -DDEBUG_COALESCE
-	CFLAGS += -DDEBUG_COALESCED_INTERFERENCE
-endif
-
-ifeq (spills,$(findstring spills,$(debug)))
-	CFLAGS += -DDEBUG_SPILLS
-endif
-
 ifeq (emitter,$(findstring emitter,$(debug)))
 	CFLAGS += -DDEBUG_EMITTER
-endif
-
-ifeq (dumps,$(findstring dumps,$(debug)))
-	CFLAGS += -DDEBUG_ENABLE_DUMPS
 endif
 
 all: $(BIN)

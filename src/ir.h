@@ -273,4 +273,8 @@ void free_ir_instr(struct IRInstr *instr);
 void free_ir_prog(struct IRProgram *prog);
 void free_global_constants(void);
 
+#if defined(DEBUG_IR) || defined(DEBUG_IR_OPT)
+void print_ir(struct IRProgram *prog);
+#endif
+
 #endif

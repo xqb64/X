@@ -1327,7 +1327,7 @@ struct IrfyResult irfy_ast(struct AST *ast)
   result.msg = NULL;
 
   for (int i = 0; i < ast->stmts.len; i++) {
-    struct IRFunction *f;
+struct IRFunction *f;
 
     f = irfy_fn(&ast->stmts.data[i]);
     if (f) {
@@ -1341,3 +1341,418 @@ struct IrfyResult irfy_ast(struct AST *ast)
 
   return result;
 }
+
+#if defined (DEBUG_IR) || defined(DEBUG_IR_OPT)
+void print_ir_val(struct IRValue *ir_val, int spaces)
+{
+  switch (ir_val->kind) {
+    case IRValue_CONST: {
+      printf("IRValue(\n");
+
+      print_indent(spaces + 2);
+      printf("type = CONST,\n");
+
+      print_indent(spaces + 2);
+
+      switch (ir_val->type.kind) {
+        case I8_T: {
+          printf("v: %d,\n", ir_val->as.konst.as.i8);
+          break;
+        }
+        case U8_T: {
+          printf("v: %d,\n", ir_val->as.konst.as.u8);
+          break;
+        }
+        case I16_T: {
+          printf("v: %d,\n", ir_val->as.konst.as.i16);
+          break;
+        }
+        case U16_T: {
+          printf("v: %d,\n", ir_val->as.konst.as.u16);
+          break;
+        }
+        case I32_T: {
+          printf("v: %d,\n", ir_val->as.konst.as.i32);
+          break;
+        }
+        case U32_T: {
+          printf("v: %d,\n", ir_val->as.konst.as.u32);
+          break;
+        }
+        case I64_T: {
+          printf("v: %lld,\n", ir_val->as.konst.as.i64);
+          break;
+        }
+        case U64_T: {
+          printf("v: %llu,\n", ir_val->as.konst.as.u64);
+          break;
+        }
+        case F32_T: {
+          printf("v: %f,\n", ir_val->as.konst.as.f32);
+          break;
+        }
+        case F64_T: {
+          printf("v: %f,\n", ir_val->as.konst.as.f64);
+          break;
+        }
+        case BOOL_T: {
+          printf("v: %s,\n", ir_val->as.konst.as.boolean ? "true" : "false");
+          break;
+        }
+        case STR_T: {
+          printf("v: \"%s\",\n", ir_val->as.konst.as.str);
+          break;
+        }
+        case PTR_T: {
+          printf("v: <ptr>,\n");
+          break;
+        }
+        default:
+          assert(0);
+      }
+
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case IRValue_VAR: {
+      printf("IRValue(\n");
+
+      print_indent(spaces + 2);
+      printf("type = VAR,\n");
+
+      print_indent(spaces + 2);
+      printf("name = %s,\n", ir_val->as.var);
+
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    default:
+      assert(0);
+  }
+}
+
+static void print_ir_binary_op(enum IRInstrBinaryKind kind)
+{
+  switch (kind) {
+    case IRInstrBinary_ADD:
+      printf("ADD");
+      break;
+    case IRInstrBinary_SUB:
+      printf("SUB");
+      break;
+    case IRInstrBinary_MUL:
+      printf("MUL");
+      break;
+    case IRInstrBinary_DIV:
+      printf("DIV");
+      break;
+    case IRInstrBinary_E:
+      printf("EQUAL EQUAL");
+      break;
+    case IRInstrBinary_NE:
+      printf("BANG EQUAL");
+      break;
+    case IRInstrBinary_L:
+      printf("LESS");
+      break;
+    case IRInstrBinary_LE:
+      printf("LESS EQUAL");
+      break;
+    case IRInstrBinary_G:
+      printf("GREATER");
+      break;
+    case IRInstrBinary_GE:
+      printf("GREATER EQUAL");
+      break;
+    case IRInstrBinary_BIT_AND:
+      printf("BITWISE AND");
+      break;
+    case IRInstrBinary_BIT_XOR:
+      printf("BITWISE XOR");
+      break;
+    case IRInstrBinary_BIT_OR:
+      printf("BITWISE OR");
+      break;
+    case IRInstrBinary_SHL:
+      printf("SHIFT LEFT");
+      break;
+    case IRInstrBinary_SHR:
+      printf("SHIFT RIGHT LOGICAL");
+      break;
+    case IRInstrBinary_SAR:
+      printf("SHIFT RIGHT ARITHMETIC");
+      break;
+    default:
+      assert(0);
+  }
+}
+
+static void print_ir_instr(struct IRInstr *instr, int spaces)
+{
+  print_indent(spaces);
+
+  switch (instr->kind) {
+    case IRInstr_LOAD: {
+      printf("IRInstr_LOAD(\n");
+      print_indent(spaces + 2);
+      printf("src = ");
+      print_ir_val(instr->as.load.src, spaces + 2);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("dst = ");
+      print_ir_val(instr->as.load.dst, spaces + 2);
+      printf("\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case IRInstr_STORE: {
+      printf("IRInstr_STORE(\n");
+      print_indent(spaces + 2);
+      printf("val = ");
+      print_ir_val(instr->as.store.val, spaces + 2);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("dst = ");
+      print_ir_val(instr->as.store.dst, spaces + 2);
+      printf("\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case IRInstr_GETADDR: {
+      printf("IRInstr_GETADDR(\n");
+      print_indent(spaces + 2);
+      printf("src = ");
+      print_ir_val(instr->as.getaddr.src, spaces + 2);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("dst = ");
+      print_ir_val(instr->as.getaddr.dst, spaces + 2);
+      printf("\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case IRInstr_CAST: {
+      printf("IRInstr_CAST(\n");
+      print_indent(spaces + 2);
+      printf("src = ");
+      print_ir_val(instr->as.cast.src, spaces + 2);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("dst = ");
+      print_ir_val(instr->as.cast.dst, spaces + 2);
+      printf("\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case IRInstr_UNARY: {
+      printf("IRInstr_UNARY(\n");
+      print_indent(spaces + 2);
+      if (instr->as.unary.kind == IRInstrUnary_NOT) {
+        printf("kind = NOT,\n");
+      } else {
+        printf("kind = NEG,\n");
+      }
+      print_indent(spaces + 2);
+      printf("src = ");
+      print_ir_val(instr->as.unary.src, spaces + 2);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("dst = ");
+      print_ir_val(instr->as.unary.dst, spaces + 2);
+      printf("\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case IRInstr_JMP: {
+      printf("IRInstr_JMP(target = %s)", instr->as.jmp.target);
+      break;
+    }
+    case IRInstr_JZ: {
+      printf("IRInstr_JZ(\n");
+      print_indent(spaces + 2);
+      printf("target = %s,\n", instr->as.jz.target);
+      print_indent(spaces + 2);
+      printf("cond: ");
+      print_ir_val(&instr->as.jz.cond, spaces + 2);
+      printf(",\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case IRInstr_LBL: {
+      printf("IRInstr_LBL(name = %s)", instr->as.label.name);
+      break;
+    }
+    case IRInstr_CPY: {
+      printf("IRInstr_CPY(\n");
+
+      print_indent(spaces + 2);
+      printf("src = ");
+      print_ir_val(instr->as.copy.src, spaces + 2);
+      printf(",\n");
+
+      print_indent(spaces + 2);
+      printf("dst = ");
+      print_ir_val(instr->as.copy.dst, spaces + 2);
+      printf("\n");
+
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case IRInstr_BIN: {
+      printf("IRInstr_BIN(\n");
+
+      print_indent(spaces + 2);
+      printf("type = ");
+      print_ir_binary_op(instr->as.binary.kind);
+      printf(",\n");
+
+      print_indent(spaces + 2);
+      printf("lhs = ");
+      print_ir_val(instr->as.binary.lhs, spaces + 2);
+      printf(",\n");
+
+      print_indent(spaces + 2);
+      printf("rhs = ");
+      print_ir_val(instr->as.binary.rhs, spaces + 2);
+      printf(",\n");
+
+      print_indent(spaces + 2);
+      printf("dst = ");
+      print_ir_val(instr->as.binary.dst, spaces + 2);
+      printf("\n");
+
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case IRInstr_RET: {
+      printf("IRInstr_RET(\n");
+
+      print_indent(spaces + 2);
+      printf("val = ");
+      if (instr->as.ret.val) {
+        print_ir_val(instr->as.ret.val, spaces + 2);
+      }
+      printf("\n");
+
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case IRInstr_CALL: {
+      printf("IRInstr_CALL(\n");
+
+      print_indent(spaces + 2);
+      printf("target = ");
+      print_expr(&instr->as.call.target, spaces + 2);
+      printf(",\n");
+
+      print_indent(spaces + 2);
+      printf("args: [\n");
+      for (int k = 0; k < instr->as.call.args.len; k++) {
+        print_indent(spaces + 4);
+        print_ir_val(instr->as.call.args.data[k], spaces + 4);
+        printf(",\n");
+      }
+      print_indent(spaces + 2);
+      printf("],\n");
+
+      print_indent(spaces + 2);
+      printf("dst: ");
+      if (instr->as.call.dst) {
+        print_ir_val(instr->as.call.dst, spaces + 2);
+      } else {
+        printf("NULL");
+      }
+      printf("\n");
+
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case IRInstr_CPY_FROM_OFFSET: {
+      printf("IRInstr_CPY_FROM_OFFSET(\n");
+      print_indent(spaces + 2);
+      printf("src = ");
+      print_ir_val(instr->as.cpy_from_offset.src, spaces + 2);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("offset = %d,\n", instr->as.cpy_from_offset.offset);
+      print_indent(spaces + 2);
+      printf("dst = ");
+      print_ir_val(instr->as.cpy_from_offset.dst, spaces + 2);
+      printf("\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case IRInstr_CPY_TO_OFFSET: {
+      printf("IRInstr_CPY_TO_OFFSET(\n");
+      print_indent(spaces + 2);
+      printf("dst = ");
+      print_ir_val(instr->as.cpy_to_offset.dst, spaces + 2);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("offset = %d,\n", instr->as.cpy_to_offset.offset);
+      print_indent(spaces + 2);
+      printf("src = ");
+      print_ir_val(instr->as.cpy_to_offset.src, spaces + 2);
+      printf("\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case IRInstr_ADD_PTR: {
+      printf("IRInstr_ADD_PTR(\n");
+      print_indent(spaces + 2);
+      printf("ptr = ");
+      print_ir_val(instr->as.add_ptr.ptr, spaces + 2);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("index = ");
+      print_ir_val(instr->as.add_ptr.index, spaces + 2);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("scale = %d,\n", instr->as.add_ptr.scale);
+      print_indent(spaces + 2);
+      printf("dst = ");
+      print_ir_val(instr->as.add_ptr.dst, spaces + 2);
+      printf("\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    default:
+      assert(0);
+  }
+}
+
+static void print_ir_fn(struct IRFunction *func)
+{
+  printf("IRFunction(\n  name = %s,\n  retval = %d,\n  body = [\n", func->name,
+         func->retval.kind);
+  for (int i = 0; i < func->body.len; i++) {
+    print_ir_instr(&func->body.data[i], 4);
+    printf(",\n");
+  }
+  printf("  ]\n");
+  printf(")\n");
+}
+
+void print_ir(struct IRProgram *prog)
+{
+  for (int i = 0; i < prog->funcs.len; i++) {
+    print_ir_fn(prog->funcs.data[i]);
+  }
+}
+#endif
+

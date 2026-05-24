@@ -2522,3 +2522,717 @@ struct ParseResult parse(struct Parser *parser)
 
   return result;
 }
+
+#if defined(DEBUG_PARSER) || defined(DEBUG_RESOLVER) || defined(DEBUG_TYPECHECKER) || defined(DEBUG_LABELER)
+void print_type(Type *type, int spaces)
+{
+  switch (type->kind) {
+    case STRUCT_T:
+      printf("%s", type->as.struct_name);
+      break;
+    case VOID_T:
+      printf("void");
+      break;
+    case PTR_T:
+      printf("*");
+      print_type(type->as.base, spaces);
+      break;
+    case U8_T:
+      printf("u8");
+      break;
+    case U16_T:
+      printf("u16");
+      break;
+    case U32_T:
+      printf("u32");
+      break;
+    case U64_T:
+      printf("u64");
+      break;
+    case I8_T:
+      printf("i8");
+      break;
+    case I16_T:
+      printf("i16");
+      break;
+    case I32_T:
+      printf("i32");
+      break;
+    case I64_T:
+      printf("i64");
+      break;
+    case F32_T:
+      printf("f32");
+      break;
+    case F64_T:
+      printf("f64");
+      break;
+    case BOOL_T:
+      printf("bool");
+      break;
+    case STR_T:
+      printf("str");
+      break;
+    case FN_T: {
+      printf("fn(\n");
+
+      print_indent(spaces + 2);
+      printf("args: [\n");
+      for (int i = 0; i < type->as.func.params.len; i++) {
+        print_indent(spaces + 4);
+        print_type(&type->as.func.params.data[i], spaces + 4);
+        printf(",\n");
+      }
+
+      if (type->as.func.is_variadic) {
+        print_indent(spaces + 4);
+        printf("...\n");
+      }
+
+      print_indent(spaces + 2);
+      printf("],\n");
+
+      print_indent(spaces + 2);
+      printf("retval: ");
+      if (type->as.func.retval) {
+        print_type(type->as.func.retval, spaces + 2);
+      } else {
+        printf("void");
+      }
+      printf("\n");
+
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case UNKNOWN_T:
+      printf("unknown");
+      break;
+    default:
+      assert(0);
+  }
+}
+
+static void print_binary_op(enum ExprBinKind kind)
+{
+  switch (kind) {
+    case EXPR_BIN_ADD:
+      printf("ADD");
+      break;
+    case EXPR_BIN_SUB:
+      printf("SUB");
+      break;
+    case EXPR_BIN_MUL:
+      printf("MUL");
+      break;
+    case EXPR_BIN_DIV:
+      printf("DIV");
+      break;
+    case EXPR_BIN_LESS:
+      printf("LESS");
+      break;
+    case EXPR_BIN_GREATER:
+      printf("GREATER");
+      break;
+    case EXPR_BIN_LESS_EQUAL:
+      printf("LESS EQUAL");
+      break;
+    case EXPR_BIN_GREATER_EQUAL:
+      printf("GREATER EQUAL");
+      break;
+    case EXPR_BIN_EQUAL_EQUAL:
+      printf("EQUAL EQUAL");
+      break;
+    case EXPR_BIN_BANG_EQUAL:
+      printf("BANG EQUAL");
+      break;
+    case EXPR_BIN_BITWISE_AND:
+      printf("BITWISE AND");
+      break;
+    case EXPR_BIN_BITWISE_XOR:
+      printf("BITWISE XOR");
+      break;
+    case EXPR_BIN_BITWISE_OR:
+      printf("BITWISE OR");
+      break;
+    case EXPR_BIN_SHIFT_LEFT:
+      printf("SHIFT LEFT");
+      break;
+    case EXPR_BIN_SHIFT_RIGHT:
+      printf("SHIFT RIGHT");
+      break;
+    case EXPR_BIN_LOGICAL_AND:
+      printf("LOGICAL AND");
+      break;
+    case EXPR_BIN_LOGICAL_OR:
+      printf("LOGICAL OR");
+      break;
+    default:
+      assert(0);
+  }
+}
+
+void print_expr(struct Expr *expr, int spaces)
+{
+  switch (expr->kind) {
+    case EXPR_LITERAL: {
+      if (expr->as.literal.kind == LITERAL_BOOL) {
+        printf("Literal(\n");
+        print_indent(spaces + 2);
+        printf("v: %s,\n", expr->as.literal.as.boolean ? "true" : "false");
+        printf("\n");
+        print_indent(spaces);
+        printf(")");
+      } else if (expr->as.literal.kind == LITERAL_NUM) {
+        printf("Literal(\n");
+        print_indent(spaces + 2);
+
+        switch (expr->as.literal.type.kind) {
+          case I8_T: {
+            printf("v: %d,\n", expr->as.literal.as.i8);
+            break;
+          }
+          case U8_T: {
+            printf("v: %d,\n", expr->as.literal.as.u8);
+            break;
+          }
+          case I16_T: {
+            printf("v: %d,\n", expr->as.literal.as.i16);
+            break;
+          }
+          case U16_T: {
+            printf("v: %d,\n", expr->as.literal.as.u16);
+            break;
+          }
+          case I32_T: {
+            printf("v: %d,\n", expr->as.literal.as.i32);
+            break;
+          }
+          case U32_T: {
+            printf("v: %d,\n", expr->as.literal.as.u32);
+            break;
+          }
+          case I64_T: {
+            printf("v: %lld,\n", expr->as.literal.as.i64);
+            break;
+          }
+          case U64_T: {
+            printf("v: %llu,\n", expr->as.literal.as.u64);
+            break;
+          }
+          case F32_T: {
+            printf("v: %f,\n", expr->as.literal.as.f32);
+            break;
+          }
+          case F64_T: {
+            printf("v: %f,\n", expr->as.literal.as.f64);
+            break;
+          }
+          default:
+            assert(0);
+        }
+        print_indent(spaces + 2);
+        printf("type: ");
+        print_type(&expr->as.literal.type, spaces);
+        printf("\n");
+        print_indent(spaces);
+        printf(")");
+      } else {
+        printf("Literal(\"%s\")", expr->as.literal.as.str);
+      }
+      break;
+    }
+    case EXPR_VARIABLE: {
+      printf("Variable(%s)", expr->as.var.name);
+      break;
+    }
+    case EXPR_UNARY: {
+      printf("Unary(\n");
+
+      print_indent(spaces + 2);
+      printf("expr = ");
+      print_expr(expr->as.unary.expr, spaces + 4);
+      printf(",\n");
+
+      print_indent(spaces);
+      printf(")");
+
+      break;
+    }
+    case EXPR_BINARY: {
+      printf("Binary(\n");
+
+      print_indent(spaces + 2);
+      printf("lhs = ");
+      print_expr(expr->as.binary.lhs, spaces + 4);
+      printf(",\n");
+
+      print_indent(spaces + 2);
+      printf("rhs = ");
+      print_expr(expr->as.binary.rhs, spaces + 4);
+      printf(",\n");
+
+      print_indent(spaces + 2);
+      printf("kind = ");
+      print_binary_op(expr->as.binary.kind);
+      printf(",\n");
+
+      print_indent(spaces + 2);
+      printf("type = ");
+      print_type(&expr->type, spaces);
+      printf(",\n");
+
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case EXPR_ASSIGN: {
+      printf("Assign(\n");
+
+      print_indent(spaces + 2);
+      printf("lhs = ");
+      print_expr(expr->as.assign.lhs, spaces + 4);
+      printf(",\n");
+
+      print_indent(spaces + 2);
+      printf("rhs = ");
+      print_expr(expr->as.assign.rhs, spaces + 4);
+      printf(",\n");
+
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case EXPR_COMPOUND_ASSIGN: {
+      printf("CompoundAssign(\n");
+      print_indent(spaces + 2);
+      printf("op = ");
+      print_binary_op(expr->as.compound_assign.kind);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("lhs = ");
+      print_expr(expr->as.compound_assign.lhs, spaces + 4);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("rhs = ");
+      print_expr(expr->as.compound_assign.rhs, spaces + 4);
+      printf(",\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case EXPR_CALL: {
+      printf("Call(\n");
+
+      print_indent(spaces + 2);
+      printf("target = ");
+      print_expr(expr->as.call.target, spaces + 2);
+      printf(",\n");
+
+      print_indent(spaces + 2);
+      printf("arguments: [\n");
+
+      for (int i = 0; i < expr->as.call.arguments.len; i++) {
+        print_indent(spaces + 4);
+        print_expr(&expr->as.call.arguments.data[i], spaces + 4);
+        printf(",\n");
+      }
+
+      print_indent(spaces + 2);
+      printf("]\n");
+
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case EXPR_SIZEOF: {
+      printf("SizeOf(\n");
+      print_indent(spaces + 2);
+      print_expr(expr->as.sizeof_expr.expr, spaces + 2);
+      printf("\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case EXPR_ADDROF: {
+      printf("AddrOf(\n");
+      print_indent(spaces + 2);
+      print_expr(expr->as.addrof.expr, spaces + 2);
+      printf("\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case EXPR_DEREF: {
+      printf("Deref(\n");
+      print_indent(spaces + 2);
+      print_expr(expr->as.deref.expr, spaces + 2);
+      printf("\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case EXPR_CAST: {
+      printf("Cast(\n");
+      print_indent(spaces + 2);
+      print_expr(expr->as.cast.expr, spaces + 2);
+      printf("\n");
+      print_indent(spaces + 2);
+      printf("target_type: ");
+      print_type(&expr->as.cast.target_type, spaces + 2);
+      printf("\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case EXPR_STRUCT_INIT: {
+      printf("StructInit(\n");
+      print_indent(spaces + 2);
+      printf("name = %s,\n", expr->as.struct_init.struct_name);
+      print_indent(spaces + 2);
+      printf("values = [\n");
+      for (int i = 0; i < expr->as.struct_init.values.len; i++) {
+        print_indent(spaces + 4);
+        print_expr(expr->as.struct_init.values.data[i].expr, spaces + 4);
+        printf(",\n");
+      }
+      print_indent(spaces + 2);
+      printf("]\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case EXPR_MEMBER: {
+      printf("Member(\n");
+      print_indent(spaces + 2);
+      printf("target = ");
+      print_expr(expr->as.member.target, spaces + 4);
+      printf(",\n");
+      print_indent(spaces + 2);
+      printf("field = %s,\n", expr->as.member.field_name);
+      print_indent(spaces + 2);
+      printf("is_arrow = %s\n", expr->as.member.is_arrow ? "true" : "false");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    default:
+      assert(0);
+  }
+}
+
+void print_stmt(struct Stmt *stmt, int spaces)
+{
+  switch (stmt->kind) {
+    case STMT_FN: {
+      print_indent(spaces);
+      printf("STMT_FN(\n");
+
+      print_indent(spaces + 2);
+      printf("name = %s,\n", stmt->as.fn.name);
+
+      print_indent(spaces + 2);
+      printf("params = [\n");
+      for (int i = 0; i < stmt->as.fn.params.len; i++) {
+        print_indent(spaces + 4);
+        printf("%s: ", stmt->as.fn.params.data[i].name);
+        print_type(&stmt->as.fn.params.data[i].type, 0);
+        printf(",\n");
+      }
+      print_indent(spaces + 2);
+      printf("],\n");
+
+      print_indent(spaces + 2);
+      printf("body = [\n");
+      for (int i = 0; i < stmt->as.fn.body.len; i++) {
+        print_stmt(&stmt->as.fn.body.data[i], spaces + 4);
+      }
+      print_indent(spaces + 2);
+      printf("],\n");
+
+      print_indent(spaces + 2);
+      printf("retval = ");
+      print_type(&stmt->as.fn.retval, spaces + 4);
+      printf("\n");
+
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
+    case STMT_LET: {
+      print_indent(spaces);
+      printf("STMT_LET(\n");
+
+      print_indent(spaces + 2);
+      printf("name = %s,\n", stmt->as.let.name);
+
+      print_indent(spaces + 2);
+      printf("type = ");
+      print_type(&stmt->as.let.type, spaces + 4);
+      printf(",\n");
+
+      print_indent(spaces + 2);
+      printf("init = ");
+      print_expr(stmt->as.let.init, spaces + 2);
+      printf("\n");
+
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
+    case STMT_RET: {
+      print_indent(spaces);
+      printf("STMT_RET(\n");
+
+      print_indent(spaces + 2);
+      printf("val = ");
+      if (stmt->as.ret.val) {
+        print_expr(stmt->as.ret.val, spaces + 2);
+      } else {
+        printf("NULL");
+      }
+      printf("\n");
+
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
+    case STMT_IF: {
+      print_indent(spaces);
+      printf("STMT_IF(\n");
+
+      print_indent(spaces + 2);
+      printf("cond = ");
+      print_expr(&stmt->as.if_stmt.cond, spaces + 2);
+      printf(",\n");
+
+      print_indent(spaces + 2);
+      printf("then = \n");
+      print_stmt(stmt->as.if_stmt.then_block, spaces + 2);
+
+      if (stmt->as.if_stmt.else_block) {
+        print_indent(spaces + 2);
+        printf("else = \n");
+        print_stmt(stmt->as.if_stmt.else_block, spaces + 4);
+      }
+
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
+    case STMT_DO_WHILE: {
+      print_indent(spaces);
+      printf("STMT_DO_WHILE(\n");
+
+      print_indent(spaces + 2);
+      printf("label = %s,\n", stmt->as.do_while_stmt.label
+                                  ? stmt->as.do_while_stmt.label
+                                  : "NULL");
+
+      print_indent(spaces + 2);
+      printf("cond = ");
+      print_expr(&stmt->as.do_while_stmt.cond, spaces + 2);
+      printf(",\n");
+
+      print_indent(spaces + 2);
+      printf("body = \n");
+      print_stmt(stmt->as.do_while_stmt.body, spaces + 2);
+
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
+    case STMT_WHILE: {
+      print_indent(spaces);
+      printf("STMT_WHILE(\n");
+
+      print_indent(spaces + 2);
+      printf("label = %s,\n",
+             stmt->as.while_stmt.label ? stmt->as.while_stmt.label : "NULL");
+
+      print_indent(spaces + 2);
+      printf("cond = ");
+      print_expr(&stmt->as.while_stmt.cond, spaces + 2);
+      printf(",\n");
+
+      print_indent(spaces + 2);
+      printf("body = \n");
+      print_stmt(stmt->as.while_stmt.body, spaces + 2);
+
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
+    case STMT_LOOP: {
+      print_indent(spaces);
+      printf("STMT_LOOP(\n");
+
+      print_indent(spaces + 2);
+      printf("body = \n");
+      print_stmt(stmt->as.loop.body, spaces + 2);
+
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
+    case STMT_BREAK: {
+      print_indent(spaces);
+      printf("STMT_BREAK(\n");
+
+      print_indent(spaces + 2);
+      printf("label = %s\n",
+             stmt->as.break_stmt.label ? stmt->as.break_stmt.label : "NULL");
+
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
+    case STMT_CONTINUE: {
+      print_indent(spaces);
+      printf("STMT_CONTINUE(\n");
+
+      print_indent(spaces + 2);
+      printf("label = %s\n", stmt->as.continue_stmt.label
+                                 ? stmt->as.continue_stmt.label
+                                 : "NULL");
+
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
+    case STMT_BLOCK: {
+      print_indent(spaces);
+      printf("STMT_BLOCK(\n");
+
+      print_indent(spaces + 2);
+      printf("body = [\n");
+      for (int i = 0; i < stmt->as.block.stmts.len; i++) {
+        print_stmt(&stmt->as.block.stmts.data[i], spaces + 4);
+      }
+
+      print_indent(spaces + 2);
+      printf("]\n");
+
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
+    case STMT_EXTERN: {
+      print_indent(spaces);
+      printf("STMT_EXTERN(\n");
+
+      print_indent(spaces + 2);
+      printf("name = %s,\n", stmt->as.extern_stmt.name);
+
+      print_indent(spaces + 2);
+      printf("params = [\n");
+      for (int i = 0; i < stmt->as.extern_stmt.params.len; i++) {
+        print_indent(spaces + 4);
+        printf("%s: ", stmt->as.extern_stmt.params.data[i].name);
+        print_type(&stmt->as.extern_stmt.params.data[i].type, 0);
+        printf(",\n");
+      }
+      if (stmt->as.extern_stmt.is_variadic) {
+        print_indent(spaces + 4);
+        printf("...\n");
+      }
+      print_indent(spaces + 2);
+      printf("],\n");
+
+      print_indent(spaces + 2);
+      printf("retval = ");
+      print_type(&stmt->as.extern_stmt.retval, spaces + 4);
+      printf("\n");
+
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
+    case STMT_EXPR: {
+      print_indent(spaces);
+      printf("STMT_EXPR(\n");
+
+      print_indent(spaces + 2);
+      printf("expr = ");
+      print_expr(&stmt->as.expr_stmt.expr, spaces + 2);
+      printf("\n");
+
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
+    case STMT_STRUCT: {
+      print_indent(spaces);
+      printf("%s(\n",
+             stmt->as.struct_stmt.is_union ? "STMT_UNION" : "STMT_STRUCT");
+
+      print_indent(spaces + 2);
+      printf("name = %s,\n", stmt->as.struct_stmt.name);
+
+      print_indent(spaces + 2);
+      printf("fields = [\n");
+
+      for (int i = 0; i < stmt->as.struct_stmt.fields.len; i++) {
+        print_indent(spaces + 4);
+        printf("Field(name: %s, type: ",
+               stmt->as.struct_stmt.fields.data[i].name);
+
+        print_type(&stmt->as.struct_stmt.fields.data[i].type, spaces + 6);
+
+        printf(", offset: %d),\n", stmt->as.struct_stmt.fields.data[i].offset);
+      }
+
+      print_indent(spaces + 2);
+      printf("]\n");
+
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
+    case STMT_ENUM: {
+      print_indent(spaces);
+      printf("STMT_ENUM(\n");
+      print_indent(spaces + 2);
+      printf("name = %s,\n", stmt->as.enum_stmt.name);
+      print_indent(spaces + 2);
+      printf("variants = [\n");
+      for (int i = 0; i < stmt->as.enum_stmt.variants.len; i++) {
+        print_indent(spaces + 4);
+        printf("%s = %d,\n", stmt->as.enum_stmt.variants.data[i].name,
+               stmt->as.enum_stmt.variants.data[i].value);
+      }
+      print_indent(spaces + 2);
+      printf("]\n");
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
+    case STMT_LABELED: {
+      print_indent(spaces);
+      printf("STMT_LABELED(\n");
+      print_stmt(stmt->as.labeled.stmt, spaces + 2);
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
+    case STMT_GOTO: {
+      print_indent(spaces);
+      printf("STMT_GOTO(\n");
+      print_indent(spaces + 2);
+      printf("label = \"%s\",\n", stmt->as.goto_stmt.label);
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
+    default:
+      assert(0 && "Unhandled statement kind in print_stmt");
+  }
+}
+
+void print_ast(struct AST *ast)
+{
+  for (int i = 0; i < ast->stmts.len; i++) {
+    print_stmt(&ast->stmts.data[i], 0);
+  }
+}
+#endif 

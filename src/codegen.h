@@ -304,4 +304,9 @@ int asm_type_stack_align(struct AsmType t);
 int align_up_int(int n, int align);
 void print_asm_operand(struct AsmOperand *op);
 
+#if defined(DEBUG_CODEGEN_RAW) || defined(DEBUG_CODEGEN_REGALLOC) || defined(DEBUG_CODEGEN_FIXUP)
+void print_asm(struct AsmProgram *prog);
+#endif
+
+
 #endif

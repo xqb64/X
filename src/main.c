@@ -7,11 +7,6 @@
 #include <unistd.h>
 
 #include "codegen.h"
-
-#ifdef DEBUG_ENABLE_DUMPS
-#include "dump.h"
-#endif
-
 #include "emitter.h"
 #include "fixup.h"
 #include "ir.h"
@@ -322,9 +317,7 @@ static struct RunResult run(struct CompilerOptions *opts)
     goto free_up2_tokenize;
   }
 
-#ifdef DEBUG_ENABLE_DUMPS
   print_tokens(&tokenize_result.tokens);
-#endif
 
   if (target_stage == STAGE_TOKENIZE) {
     goto free_up2_tokenize;

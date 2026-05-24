@@ -423,4 +423,8 @@ void free_stmt(struct Stmt *stmt);
 void print_ast(struct AST *ast);
 void free_ast(struct AST *ast);
 
+#if defined(DEBUG_PARSER) || defined(DEBUG_RESOLVER) || defined(DEBUG_TYPECHECKER) || defined(DEBUG_LABELER)
+void print_ast(struct AST *ast);
+#endif
+
 #endif
