@@ -10,6 +10,8 @@
 #include "util.h"
 
 VecStaticConstant global_constants = {0};
+VecStaticConstant global_variables = {0};
+VecExternVariable extern_variables = {0};
 
 static struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr);
 
@@ -299,6 +301,70 @@ void free_global_constants(void)
     free(global_constants.data[i].value);
   }
   vec_free(&global_constants);
+}
+
+static void add_extern_variable(char *name)
+{
+  for (int i = 0; i < extern_variables.len; i++) {
+    if (strcmp(extern_variables.data[i], name) == 0) {
+      return;
+    }
+  }
+
+  vec_insert(&extern_variables, strdup(name));
+}
+
+static void add_global_variable(char *name, char *value)
+{
+  struct StaticConstant global;
+
+  global.name = strdup(name);
+  global.value = value;
+  vec_insert(&global_variables, global);
+}
+
+static bool is_extern_variable(char *name)
+{
+  for (int i = 0; i < extern_variables.len; i++) {
+    if (strcmp(extern_variables.data[i], name) == 0) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static bool is_global_variable(char *name)
+{
+  for (int i = 0; i < global_variables.len; i++) {
+    if (strcmp(global_variables.data[i].name, name) == 0) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool is_data_variable(char *name)
+{
+  return is_extern_variable(name) || is_global_variable(name);
+}
+
+void free_global_variables(void)
+{
+  for (int i = 0; i < global_variables.len; i++) {
+    free(global_variables.data[i].name);
+    free(global_variables.data[i].value);
+  }
+  vec_free(&global_variables);
+}
+
+void free_extern_variables(void)
+{
+  for (int i = 0; i < extern_variables.len; i++) {
+    free(extern_variables.data[i]);
+  }
+  vec_free(&extern_variables);
 }
 
 static enum IRCastKind get_cast_kind(Type src, Type dst)
@@ -1024,9 +1090,6 @@ static int extract_label_number(const char *label)
 static void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
 {
   switch (stmt->kind) {
-    case STMT_FN:
-    case STMT_STRUCT:
-      assert(0);
     case STMT_LOOP: {
       int tmp;
       struct IRInstr begin, jmp, end;
@@ -1278,9 +1341,6 @@ static void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
       irfy_stmt(instrs, stmt->as.labeled.stmt);
       break;
     }
-    case STMT_EXTERN:
-    case STMT_ENUM:
-      break;
     case STMT_EXPR: {
       struct IRValue *v;
 
@@ -1296,23 +1356,171 @@ static void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
   }
 }
 
-static struct IRFunction *irfy_fn(struct Stmt *stmt)
+
+static bool is_negative_literal(struct Expr *expr, struct Literal **literal,
+                                bool *is_negative)
 {
-  if (stmt->kind != STMT_FN) {
+  if (expr->kind == EXPR_LITERAL) {
+    *literal = &expr->as.literal;
+    *is_negative = false;
+    return true;
+  }
+
+  if (expr->kind == EXPR_UNARY && strcmp(expr->as.unary.op, "-") == 0 &&
+      expr->as.unary.expr->kind == EXPR_LITERAL) {
+    *literal = &expr->as.unary.expr->as.literal;
+    *is_negative = true;
+    return true;
+  }
+
+  return false;
+}
+
+static char *format_directive(const char *fmt, unsigned long long value)
+{
+  char buf[128];
+
+  snprintf(buf, sizeof(buf), fmt, value);
+  return strdup(buf);
+}
+
+static char *format_signed_directive(const char *fmt, long long value)
+{
+  char buf[128];
+
+  snprintf(buf, sizeof(buf), fmt, value);
+  return strdup(buf);
+}
+
+static char *global_string_directive(char *value)
+{
+  char *label, *directive;
+  struct StaticConstant sc;
+  char buf[128];
+
+  label = mklbl("str", mktmp());
+  sc.name = strdup(label);
+  sc.value = strdup(value);
+  vec_insert(&global_constants, sc);
+
+  snprintf(buf, sizeof(buf), ".quad %s", label);
+  directive = strdup(buf);
+  free(label);
+
+  return directive;
+}
+
+static char *global_initializer_directive(struct DeclVariable *variable)
+{
+  struct Literal *literal;
+  bool is_negative;
+
+  if (!variable->init ||
+      !is_negative_literal(variable->init, &literal, &is_negative)) {
+    return NULL;
+  }
+
+  if (literal->kind == LITERAL_STR) {
+    if (variable->type.kind == STR_T && !is_negative) {
+      return global_string_directive(literal->as.str);
+    }
+    return NULL;
+  }
+
+  if (literal->kind == LITERAL_BOOL) {
+    if (is_negative) {
+      return NULL;
+    }
+    return format_directive(".byte %llu",
+                            literal->as.boolean ? 1ULL : 0ULL);
+  }
+
+  if (literal->kind != LITERAL_NUM) {
+    return NULL;
+  }
+
+  switch (variable->type.kind) {
+    case I8_T:
+      return format_signed_directive(".byte %lld",
+                                     is_negative ? -literal->as.i8
+                                                 : literal->as.i8);
+    case U8_T:
+      if (is_negative) {
+        return NULL;
+      }
+      return format_directive(".byte %llu", literal->as.u8);
+    case I16_T:
+      return format_signed_directive(".value %lld",
+                                     is_negative ? -literal->as.i16
+                                                 : literal->as.i16);
+    case U16_T:
+      if (is_negative) {
+        return NULL;
+      }
+      return format_directive(".value %llu", literal->as.u16);
+    case I32_T:
+      return format_signed_directive(".long %lld",
+                                     is_negative ? -literal->as.i32
+                                                 : literal->as.i32);
+    case U32_T:
+      if (is_negative) {
+        return NULL;
+      }
+      return format_directive(".long %llu", literal->as.u32);
+    case I64_T:
+      return format_signed_directive(".quad %lld",
+                                     is_negative ? -literal->as.i64
+                                                 : literal->as.i64);
+    case U64_T:
+      if (is_negative) {
+        return NULL;
+      }
+      return format_directive(".quad %llu", literal->as.u64);
+    case F32_T: {
+      float value = literal->as.f32;
+      unsigned int bits;
+      if (is_negative) {
+        value = -value;
+      }
+      memcpy(&bits, &value, sizeof(float));
+      return format_directive(".long %llu", bits);
+    }
+    case F64_T: {
+      double value = literal->as.f64;
+      unsigned long long bits;
+      if (is_negative) {
+        value = -value;
+      }
+      memcpy(&bits, &value, sizeof(double));
+      return format_directive(".quad %llu", bits);
+    }
+    case PTR_T:
+      if (!is_negative && literal->as.u64 == 0) {
+        return strdup(".quad 0");
+      }
+      return NULL;
+    default:
+      return NULL;
+  }
+}
+
+static struct IRFunction *irfy_fn(struct DeclFn *fn)
+{
+  if (fn->is_extern) {
     return NULL;
   }
 
   struct IRFunction f;
   VecIRInstr instrs = {0};
 
-  for (int i = 0; i < stmt->as.fn.body.len; i++) {
-    irfy_stmt(&instrs, &stmt->as.fn.body.data[i]);
+  for (int i = 0; i < fn->body.len; i++) {
+    irfy_stmt(&instrs, &fn->body.data[i]);
   }
 
   f.body = instrs;
-  f.name = stmt->as.fn.name;
-  f.params = stmt->as.fn.params;
-  f.retval = stmt->as.fn.retval;
+  f.name = fn->name;
+  f.params = fn->params;
+  f.retval = fn->retval;
 
   return ALLOC(f);
 }
@@ -1326,10 +1534,33 @@ struct IrfyResult irfy_ast(struct AST *ast)
   result.is_ok = true;
   result.msg = NULL;
 
-  for (int i = 0; i < ast->stmts.len; i++) {
-struct IRFunction *f;
+  for (int i = 0; i < ast->decls.len; i++) {
+    struct IRFunction *f;
+    struct Decl *decl = &ast->decls.data[i];
 
-    f = irfy_fn(&ast->stmts.data[i]);
+    if (decl->kind == DECL_VARIABLE) {
+      if (decl->as.variable.is_extern) {
+        add_extern_variable(decl->as.variable.name);
+      } else {
+        char *directive = global_initializer_directive(&decl->as.variable);
+        if (!directive) {
+          result.is_ok = false;
+          result.msg =
+              "Global variable initializers must be constant literals";
+          prog.funcs = funcs;
+          result.prog = prog;
+          return result;
+        }
+        add_global_variable(decl->as.variable.name, directive);
+      }
+      continue;
+    }
+
+    if (decl->kind != DECL_FN) {
+      continue;
+    }
+
+    f = irfy_fn(&decl->as.fn);
     if (f) {
       vec_insert(&funcs, f);
     }

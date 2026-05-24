@@ -531,6 +531,8 @@ free_up2_fread:
   free(read_file_result.contents);
 
   free_global_constants();
+  free_global_variables();
+  free_extern_variables();
   free_enum_types();
   free_enum_variants();
 

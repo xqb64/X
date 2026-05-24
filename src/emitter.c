@@ -557,6 +557,16 @@ struct EmitResult emit(struct AsmProgram *prog, char *path)
     fprintf(f, "\n");
   }
 
+  if (global_variables.len > 0) {
+    fprintf(f, ".section .data\n");
+    for (int i = 0; i < global_variables.len; i++) {
+      fprintf(f, ".global %s\n", global_variables.data[i].name);
+      fprintf(f, "%s:\n", global_variables.data[i].name);
+      fprintf(f, "\t%s\n", global_variables.data[i].value);
+    }
+    fprintf(f, "\n");
+  }
+
   fprintf(f, ".section .text\n");
   for (int i = 0; i < prog->funcs.len; i++) {
     fprintf(f, ".global %s\n", prog->funcs.data[i].name);

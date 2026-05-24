@@ -282,6 +282,10 @@ static bool replace_const_use(VecConstBinding *env, struct IRValue **val)
     return false;
   }
 
+  if (is_data_variable((*val)->as.var)) {
+    return false;
+  }
+
   konst = const_env_get(env, (*val)->as.var);
   if (!konst) {
     return false;
@@ -331,8 +335,10 @@ static bool constant_propagate_ir(struct IRProgram *prog)
           changed |= replace_const_use(&env, &instr->as.copy.src);
 
           if (instr->as.copy.dst && instr->as.copy.dst->kind == IRValue_VAR) {
-            if (instr->as.copy.src &&
-                instr->as.copy.src->kind == IRValue_CONST) {
+            if (is_data_variable(instr->as.copy.dst->as.var)) {
+              const_env_remove(&env, instr->as.copy.dst->as.var);
+            } else if (instr->as.copy.src &&
+                       instr->as.copy.src->kind == IRValue_CONST) {
               const_env_set(&env, instr->as.copy.dst->as.var,
                             instr->as.copy.src);
             } else {
@@ -1326,6 +1332,10 @@ static bool dead_store_eliminate_ir(struct IRProgram *prog)
       }
 
       if (!ir_instr_is_removable_dead_def(instr)) {
+        continue;
+      }
+
+      if (is_data_variable(dst->as.var)) {
         continue;
       }
 

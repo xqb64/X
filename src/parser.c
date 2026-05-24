@@ -109,39 +109,31 @@ void free_expr(struct Expr *expr)
   }
 }
 
+static void free_params(VecParam *params)
+{
+  for (int i = 0; i < params->len; i++) {
+    free(params->data[i].name);
+    free_type(&params->data[i].type);
+  }
+  vec_free(params);
+}
+
+static void free_struct_fields(VecStructField *fields)
+{
+  for (int i = 0; i < fields->len; i++) {
+    free(fields->data[i].name);
+    free_type(&fields->data[i].type);
+  }
+  vec_free(fields);
+}
+
 void free_stmt(struct Stmt *stmt)
 {
   switch (stmt->kind) {
     case STMT_LOOP: {
       free(stmt->as.loop.label);
       free_stmt(stmt->as.loop.body);
-      break;
-    }
-    case STMT_ENUM: {
-      free(stmt->as.enum_stmt.name);
-      for (int i = 0; i < stmt->as.enum_stmt.variants.len; i++) {
-        free(stmt->as.enum_stmt.variants.data[i].name);
-      }
-      vec_free(&stmt->as.enum_stmt.variants);
-      break;
-    }
-    case STMT_STRUCT: {
-      free(stmt->as.struct_stmt.name);
-      for (int i = 0; i < stmt->as.struct_stmt.fields.len; i++) {
-        free(stmt->as.struct_stmt.fields.data[i].name);
-        free_type(&stmt->as.struct_stmt.fields.data[i].type);
-      }
-
-      break;
-    }
-    case STMT_EXTERN: {
-      free(stmt->as.extern_stmt.name);
-      for (int i = 0; i < stmt->as.extern_stmt.params.len; i++) {
-        free(stmt->as.extern_stmt.params.data[i].name);
-        free_type(&stmt->as.extern_stmt.params.data[i].type);
-      }
-      vec_free(&stmt->as.extern_stmt.params);
-      free_type(&stmt->as.extern_stmt.retval);
+      free(stmt->as.loop.body);
       break;
     }
     case STMT_BREAK:
@@ -192,20 +184,6 @@ void free_stmt(struct Stmt *stmt)
       }
       break;
     }
-    case STMT_FN: {
-      free(stmt->as.fn.name);
-      for (int i = 0; i < stmt->as.fn.params.len; i++) {
-        free(stmt->as.fn.params.data[i].name);
-        free_type(&stmt->as.fn.params.data[i].type);
-      }
-      vec_free(&stmt->as.fn.params);
-      for (int i = 0; i < stmt->as.fn.body.len; i++) {
-        free_stmt(&stmt->as.fn.body.data[i]);
-      }
-      free_type(&stmt->as.fn.retval);
-      vec_free(&stmt->as.fn.body);
-      break;
-    }
     case STMT_BLOCK: {
       for (int i = 0; i < stmt->as.block.stmts.len; i++) {
         free_stmt(&stmt->as.block.stmts.data[i]);
@@ -229,15 +207,60 @@ void free_stmt(struct Stmt *stmt)
   }
 }
 
+void free_decl(struct Decl *decl)
+{
+  switch (decl->kind) {
+    case DECL_FN: {
+      free(decl->as.fn.name);
+      free_params(&decl->as.fn.params);
+      for (int i = 0; i < decl->as.fn.body.len; i++) {
+        free_stmt(&decl->as.fn.body.data[i]);
+      }
+      vec_free(&decl->as.fn.body);
+      free_type(&decl->as.fn.retval);
+      break;
+    }
+    case DECL_STRUCT: {
+      free(decl->as.struct_decl.name);
+      free_struct_fields(&decl->as.struct_decl.fields);
+      break;
+    }
+    case DECL_UNION: {
+      free(decl->as.union_decl.name);
+      free_struct_fields(&decl->as.union_decl.fields);
+      break;
+    }
+    case DECL_VARIABLE: {
+      free(decl->as.variable.name);
+      free_type(&decl->as.variable.type);
+      if (decl->as.variable.init) {
+        free_expr(decl->as.variable.init);
+        free(decl->as.variable.init);
+      }
+      break;
+    }
+    case DECL_ENUM: {
+      free(decl->as.enum_decl.name);
+      for (int i = 0; i < decl->as.enum_decl.variants.len; i++) {
+        free(decl->as.enum_decl.variants.data[i].name);
+      }
+      vec_free(&decl->as.enum_decl.variants);
+      break;
+    }
+    default:
+      assert(0);
+  }
+}
+
 void free_ast(struct AST *ast)
 {
   if (!ast) {
     return;
   }
-  for (int i = 0; i < ast->stmts.len; i++) {
-    free_stmt(&ast->stmts.data[i]);
+  for (int i = 0; i < ast->decls.len; i++) {
+    free_decl(&ast->decls.data[i]);
   }
-  vec_free(&ast->stmts);
+  vec_free(&ast->decls);
   free(ast);
 }
 
@@ -250,6 +273,7 @@ void init_parser(struct Tokenizer *tokenizer, struct Parser *parser)
   parser->curr = &parser->curr_tok;
 
   parser->current_fn = NULL;
+  parser->global_decls = NULL;
 
   parser->curr_tok = next_token(parser->tokenizer);
 }
@@ -724,17 +748,21 @@ static Type parse_type(struct Parser *parser)
     }
     consume(parser, TOKEN_RBRACE);
 
-    struct StmtStruct struct_stmt;
-    struct_stmt.name = strdup(anon_name);
-    struct_stmt.fields = fields;
-    struct_stmt.is_union = is_union;
+    struct Decl decl;
+    if (is_union) {
+      struct DeclUnion union_decl;
+      union_decl.name = strdup(anon_name);
+      union_decl.fields = fields;
+      decl = (struct Decl){.kind = DECL_UNION, .as.union_decl = union_decl};
+    } else {
+      struct DeclStruct struct_decl;
+      struct_decl.name = strdup(anon_name);
+      struct_decl.fields = fields;
+      decl = (struct Decl){.kind = DECL_STRUCT, .as.struct_decl = struct_decl};
+    }
 
-    struct Stmt s;
-    s.kind = STMT_STRUCT;
-    s.as.struct_stmt = struct_stmt;
-
-    if (parser->global_stmts) {
-      vec_insert(parser->global_stmts, s);
+    if (parser->global_decls) {
+      vec_insert(parser->global_decls, decl);
     }
 
     Type custom_type;
@@ -758,16 +786,16 @@ static Type parse_type(struct Parser *parser)
       }
       consume(parser, TOKEN_RBRACE);
 
-      struct StmtEnum enum_stmt;
-      enum_stmt.name = anon_name;
-      enum_stmt.variants = variants;
+      struct DeclEnum enum_decl;
+      enum_decl.name = anon_name;
+      enum_decl.variants = variants;
 
-      struct Stmt s;
-      s.kind = STMT_ENUM;
-      s.as.enum_stmt = enum_stmt;
+      struct Decl decl;
+      decl.kind = DECL_ENUM;
+      decl.as.enum_decl = enum_decl;
 
-      if (parser->global_stmts) {
-        vec_insert(parser->global_stmts, s);
+      if (parser->global_decls) {
+        vec_insert(parser->global_decls, decl);
       }
 
       return (Type){.kind = I32_T};
@@ -1451,50 +1479,35 @@ static struct ParseFnResult block(struct Parser *parser)
   return result;
 }
 
-static struct ParseFnResult parse_fn_stmt(struct Parser *parser)
+static struct ParseFnResult parse_param_list(struct Parser *parser,
+                                             VecParam *parameters,
+                                             bool allow_variadic,
+                                             bool *is_variadic)
 {
-  struct ParseFnResult result;
-  struct Token *token_fn, *token_id, *token_lparen, *token_void, *token_rparen,
-      *token_arrow;
-
-  VecParam parameters = {0};
-
-  result.is_ok = true;
-  result.msg = NULL;
-
-  token_fn = consume(parser, TOKEN_FN);
-  if (!token_fn) {
-    return (struct ParseFnResult){
-        .is_ok = false, .as.stmt = {0}, .msg = "Expected token 'fn'"};
-  }
-
-  token_id = consume(parser, TOKEN_IDENTIFIER);
-  if (!token_id) {
-    return (struct ParseFnResult){.is_ok = false,
-                                  .as.stmt = {0},
-                                  .msg = "Expected token 'id' after 'fn'"};
-  }
-
-  char *fn_name;
-
-  fn_name = strndup(token_id->start, token_id->len);
+  struct Token *token_lparen, *token_void, *token_rparen;
 
   token_lparen = consume(parser, TOKEN_LPAREN);
   if (!token_lparen) {
     return (struct ParseFnResult){
-        .is_ok = false, .as.stmt = {0}, .msg = "Expected token '(' after 'id'"};
+        .is_ok = false, .as.decl = {0}, .msg = "Expected token '(' after 'id'"};
   }
 
   if (check(parser, TOKEN_VOID)) {
     token_void = consume(parser, TOKEN_VOID);
     if (!token_void) {
       return (struct ParseFnResult){.is_ok = false,
-                                    .as.stmt = {0},
+                                    .as.decl = {0},
                                     .msg = "Expected token 'void' after '('"};
     }
   } else {
     while (!check(parser, TOKEN_RPAREN)) {
-      struct Token *name_token, *semicolon_token;
+      if (allow_variadic && check(parser, TOKEN_ELLIPSIS)) {
+        consume(parser, TOKEN_ELLIPSIS);
+        *is_variadic = true;
+        break;
+      }
+
+      struct Token *name_token, *colon_token;
       char *name;
       Type type;
 
@@ -1504,15 +1517,15 @@ static struct ParseFnResult parse_fn_stmt(struct Parser *parser)
       if (!name_token) {
         return (struct ParseFnResult){
             .is_ok = false,
-            .as.stmt = {0},
+            .as.decl = {0},
             .msg = "Expected `name: type` format for parameters"};
       }
 
-      semicolon_token = consume(parser, TOKEN_COLON);
-      if (!semicolon_token) {
+      colon_token = consume(parser, TOKEN_COLON);
+      if (!colon_token) {
         return (struct ParseFnResult){
             .is_ok = false,
-            .as.stmt = {0},
+            .as.decl = {0},
             .msg = "Expected `name: type` format for parameters"};
       }
 
@@ -1520,12 +1533,11 @@ static struct ParseFnResult parse_fn_stmt(struct Parser *parser)
       name = strndup(name_token->start, name_token->len);
 
       struct Parameter p;
-
       p.name = name;
       p.type = type;
       p.is_mut = is_mut;
 
-      vec_insert(&parameters, p);
+      vec_insert(parameters, p);
 
       if (check(parser, TOKEN_COMMA)) {
         consume(parser, TOKEN_COMMA);
@@ -1536,25 +1548,75 @@ static struct ParseFnResult parse_fn_stmt(struct Parser *parser)
   token_rparen = consume(parser, TOKEN_RPAREN);
   if (!token_rparen) {
     return (struct ParseFnResult){.is_ok = false,
-                                  .as.stmt = {0},
-                                  .msg = "Expected token ')' after 'void'"};
+                                  .as.decl = {0},
+                                  .msg = "Expected token ')' after params"};
+  }
+
+  return (struct ParseFnResult){.is_ok = true, .msg = NULL, .as.decl = {0}};
+}
+
+static struct ParseFnResult parse_fn_signature(struct Parser *parser,
+                                               bool is_extern)
+{
+  struct Token *token_fn, *token_id, *token_arrow;
+  VecParam parameters = {0};
+  bool is_variadic = false;
+
+  token_fn = consume(parser, TOKEN_FN);
+  if (!token_fn) {
+    return (struct ParseFnResult){
+        .is_ok = false, .as.decl = {0}, .msg = "Expected token 'fn'"};
+  }
+
+  token_id = consume(parser, TOKEN_IDENTIFIER);
+  if (!token_id) {
+    return (struct ParseFnResult){.is_ok = false,
+                                  .as.decl = {0},
+                                  .msg = "Expected token 'id' after 'fn'"};
+  }
+
+  char *fn_name = strndup(token_id->start, token_id->len);
+
+  struct ParseFnResult params_res =
+      parse_param_list(parser, &parameters, is_extern, &is_variadic);
+  if (!params_res.is_ok) {
+    free(fn_name);
+    return params_res;
   }
 
   token_arrow = consume(parser, TOKEN_ARROW);
   if (!token_arrow) {
+    free(fn_name);
     return (struct ParseFnResult){
-        .is_ok = false, .as.stmt = {0}, .msg = "Expected token '->' after ')'"};
+        .is_ok = false, .as.decl = {0}, .msg = "Expected token '->' after ')'"};
   }
 
   Type retval = parse_type(parser);
 
-  struct StmtFn stmt_fn;
-  stmt_fn.name = fn_name;
-  stmt_fn.params = parameters;
-  stmt_fn.retval = retval;
+  struct DeclFn fn;
+  fn.name = fn_name;
+  fn.params = parameters;
+  fn.retval = retval;
+  fn.body = (VecStmt){0};
+  fn.is_extern = is_extern;
+  fn.is_variadic = is_variadic;
 
-  struct StmtFn *prev_fn = parser->current_fn;
-  parser->current_fn = &stmt_fn;
+  return (struct ParseFnResult){
+      .is_ok = true,
+      .msg = NULL,
+      .as.decl = ((struct Decl){.kind = DECL_FN, .as.fn = fn})};
+}
+
+static struct ParseFnResult parse_fn_decl(struct Parser *parser)
+{
+  struct ParseFnResult result = parse_fn_signature(parser, false);
+  if (!result.is_ok) {
+    return result;
+  }
+
+  struct DeclFn *fn = &result.as.decl.as.fn;
+  struct DeclFn *prev_fn = parser->current_fn;
+  parser->current_fn = fn;
 
   struct ParseFnResult block_result = block(parser);
 
@@ -1565,15 +1627,7 @@ static struct ParseFnResult parse_fn_stmt(struct Parser *parser)
   }
 
   struct Stmt body = block_result.as.stmt;
-
-  stmt_fn.body = body.as.block.stmts;
-  stmt_fn.retval = retval;
-
-  struct Stmt stmt;
-  stmt.kind = STMT_FN;
-  stmt.as.fn = stmt_fn;
-
-  result.as.stmt = stmt;
+  fn->body = body.as.block.stmts;
 
   return result;
 }
@@ -2000,141 +2054,124 @@ static struct ParseFnResult parse_continue_stmt(struct Parser *parser)
   return result;
 }
 
-static struct ParseFnResult parse_extern_stmt(struct Parser *parser)
+static struct ParseFnResult parse_variable_decl_after_let(struct Parser *parser,
+                                                         bool is_extern)
 {
-  struct ParseFnResult result;
-  struct Token *token_extern, *token_fn, *token_identifier, *token_lparen,
-      *token_void, *token_rparen, *token_arrow, *token_semicolon;
-  VecParam parameters = {0};
-  bool is_variadic;
+  struct Token *token_id, *token_colon, *token_equal, *token_semicolon;
+  bool is_mut = match(parser, 1, TOKEN_MUT);
 
-  is_variadic = false;
+  token_id = consume(parser, TOKEN_IDENTIFIER);
+  if (!token_id) {
+    return (struct ParseFnResult){.is_ok = false,
+                                  .as.decl = {0},
+                                  .msg = "Expected identifier after 'let'"};
+  }
 
-  result.is_ok = true;
-  result.msg = NULL;
+  char *name = strndup(token_id->start, token_id->len);
+
+  token_colon = consume(parser, TOKEN_COLON);
+  if (!token_colon) {
+    free(name);
+    return (struct ParseFnResult){
+        .is_ok = false,
+        .as.decl = {0},
+        .msg = "Expected token ':' after identifier in variable declaration"};
+  }
+
+  Type type = parse_type(parser);
+  struct Expr *init = NULL;
+
+  if (!is_extern) {
+    token_equal = consume(parser, TOKEN_EQUAL);
+    if (!token_equal) {
+      free(name);
+      return (struct ParseFnResult){
+          .is_ok = false,
+          .as.decl = {0},
+          .msg = "Expected token '=' after type in variable declaration"};
+    }
+
+    struct ParseFnResult init_res = parse_expr(parser);
+    if (!init_res.is_ok) {
+      free(name);
+      return init_res;
+    }
+    init = ALLOC(init_res.as.expr);
+  }
+
+  token_semicolon = consume(parser, TOKEN_SEMICOLON);
+  if (!token_semicolon) {
+    free(name);
+    if (init) {
+      free_expr(init);
+      free(init);
+    }
+    return (struct ParseFnResult){
+        .is_ok = false,
+        .as.decl = {0},
+        .msg = "Expected ';' at the end of variable declaration"};
+  }
+
+  struct DeclVariable variable;
+  variable.name = name;
+  variable.type = type;
+  variable.init = init;
+  variable.is_mut = is_mut;
+  variable.is_extern = is_extern;
+
+  return (struct ParseFnResult){
+      .is_ok = true,
+      .msg = NULL,
+      .as.decl = ((struct Decl){.kind = DECL_VARIABLE, .as.variable = variable})};
+}
+
+static struct ParseFnResult parse_variable_decl(struct Parser *parser)
+{
+  struct Token *token_let = consume(parser, TOKEN_LET);
+  if (!token_let) {
+    return (struct ParseFnResult){
+        .is_ok = false, .as.decl = {0}, .msg = "Expected token 'let'"};
+  }
+
+  return parse_variable_decl_after_let(parser, false);
+}
+
+static struct ParseFnResult parse_extern_decl(struct Parser *parser)
+{
+  struct Token *token_extern, *token_semicolon;
 
   token_extern = consume(parser, TOKEN_EXTERN);
   if (!token_extern) {
     return (struct ParseFnResult){
-        .is_ok = false, .as.stmt = {0}, .msg = "Expected 'extern'"};
+        .is_ok = false, .as.decl = {0}, .msg = "Expected 'extern'"};
   }
 
-  token_fn = consume(parser, TOKEN_FN);
-  if (!token_fn) {
-    return (struct ParseFnResult){
-        .is_ok = false, .as.stmt = {0}, .msg = "Expected 'fn' after 'extern'"};
-  }
-
-  token_identifier = consume(parser, TOKEN_IDENTIFIER);
-  if (!token_identifier) {
-    return (struct ParseFnResult){
-        .is_ok = false,
-        .as.stmt = {0},
-        .msg = "Expected identifier after 'fn' in 'extern' stmt"};
-  }
-
-  char *extern_name;
-
-  extern_name = strndup(token_identifier->start, token_identifier->len);
-
-  token_lparen = consume(parser, TOKEN_LPAREN);
-  if (!token_lparen) {
-    return (struct ParseFnResult){
-        .is_ok = false,
-        .msg = "Expected '(' after identifier in extern stmt",
-        .as.stmt = {0}};
-  }
-
-  if (check(parser, TOKEN_VOID)) {
-    token_void = consume(parser, TOKEN_VOID);
-    if (!token_void) {
-      return (struct ParseFnResult){.is_ok = false,
-                                    .as.stmt = {0},
-                                    .msg = "Expected token 'void' after '('"};
+  if (check(parser, TOKEN_FN)) {
+    struct ParseFnResult result = parse_fn_signature(parser, true);
+    if (!result.is_ok) {
+      return result;
     }
-  } else {
-    while (!check(parser, TOKEN_RPAREN)) {
-      if (check(parser, TOKEN_ELLIPSIS)) {
-        consume(parser, TOKEN_ELLIPSIS);
-        is_variadic = true;
-        break;
-      }
 
-      struct Token *name_token, *colon_token;
-      char *name;
-      Type type;
-
-      bool is_mut = match(parser, 1, TOKEN_MUT);
-
-      name_token = consume(parser, TOKEN_IDENTIFIER);
-      if (!name_token) {
-        return (struct ParseFnResult){
-            .is_ok = false,
-            .as.stmt = {0},
-            .msg = "Expected `name: type` format for parameters"};
-      }
-
-      colon_token = consume(parser, TOKEN_COLON);
-      if (!colon_token) {
-        return (struct ParseFnResult){
-            .is_ok = false,
-            .as.stmt = {0},
-            .msg = "Expected `name: type` format for parameters"};
-      }
-
-      name = strndup(name_token->start, name_token->len);
-      type = parse_type(parser);
-
-      struct Parameter p;
-
-      p.name = name;
-      p.type = type;
-      p.is_mut = is_mut;
-
-      vec_insert(&parameters, p);
-
-      if (check(parser, TOKEN_COMMA)) {
-        consume(parser, TOKEN_COMMA);
-      }
+    token_semicolon = consume(parser, TOKEN_SEMICOLON);
+    if (!token_semicolon) {
+      return (struct ParseFnResult){
+          .is_ok = false,
+          .msg = "Expected ';' at the end of extern fn declaration",
+          .as.decl = {0}};
     }
+
+    return result;
   }
 
-  token_rparen = consume(parser, TOKEN_RPAREN);
-  if (!token_rparen) {
-    return (struct ParseFnResult){.is_ok = false,
-                                  .as.stmt = {0},
-                                  .msg = "Expected token ')' after 'void'"};
+  if (check(parser, TOKEN_LET)) {
+    consume(parser, TOKEN_LET);
+    return parse_variable_decl_after_let(parser, true);
   }
 
-  token_arrow = consume(parser, TOKEN_ARROW);
-  if (!token_arrow) {
-    return (struct ParseFnResult){
-        .is_ok = false, .as.stmt = {0}, .msg = "Expected token '->' after ')'"};
-  }
-
-  Type retval = parse_type(parser);
-
-  token_semicolon = consume(parser, TOKEN_SEMICOLON);
-  if (!token_semicolon) {
-    return (struct ParseFnResult){
-        .is_ok = false,
-        .msg = "Expected ';' at the end of extern stmt",
-        .as.stmt = {0}};
-  }
-
-  struct StmtExtern extern_stmt;
-  extern_stmt.name = extern_name;
-  extern_stmt.params = parameters;
-  extern_stmt.retval = retval;
-  extern_stmt.is_variadic = is_variadic;
-
-  struct Stmt s;
-  s.kind = STMT_EXTERN;
-  s.as.extern_stmt = extern_stmt;
-
-  result.as.stmt = s;
-
-  return result;
+  return (struct ParseFnResult){
+      .is_ok = false,
+      .as.decl = {0},
+      .msg = "Expected 'fn' or 'let' after 'extern'"};
 }
 
 static struct ParseFnResult parse_expr_stmt(struct Parser *parser)
@@ -2172,7 +2209,7 @@ static struct ParseFnResult parse_expr_stmt(struct Parser *parser)
   return result;
 }
 
-static struct ParseFnResult parse_struct_stmt(struct Parser *parser)
+static struct ParseFnResult parse_record_decl(struct Parser *parser)
 {
   struct ParseFnResult result;
   struct Token *token_struct_or_union, *token_id, *token_lbrace, *token_rbrace;
@@ -2184,7 +2221,7 @@ static struct ParseFnResult parse_struct_stmt(struct Parser *parser)
   token_struct_or_union = consume_any(parser, 2, TOKEN_STRUCT, TOKEN_UNION);
   if (!token_struct_or_union) {
     return (struct ParseFnResult){
-        .is_ok = false, .as.stmt = {0}, .msg = "Expected token 'struct'"};
+        .is_ok = false, .as.decl = {0}, .msg = "Expected token 'struct'"};
   }
 
   bool is_union = (token_struct_or_union->kind == TOKEN_UNION);
@@ -2192,8 +2229,8 @@ static struct ParseFnResult parse_struct_stmt(struct Parser *parser)
   token_id = consume(parser, TOKEN_IDENTIFIER);
   if (!token_id) {
     return (struct ParseFnResult){.is_ok = false,
-                                  .as.stmt = {0},
-                                  .msg = "Expected identifier after 'struct'"};
+                                  .as.decl = {0},
+                                  .msg = "Expected identifier after record"};
   }
 
   char *name = strndup(token_id->start, token_id->len);
@@ -2202,8 +2239,8 @@ static struct ParseFnResult parse_struct_stmt(struct Parser *parser)
   if (!token_lbrace) {
     free(name);
     return (struct ParseFnResult){.is_ok = false,
-                                  .as.stmt = {0},
-                                  .msg = "Expected '{' in struct declaration"};
+                                  .as.decl = {0},
+                                  .msg = "Expected '{' in record declaration"};
   }
 
   while (!check(parser, TOKEN_RBRACE)) {
@@ -2240,17 +2277,23 @@ static struct ParseFnResult parse_struct_stmt(struct Parser *parser)
   token_rbrace = consume(parser, TOKEN_RBRACE);
   if (!token_rbrace) {
     return (struct ParseFnResult){.is_ok = false,
-                                  .as.stmt = {0},
-                                  .msg = "Expected '}' after struct fields"};
+                                  .as.decl = {0},
+                                  .msg = "Expected '}' after record fields"};
   }
 
-  struct StmtStruct struct_stmt;
-  struct_stmt.name = name;
-  struct_stmt.fields = fields;
-  struct_stmt.is_union = is_union;
-
-  result.as.stmt =
-      (struct Stmt){.kind = STMT_STRUCT, .as.struct_stmt = struct_stmt};
+  if (is_union) {
+    struct DeclUnion union_decl;
+    union_decl.name = name;
+    union_decl.fields = fields;
+    result.as.decl =
+        (struct Decl){.kind = DECL_UNION, .as.union_decl = union_decl};
+  } else {
+    struct DeclStruct struct_decl;
+    struct_decl.name = name;
+    struct_decl.fields = fields;
+    result.as.decl =
+        (struct Decl){.kind = DECL_STRUCT, .as.struct_decl = struct_decl};
+  }
 
   return result;
 }
@@ -2293,7 +2336,7 @@ static struct ParseFnResult parse_goto_stmt(struct Parser *parser)
   return result;
 }
 
-static struct ParseFnResult parse_enum_stmt(struct Parser *parser)
+static struct ParseFnResult parse_enum_decl(struct Parser *parser)
 {
   struct ParseFnResult result = {.is_ok = true, .msg = NULL};
 
@@ -2313,16 +2356,17 @@ static struct ParseFnResult parse_enum_stmt(struct Parser *parser)
   VecEnumVariant variants = {0};
   if (!parse_enum_body(parser, &variants)) {
     return (struct ParseFnResult){
-        .is_ok = false, .msg = "Failed to parse enum body", .as.stmt = {0}};
+        .is_ok = false, .msg = "Failed to parse enum body", .as.decl = {0}};
   }
 
   consume(parser, TOKEN_RBRACE);
 
-  struct StmtEnum enum_stmt;
-  enum_stmt.name = name;
-  enum_stmt.variants = variants;
+  struct DeclEnum enum_decl;
+  enum_decl.name = name;
+  enum_decl.variants = variants;
 
-  result.as.stmt = (struct Stmt){.kind = STMT_ENUM, .as.enum_stmt = enum_stmt};
+  result.as.decl =
+      (struct Decl){.kind = DECL_ENUM, .as.enum_decl = enum_decl};
   return result;
 }
 
@@ -2372,14 +2416,6 @@ static struct ParseFnResult parse_stmt(struct Parser *parser)
   }
 
   switch (parser->curr->kind) {
-    case TOKEN_FN: {
-      struct ParseFnResult fn_res = parse_fn_stmt(parser);
-      if (!fn_res.is_ok) {
-        return fn_res;
-      }
-      result.as.stmt = fn_res.as.stmt;
-      break;
-    }
     case TOKEN_LET: {
       struct ParseFnResult let_res = parse_let_stmt(parser);
       if (!let_res.is_ok) {
@@ -2452,37 +2488,12 @@ static struct ParseFnResult parse_stmt(struct Parser *parser)
       result.as.stmt = goto_res.as.stmt;
       break;
     }
-    case TOKEN_EXTERN: {
-      struct ParseFnResult extern_res = parse_extern_stmt(parser);
-      if (!extern_res.is_ok) {
-        return extern_res;
-      }
-      result.as.stmt = extern_res.as.stmt;
-      break;
-    }
     case TOKEN_LBRACE: {
       struct ParseFnResult block_res = block(parser);
       if (!block_res.is_ok) {
         return block_res;
       }
       result.as.stmt = block_res.as.stmt;
-      break;
-    }
-    case TOKEN_STRUCT:
-    case TOKEN_UNION: {
-      struct ParseFnResult struct_res = parse_struct_stmt(parser);
-      if (!struct_res.is_ok) {
-        return struct_res;
-      }
-      result.as.stmt = struct_res.as.stmt;
-      break;
-    }
-    case TOKEN_ENUM: {
-      struct ParseFnResult enum_res = parse_enum_stmt(parser);
-      if (!enum_res.is_ok) {
-        return enum_res;
-      }
-      result.as.stmt = enum_res.as.stmt;
       break;
     }
     default: {
@@ -2498,6 +2509,29 @@ static struct ParseFnResult parse_stmt(struct Parser *parser)
   return result;
 }
 
+static struct ParseFnResult parse_decl(struct Parser *parser)
+{
+  switch (parser->curr->kind) {
+    case TOKEN_FN:
+      return parse_fn_decl(parser);
+    case TOKEN_EXTERN:
+      return parse_extern_decl(parser);
+    case TOKEN_STRUCT:
+    case TOKEN_UNION:
+      return parse_record_decl(parser);
+    case TOKEN_ENUM:
+      return parse_enum_decl(parser);
+    case TOKEN_LET:
+      return parse_variable_decl(parser);
+    default:
+      return (struct ParseFnResult){
+          .is_ok = false,
+          .msg = "Expected declaration",
+          .as.decl = {0},
+      };
+  }
+}
+
 struct ParseResult parse(struct Parser *parser)
 {
   struct ParseResult result;
@@ -2506,18 +2540,18 @@ struct ParseResult parse(struct Parser *parser)
   result.msg = NULL;
 
   result.ast = malloc(sizeof(struct AST));
-  result.ast->stmts = (VecStmt){0};
+  result.ast->decls = (VecDecl){0};
 
-  parser->global_stmts = &result.ast->stmts;
+  parser->global_decls = &result.ast->decls;
 
   while (parser->curr->kind != TOKEN_EOF) {
     struct ParseFnResult r;
 
-    r = parse_stmt(parser);
+    r = parse_decl(parser);
     if (!r.is_ok) {
       return (struct ParseResult){.is_ok = false, .msg = r.msg, .ast = NULL};
     }
-    vec_insert(&result.ast->stmts, r.as.stmt);
+    vec_insert(&result.ast->decls, r.as.decl);
   }
 
   return result;
@@ -2921,44 +2955,37 @@ void print_expr(struct Expr *expr, int spaces)
   }
 }
 
+static void print_params(VecParam *params, int spaces)
+{
+  print_indent(spaces);
+  printf("params = [\n");
+  for (int i = 0; i < params->len; i++) {
+    print_indent(spaces + 2);
+    printf("%s: ", params->data[i].name);
+    print_type(&params->data[i].type, 0);
+    printf(",\n");
+  }
+  print_indent(spaces);
+  printf("],\n");
+}
+
+static void print_fields(VecStructField *fields, int spaces)
+{
+  print_indent(spaces);
+  printf("fields = [\n");
+  for (int i = 0; i < fields->len; i++) {
+    print_indent(spaces + 2);
+    printf("Field(name: %s, type: ", fields->data[i].name);
+    print_type(&fields->data[i].type, spaces + 4);
+    printf(", offset: %d),\n", fields->data[i].offset);
+  }
+  print_indent(spaces);
+  printf("]\n");
+}
+
 void print_stmt(struct Stmt *stmt, int spaces)
 {
   switch (stmt->kind) {
-    case STMT_FN: {
-      print_indent(spaces);
-      printf("STMT_FN(\n");
-
-      print_indent(spaces + 2);
-      printf("name = %s,\n", stmt->as.fn.name);
-
-      print_indent(spaces + 2);
-      printf("params = [\n");
-      for (int i = 0; i < stmt->as.fn.params.len; i++) {
-        print_indent(spaces + 4);
-        printf("%s: ", stmt->as.fn.params.data[i].name);
-        print_type(&stmt->as.fn.params.data[i].type, 0);
-        printf(",\n");
-      }
-      print_indent(spaces + 2);
-      printf("],\n");
-
-      print_indent(spaces + 2);
-      printf("body = [\n");
-      for (int i = 0; i < stmt->as.fn.body.len; i++) {
-        print_stmt(&stmt->as.fn.body.data[i], spaces + 4);
-      }
-      print_indent(spaces + 2);
-      printf("],\n");
-
-      print_indent(spaces + 2);
-      printf("retval = ");
-      print_type(&stmt->as.fn.retval, spaces + 4);
-      printf("\n");
-
-      print_indent(spaces);
-      printf(")\n");
-      break;
-    }
     case STMT_LET: {
       print_indent(spaces);
       printf("STMT_LET(\n");
@@ -3117,37 +3144,6 @@ void print_stmt(struct Stmt *stmt, int spaces)
       printf(")\n");
       break;
     }
-    case STMT_EXTERN: {
-      print_indent(spaces);
-      printf("STMT_EXTERN(\n");
-
-      print_indent(spaces + 2);
-      printf("name = %s,\n", stmt->as.extern_stmt.name);
-
-      print_indent(spaces + 2);
-      printf("params = [\n");
-      for (int i = 0; i < stmt->as.extern_stmt.params.len; i++) {
-        print_indent(spaces + 4);
-        printf("%s: ", stmt->as.extern_stmt.params.data[i].name);
-        print_type(&stmt->as.extern_stmt.params.data[i].type, 0);
-        printf(",\n");
-      }
-      if (stmt->as.extern_stmt.is_variadic) {
-        print_indent(spaces + 4);
-        printf("...\n");
-      }
-      print_indent(spaces + 2);
-      printf("],\n");
-
-      print_indent(spaces + 2);
-      printf("retval = ");
-      print_type(&stmt->as.extern_stmt.retval, spaces + 4);
-      printf("\n");
-
-      print_indent(spaces);
-      printf(")\n");
-      break;
-    }
     case STMT_EXPR: {
       print_indent(spaces);
       printf("STMT_EXPR(\n");
@@ -3157,52 +3153,6 @@ void print_stmt(struct Stmt *stmt, int spaces)
       print_expr(&stmt->as.expr_stmt.expr, spaces + 2);
       printf("\n");
 
-      print_indent(spaces);
-      printf(")\n");
-      break;
-    }
-    case STMT_STRUCT: {
-      print_indent(spaces);
-      printf("%s(\n",
-             stmt->as.struct_stmt.is_union ? "STMT_UNION" : "STMT_STRUCT");
-
-      print_indent(spaces + 2);
-      printf("name = %s,\n", stmt->as.struct_stmt.name);
-
-      print_indent(spaces + 2);
-      printf("fields = [\n");
-
-      for (int i = 0; i < stmt->as.struct_stmt.fields.len; i++) {
-        print_indent(spaces + 4);
-        printf("Field(name: %s, type: ",
-               stmt->as.struct_stmt.fields.data[i].name);
-
-        print_type(&stmt->as.struct_stmt.fields.data[i].type, spaces + 6);
-
-        printf(", offset: %d),\n", stmt->as.struct_stmt.fields.data[i].offset);
-      }
-
-      print_indent(spaces + 2);
-      printf("]\n");
-
-      print_indent(spaces);
-      printf(")\n");
-      break;
-    }
-    case STMT_ENUM: {
-      print_indent(spaces);
-      printf("STMT_ENUM(\n");
-      print_indent(spaces + 2);
-      printf("name = %s,\n", stmt->as.enum_stmt.name);
-      print_indent(spaces + 2);
-      printf("variants = [\n");
-      for (int i = 0; i < stmt->as.enum_stmt.variants.len; i++) {
-        print_indent(spaces + 4);
-        printf("%s = %d,\n", stmt->as.enum_stmt.variants.data[i].name,
-               stmt->as.enum_stmt.variants.data[i].value);
-      }
-      print_indent(spaces + 2);
-      printf("]\n");
       print_indent(spaces);
       printf(")\n");
       break;
@@ -3229,10 +3179,110 @@ void print_stmt(struct Stmt *stmt, int spaces)
   }
 }
 
+void print_decl(struct Decl *decl, int spaces)
+{
+  switch (decl->kind) {
+    case DECL_FN: {
+      print_indent(spaces);
+      printf("DECL_FN(\n");
+
+      print_indent(spaces + 2);
+      printf("name = %s,\n", decl->as.fn.name);
+
+      print_indent(spaces + 2);
+      printf("is_extern = %s,\n", decl->as.fn.is_extern ? "true" : "false");
+      print_indent(spaces + 2);
+      printf("is_variadic = %s,\n",
+             decl->as.fn.is_variadic ? "true" : "false");
+
+      print_params(&decl->as.fn.params, spaces + 2);
+
+      print_indent(spaces + 2);
+      printf("body = [\n");
+      for (int i = 0; i < decl->as.fn.body.len; i++) {
+        print_stmt(&decl->as.fn.body.data[i], spaces + 4);
+      }
+      print_indent(spaces + 2);
+      printf("],\n");
+
+      print_indent(spaces + 2);
+      printf("retval = ");
+      print_type(&decl->as.fn.retval, spaces + 4);
+      printf("\n");
+
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
+    case DECL_STRUCT: {
+      print_indent(spaces);
+      printf("DECL_STRUCT(\n");
+      print_indent(spaces + 2);
+      printf("name = %s,\n", decl->as.struct_decl.name);
+      print_fields(&decl->as.struct_decl.fields, spaces + 2);
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
+    case DECL_UNION: {
+      print_indent(spaces);
+      printf("DECL_UNION(\n");
+      print_indent(spaces + 2);
+      printf("name = %s,\n", decl->as.union_decl.name);
+      print_fields(&decl->as.union_decl.fields, spaces + 2);
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
+    case DECL_VARIABLE: {
+      print_indent(spaces);
+      printf("DECL_VARIABLE(\n");
+      print_indent(spaces + 2);
+      printf("name = %s,\n", decl->as.variable.name);
+      print_indent(spaces + 2);
+      printf("is_extern = %s,\n",
+             decl->as.variable.is_extern ? "true" : "false");
+      print_indent(spaces + 2);
+      printf("type = ");
+      print_type(&decl->as.variable.type, spaces + 4);
+      printf(",\n");
+      if (decl->as.variable.init) {
+        print_indent(spaces + 2);
+        printf("init = ");
+        print_expr(decl->as.variable.init, spaces + 2);
+        printf("\n");
+      }
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
+    case DECL_ENUM: {
+      print_indent(spaces);
+      printf("DECL_ENUM(\n");
+      print_indent(spaces + 2);
+      printf("name = %s,\n", decl->as.enum_decl.name);
+      print_indent(spaces + 2);
+      printf("variants = [\n");
+      for (int i = 0; i < decl->as.enum_decl.variants.len; i++) {
+        print_indent(spaces + 4);
+        printf("%s = %d,\n", decl->as.enum_decl.variants.data[i].name,
+               decl->as.enum_decl.variants.data[i].value);
+      }
+      print_indent(spaces + 2);
+      printf("]\n");
+      print_indent(spaces);
+      printf(")\n");
+      break;
+    }
+    default:
+      assert(0 && "Unhandled declaration kind in print_decl");
+  }
+}
+
 void print_ast(struct AST *ast)
 {
-  for (int i = 0; i < ast->stmts.len; i++) {
-    print_stmt(&ast->stmts.data[i], 0);
+  for (int i = 0; i < ast->decls.len; i++) {
+    print_decl(&ast->decls.data[i], 0);
   }
 }
 #endif 

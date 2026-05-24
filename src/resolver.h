@@ -13,6 +13,7 @@ struct ResolveResult {
     struct Stmt *stmt;
     struct Expr *expr;
     struct Parameter *param;
+    struct Decl *decl;
   } as;
 };
 
