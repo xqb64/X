@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "tokenizer.h"
 #include "typechecker.h"
@@ -863,31 +864,43 @@ void free_ast(struct AST *ast)
   free(ast);
 }
 
-void init_parser(struct Parser *parser, VecToken *tokens)
+void init_parser(struct Tokenizer *tokenizer, struct Parser *parser)
 {
-  parser->idx = 0;
-  parser->tokens = tokens;
-  parser->prev = NULL;
-  parser->curr = NULL;
+  parser->tokenizer = tokenizer;
+  parser->has_peek = false;
+
+  parser->prev = &parser->prev_tok;
+  parser->curr = &parser->curr_tok;
+
   parser->current_fn = NULL;
 
-  advance_parser(parser);
+  parser->curr_tok = next_token(parser->tokenizer);
 }
 
-struct Token *next_token(struct Parser *parser)
+static struct Token fetch_next(struct Parser *parser)
 {
-  if (parser->idx < parser->tokens->len) {
-    return &parser->tokens->data[parser->idx++];
+  if (parser->has_peek) {
+    parser->has_peek = false;
+    return parser->peek_tok;
   }
-  return NULL;
+  return next_token(parser->tokenizer);
 }
 
 struct Token *advance_parser(struct Parser *parser)
 {
-  parser->prev = parser->curr;
-  parser->curr = next_token(parser);
+  parser->prev_tok = parser->curr_tok;
+  parser->curr_tok = fetch_next(parser);
 
   return parser->prev;
+}
+
+bool check_next(struct Parser *parser, enum TokenKind kind)
+{
+  if (!parser->has_peek) {
+    parser->peek_tok = next_token(parser->tokenizer);
+    parser->has_peek = true;
+  }
+  return parser->peek_tok.kind == kind;
 }
 
 bool check(struct Parser *parser, enum TokenKind kind)
@@ -898,12 +911,6 @@ bool check(struct Parser *parser, enum TokenKind kind)
 bool check2(struct Parser *parser, enum TokenKind kind1, enum TokenKind kind2)
 {
   return parser->prev->kind == kind1 && parser->curr->kind == kind2;
-}
-
-bool check_next(struct Parser *parser, enum TokenKind kind)
-{
-  return parser->idx < parser->tokens->len &&
-         parser->tokens->data[parser->idx].kind == kind;
 }
 
 bool match(struct Parser *parser, int size, ...)
@@ -1047,6 +1054,10 @@ struct ParseFnResult primary(struct Parser *parser)
           .is_ok = false, .as.expr = {0}, .msg = "Expected identifier"};
     }
 
+    char *extracted_id;
+
+    extracted_id = strndup(token_id->start, token_id->len);
+
     if (match(parser, 1, TOKEN_LBRACE)) {
       VecStructInitItem values = {0};
 
@@ -1078,11 +1089,8 @@ struct ParseFnResult primary(struct Parser *parser)
           }
           consume(parser, TOKEN_COLON);
           designator = strdup(buf);
-        }
-        /* Fallback: positional or legacy `ident: expr` */
-        else if (check(parser, TOKEN_IDENTIFIER) &&
-                 parser->idx < parser->tokens->len &&
-                 parser->tokens->data[parser->idx].kind == TOKEN_COLON) {
+        } else if (check(parser, TOKEN_IDENTIFIER) &&
+                   check_next(parser, TOKEN_COLON)) {
           struct Token *id = consume(parser, TOKEN_IDENTIFIER);
           consume(parser, TOKEN_COLON);
           designator = strndup(id->start, id->len);
@@ -1107,7 +1115,7 @@ struct ParseFnResult primary(struct Parser *parser)
       consume(parser, TOKEN_RBRACE);
 
       struct ExprStructInit init;
-      init.struct_name = strndup(token_id->start, token_id->len);
+      init.struct_name = extracted_id;
       init.values = values;
       res.as.expr =
           (struct Expr){.kind = EXPR_STRUCT_INIT, .as.struct_init = init};
@@ -1298,9 +1306,7 @@ Type parse_type(struct Parser *parser)
       char *field_name = NULL;
       Type field_type;
 
-      if (check(parser, TOKEN_IDENTIFIER) &&
-          parser->idx < parser->tokens->len &&
-          parser->tokens->data[parser->idx].kind == TOKEN_COLON) {
+      if (check(parser, TOKEN_IDENTIFIER) && check_next(parser, TOKEN_COLON)) {
         struct Token *name_tok = consume(parser, TOKEN_IDENTIFIER);
         consume(parser, TOKEN_COLON);
         field_type = parse_type(parser);
@@ -2076,6 +2082,10 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
                                   .msg = "Expected token 'id' after 'fn'"};
   }
 
+  char *fn_name;
+
+  fn_name = strndup(token_id->start, token_id->len);
+
   token_lparen = consume(parser, TOKEN_LPAREN);
   if (!token_lparen) {
     return (struct ParseFnResult){
@@ -2113,8 +2123,8 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
             .msg = "Expected `name: type` format for parameters"};
       }
 
-      name = strndup(name_token->start, name_token->len);
       type = parse_type(parser);
+      name = strndup(name_token->start, name_token->len);
 
       struct Parameter p;
 
@@ -2146,7 +2156,7 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
   Type retval = parse_type(parser);
 
   struct StmtFn stmt_fn;
-  stmt_fn.name = strndup(token_id->start, token_id->len);
+  stmt_fn.name = fn_name;
   stmt_fn.params = parameters;
   stmt_fn.retval = retval;
 
@@ -2496,6 +2506,7 @@ struct ParseFnResult parse_while_stmt(struct Parser *parser)
   struct StmtWhile while_stmt;
   while_stmt.cond = cond;
   while_stmt.body = ALLOC(body);
+  while_stmt.label = NULL;
 
   struct Stmt s;
   s.kind = STMT_WHILE;
@@ -2629,6 +2640,10 @@ struct ParseFnResult parse_extern_stmt(struct Parser *parser)
         .msg = "Expected identifier after 'fn' in 'extern' stmt"};
   }
 
+  char *extern_name;
+
+  extern_name = strndup(token_identifier->start, token_identifier->len);
+
   token_lparen = consume(parser, TOKEN_LPAREN);
   if (!token_lparen) {
     return (struct ParseFnResult){
@@ -2715,7 +2730,7 @@ struct ParseFnResult parse_extern_stmt(struct Parser *parser)
   }
 
   struct StmtExtern extern_stmt;
-  extern_stmt.name = strndup(token_identifier->start, token_identifier->len);
+  extern_stmt.name = extern_name;
   extern_stmt.params = parameters;
   extern_stmt.retval = retval;
   extern_stmt.is_variadic = is_variadic;
@@ -2803,12 +2818,19 @@ struct ParseFnResult parse_struct_stmt(struct Parser *parser)
     Type field_type;
 
     /* Handle both `a: i8` and `union { ... } as;` gracefully */
-    if (check(parser, TOKEN_IDENTIFIER) && parser->idx < parser->tokens->len &&
-        parser->tokens->data[parser->idx].kind == TOKEN_COLON) {
+    if (check(parser, TOKEN_IDENTIFIER) && check_next(parser, TOKEN_COLON)) {
       struct Token *name_tok = consume(parser, TOKEN_IDENTIFIER);
       consume(parser, TOKEN_COLON);
       field_type = parse_type(parser);
       field_name = strndup(name_tok->start, name_tok->len);
+    } else {
+      field_type = parse_type(parser);
+      struct Token *name_tok = consume(parser, TOKEN_IDENTIFIER);
+      if (name_tok) {
+        field_name = strndup(name_tok->start, name_tok->len);
+      } else {
+        field_name = strdup("");
+      }
     }
 
     struct StructField field;
@@ -3095,7 +3117,7 @@ struct ParseResult parse(struct Parser *parser)
 
   parser->global_stmts = &result.ast->stmts;
 
-  while (parser->curr) {
+  while (parser->curr->kind != TOKEN_EOF) {
     struct ParseFnResult r;
 
     r = parse_stmt(parser);

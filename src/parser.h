@@ -382,11 +382,19 @@ struct AST {
 };
 
 struct Parser {
-  struct StmtFn *current_fn;
-  struct Token *curr;
+  struct Tokenizer *tokenizer;
+
+  // Value buffers
+  struct Token prev_tok;
+  struct Token curr_tok;
+  struct Token peek_tok;
+  bool has_peek;
+
+  // Pointers for backwards compatibility with existing parser code
   struct Token *prev;
-  VecToken *tokens;
-  int idx;
+  struct Token *curr;
+
+  struct StmtFn *current_fn;
   VecStmt *global_stmts;
 };
 
@@ -405,7 +413,7 @@ struct ParseResult {
   struct AST *ast;
 };
 
-void init_parser(struct Parser *parser, VecToken *tokens);
+void init_parser(struct Tokenizer *tokenizer, struct Parser *parser);
 struct Token *advance_parser(struct Parser *parser);
 void print_binary_op(enum ExprBinKind kind);
 void print_expr(struct Expr *expr, int spaces);

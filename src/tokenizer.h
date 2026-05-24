@@ -3,8 +3,6 @@
 
 #include <stdbool.h>
 
-#include "vector.h"
-
 enum TokenKind {
   /* keywords */
   TOKEN_FN,
@@ -94,6 +92,7 @@ enum TokenKind {
 
   /* control */
   TOKEN_ERROR,
+  TOKEN_EOF,
 };
 
 struct Token {
@@ -102,21 +101,12 @@ struct Token {
   int len;
 };
 
-typedef Vector(struct Token) VecToken;
-
 struct Tokenizer {
   char *src;
 };
 
-struct TokenizeResult {
-  bool is_ok;
-  char *msg;
-  VecToken tokens;
-};
-
 void init_tokenizer(struct Tokenizer *tokenizer, char *src);
 void print_token(struct Token *token);
-void print_tokens(VecToken *tokens);
-struct TokenizeResult tokenize(struct Tokenizer *tokenizer);
+struct Token next_token(struct Tokenizer *tokenizer);
 
 #endif

@@ -263,12 +263,12 @@ struct ResolveResult resolve_stmt(struct VariableMap **varmap,
     case STMT_DO_WHILE: {
       struct ResolveResult cond_res, body_res;
 
-      cond_res = resolve_expr(varmap, &stmt->as.while_stmt.cond);
+      cond_res = resolve_expr(varmap, &stmt->as.do_while_stmt.cond);
       if (!cond_res.is_ok) {
         return cond_res;
       }
 
-      body_res = resolve_stmt(varmap, stmt->as.while_stmt.body);
+      body_res = resolve_stmt(varmap, stmt->as.do_while_stmt.body);
       if (!body_res.is_ok) {
         return body_res;
       }

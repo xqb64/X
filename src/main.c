@@ -263,8 +263,6 @@ struct RunResult run(struct CompilerOptions *opts)
   struct ReadFileResult read_file_result;
   char *src;
   struct Tokenizer tokenizer;
-  struct TokenizeResult tokenize_result;
-  VecToken tokens;
   struct Parser parser;
   struct ParseResult parse_result;
   struct AST *ast, *resolved_ast, *typechecked_ast, *labeled_ast;
@@ -300,25 +298,8 @@ struct RunResult run(struct CompilerOptions *opts)
   src = read_file_result.contents;
 
   init_tokenizer(&tokenizer, src);
-  tokenize_result = tokenize(&tokenizer);
 
-  if (!tokenize_result.is_ok) {
-    r.msg = tokenize_result.msg;
-    r.is_ok = false;
-    goto free_up2_tokenize;
-  }
-
-  tokens = tokenize_result.tokens;
-
-#ifdef DEBUG_TOKENIZER
-  print_tokens(&tokens);
-#endif
-
-  if (target_stage == STAGE_TOKENIZE) {
-    goto free_up2_tokenize;
-  }
-
-  init_parser(&parser, &tokens);
+  init_parser(&tokenizer, &parser);
   parse_result = parse(&parser);
 
   if (!parse_result.is_ok) {
@@ -499,9 +480,6 @@ free_up2_collect_labels:
 
 free_up2_parse:
   free_ast(parse_result.ast);
-
-free_up2_tokenize:
-  vec_free(&tokenize_result.tokens);
 
 free_up2_fread:
   free(read_file_result.contents);
