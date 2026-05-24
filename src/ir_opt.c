@@ -9,13 +9,7 @@
 #include "parser.h"
 #include "typechecker.h"
 
-bool is_int_type(enum TypeKind kind)
-{
-  return kind == I8_T || kind == I16_T || kind == I32_T || kind == I64_T ||
-         kind == U8_T || kind == U16_T || kind == U32_T || kind == U64_T;
-}
-
-unsigned long long const_as_u64(struct IRValue *v)
+static unsigned long long const_as_u64(struct IRValue *v)
 {
   switch (v->type.kind) {
     case I8_T:
@@ -41,7 +35,7 @@ unsigned long long const_as_u64(struct IRValue *v)
   }
 }
 
-long long const_as_i64(struct IRValue *v)
+static long long const_as_i64(struct IRValue *v)
 {
   switch (v->type.kind) {
     case I8_T:
@@ -67,7 +61,7 @@ long long const_as_i64(struct IRValue *v)
   }
 }
 
-struct IRValue *mk_const_bool(bool b)
+static struct IRValue *mk_const_bool(bool b)
 {
   struct IRValue *v = malloc(sizeof(*v));
 
@@ -80,7 +74,7 @@ struct IRValue *mk_const_bool(bool b)
   return v;
 }
 
-struct IRValue *mk_const_int(unsigned long long n, Type type)
+static struct IRValue *mk_const_int(unsigned long long n, Type type)
 {
   struct IRValue *v = malloc(sizeof(*v));
 
@@ -122,15 +116,15 @@ struct IRValue *mk_const_int(unsigned long long n, Type type)
   return v;
 }
 
-struct IRValue *fold_binary_const(enum IRInstrBinaryKind kind,
-                                  struct IRValue *lhs, struct IRValue *rhs,
-                                  Type dst_type)
+static struct IRValue *fold_binary_const(enum IRInstrBinaryKind kind,
+                                         struct IRValue *lhs,
+                                         struct IRValue *rhs, Type dst_type)
 {
-  if (!is_int_type(lhs->type.kind) && lhs->type.kind != BOOL_T) {
+  if (!is_integer_type(lhs->type.kind) && lhs->type.kind != BOOL_T) {
     return NULL;
   }
 
-  if (!is_int_type(rhs->type.kind) && rhs->type.kind != BOOL_T) {
+  if (!is_integer_type(rhs->type.kind) && rhs->type.kind != BOOL_T) {
     return NULL;
   }
 
@@ -207,10 +201,10 @@ struct IRValue *fold_binary_const(enum IRInstrBinaryKind kind,
   return NULL;
 }
 
-struct IRValue *fold_unary_const(enum IRInstrUnaryKind kind,
-                                 struct IRValue *src, Type dst_type)
+static struct IRValue *fold_unary_const(enum IRInstrUnaryKind kind,
+                                        struct IRValue *src, Type dst_type)
 {
-  if (!is_int_type(src->type.kind) && src->type.kind != BOOL_T) {
+  if (!is_integer_type(src->type.kind) && src->type.kind != BOOL_T) {
     return NULL;
   }
 
@@ -231,7 +225,7 @@ struct IRValue *fold_unary_const(enum IRInstrUnaryKind kind,
   return NULL;
 }
 
-struct IRValue *const_env_get(VecConstBinding *env, char *name)
+static struct IRValue *const_env_get(VecConstBinding *env, char *name)
 {
   for (int i = env->len - 1; i >= 0; i--) {
     if (strcmp(env->data[i].name, name) == 0) {
@@ -242,7 +236,7 @@ struct IRValue *const_env_get(VecConstBinding *env, char *name)
   return NULL;
 }
 
-void const_env_remove(VecConstBinding *env, char *name)
+static void const_env_remove(VecConstBinding *env, char *name)
 {
   int write = 0;
 
@@ -259,7 +253,8 @@ void const_env_remove(VecConstBinding *env, char *name)
   env->len = write;
 }
 
-void const_env_set(VecConstBinding *env, char *name, struct IRValue *konst)
+static void const_env_set(VecConstBinding *env, char *name,
+                          struct IRValue *konst)
 {
   const_env_remove(env, name);
 
@@ -269,7 +264,7 @@ void const_env_set(VecConstBinding *env, char *name, struct IRValue *konst)
                   }));
 }
 
-void const_env_clear(VecConstBinding *env)
+static void const_env_clear(VecConstBinding *env)
 {
   for (int i = 0; i < env->len; i++) {
     free(env->data[i].name);
@@ -279,7 +274,7 @@ void const_env_clear(VecConstBinding *env)
   env->len = 0;
 }
 
-bool replace_const_use(VecConstBinding *env, struct IRValue **val)
+static bool replace_const_use(VecConstBinding *env, struct IRValue **val)
 {
   struct IRValue *konst;
 
@@ -298,7 +293,7 @@ bool replace_const_use(VecConstBinding *env, struct IRValue **val)
   return true;
 }
 
-bool constant_propagate_ir(struct IRProgram *prog)
+static bool constant_propagate_ir(struct IRProgram *prog)
 {
   bool changed = false;
 
@@ -378,7 +373,7 @@ bool constant_propagate_ir(struct IRProgram *prog)
   return changed;
 }
 
-char *copy_env_get(VecCopyBinding *env, char *name)
+static char *copy_env_get(VecCopyBinding *env, char *name)
 {
   for (int i = env->len - 1; i >= 0; i--) {
     if (strcmp(env->data[i].dst, name) == 0) {
@@ -389,7 +384,7 @@ char *copy_env_get(VecCopyBinding *env, char *name)
   return NULL;
 }
 
-char *copy_env_resolve(VecCopyBinding *env, char *name)
+static char *copy_env_resolve(VecCopyBinding *env, char *name)
 {
   char *current = name;
 
@@ -416,7 +411,7 @@ char *copy_env_resolve(VecCopyBinding *env, char *name)
   return current;
 }
 
-void copy_env_remove_at(VecCopyBinding *env, int idx)
+static void copy_env_remove_at(VecCopyBinding *env, int idx)
 {
   free(env->data[idx].dst);
   free(env->data[idx].src);
@@ -428,7 +423,7 @@ void copy_env_remove_at(VecCopyBinding *env, int idx)
   env->len--;
 }
 
-void copy_env_kill_var(VecCopyBinding *env, char *name)
+static void copy_env_kill_var(VecCopyBinding *env, char *name)
 {
   /*
    * If `name` is assigned, remove:
@@ -449,7 +444,7 @@ void copy_env_kill_var(VecCopyBinding *env, char *name)
   }
 }
 
-void copy_env_set(VecCopyBinding *env, char *dst, char *src)
+static void copy_env_set(VecCopyBinding *env, char *dst, char *src)
 {
   char *resolved_src;
 
@@ -467,7 +462,7 @@ void copy_env_set(VecCopyBinding *env, char *dst, char *src)
                   }));
 }
 
-void copy_env_clear(VecCopyBinding *env)
+static void copy_env_clear(VecCopyBinding *env)
 {
   for (int i = 0; i < env->len; i++) {
     free(env->data[i].dst);
@@ -477,7 +472,7 @@ void copy_env_clear(VecCopyBinding *env)
   env->len = 0;
 }
 
-bool replace_copy_use(VecCopyBinding *env, struct IRValue **val)
+static bool replace_copy_use(VecCopyBinding *env, struct IRValue **val)
 {
   char *replacement;
   struct IRValue *new_val;
@@ -503,7 +498,7 @@ bool replace_copy_use(VecCopyBinding *env, struct IRValue **val)
   return true;
 }
 
-bool replace_copy_use_in_place(VecCopyBinding *env, struct IRValue *val)
+static bool replace_copy_use_in_place(VecCopyBinding *env, struct IRValue *val)
 {
   char *replacement;
 
@@ -523,7 +518,7 @@ bool replace_copy_use_in_place(VecCopyBinding *env, struct IRValue *val)
   return true;
 }
 
-bool copy_propagate_ir(struct IRProgram *prog)
+static bool copy_propagate_ir(struct IRProgram *prog)
 {
   bool changed = false;
 
@@ -718,7 +713,7 @@ bool copy_propagate_ir(struct IRProgram *prog)
   return changed;
 }
 
-bool ir_name_set_contains(VecIRNameSet *set, char *name)
+static bool ir_name_set_contains(VecIRNameSet *set, char *name)
 {
   for (int i = 0; i < set->len; i++) {
     if (strcmp(set->data[i], name) == 0) {
@@ -729,7 +724,7 @@ bool ir_name_set_contains(VecIRNameSet *set, char *name)
   return false;
 }
 
-bool ir_name_set_equal(VecIRNameSet *a, VecIRNameSet *b)
+static bool ir_name_set_equal(VecIRNameSet *a, VecIRNameSet *b)
 {
   if (a->len != b->len) {
     return false;
@@ -744,20 +739,16 @@ bool ir_name_set_equal(VecIRNameSet *a, VecIRNameSet *b)
   return true;
 }
 
-void ir_name_set_add(VecIRNameSet *set, char *name)
+static void ir_name_set_add(VecIRNameSet *set, char *name)
 {
   if (!name || ir_name_set_contains(set, name)) {
     return;
   }
 
-  /*
-   * Borrowed pointer. Do not strdup/free names here.
-   * The IR owns the actual variable-name strings.
-   */
   vec_insert(set, name);
 }
 
-void ir_name_set_remove(VecIRNameSet *set, char *name)
+static void ir_name_set_remove(VecIRNameSet *set, char *name)
 {
   for (int i = 0; i < set->len; i++) {
     if (strcmp(set->data[i], name) == 0) {
@@ -768,7 +759,7 @@ void ir_name_set_remove(VecIRNameSet *set, char *name)
   }
 }
 
-void ir_name_set_copy(VecIRNameSet *dst, VecIRNameSet *src)
+static void ir_name_set_copy(VecIRNameSet *dst, VecIRNameSet *src)
 {
   dst->len = 0;
 
@@ -777,21 +768,21 @@ void ir_name_set_copy(VecIRNameSet *dst, VecIRNameSet *src)
   }
 }
 
-void ir_name_set_union_into(VecIRNameSet *dst, VecIRNameSet *src)
+static void ir_name_set_union_into(VecIRNameSet *dst, VecIRNameSet *src)
 {
   for (int i = 0; i < src->len; i++) {
     ir_name_set_add(dst, src->data[i]);
   }
 }
 
-void ir_name_set_subtract(VecIRNameSet *dst, VecIRNameSet *to_remove)
+static void ir_name_set_subtract(VecIRNameSet *dst, VecIRNameSet *to_remove)
 {
   for (int i = 0; i < to_remove->len; i++) {
     ir_name_set_remove(dst, to_remove->data[i]);
   }
 }
 
-void ir_name_set_free(VecIRNameSet *set)
+static void ir_name_set_free(VecIRNameSet *set)
 {
   vec_free(set);
   set->capacity = 0;
@@ -799,7 +790,7 @@ void ir_name_set_free(VecIRNameSet *set)
   set->data = NULL;
 }
 
-void ir_int_set_add(VecInt *set, int value)
+static void ir_int_set_add(VecInt *set, int value)
 {
   for (int i = 0; i < set->len; i++) {
     if (set->data[i] == value) {
@@ -810,7 +801,7 @@ void ir_int_set_add(VecInt *set, int value)
   vec_insert(set, value);
 }
 
-int find_ir_label_instr(struct IRFunction *fn, char *label)
+static int find_ir_label_instr(struct IRFunction *fn, char *label)
 {
   for (int i = 0; i < fn->body.len; i++) {
     struct IRInstr *instr = &fn->body.data[i];
@@ -835,7 +826,8 @@ int ir_block_after(struct IRCFG *cfg, int block_idx)
   return next;
 }
 
-int ir_block_for_label(struct IRFunction *fn, struct IRCFG *cfg, char *label)
+static int ir_block_for_label(struct IRFunction *fn, struct IRCFG *cfg,
+                              char *label)
 {
   int instr_idx = find_ir_label_instr(fn, label);
 
@@ -844,7 +836,7 @@ int ir_block_for_label(struct IRFunction *fn, struct IRCFG *cfg, char *label)
   return cfg->instr_to_block[instr_idx];
 }
 
-struct IRCFG build_ir_cfg(struct IRFunction *fn)
+static struct IRCFG build_ir_cfg(struct IRFunction *fn)
 {
   int n = fn->body.len;
   bool *leader;
@@ -965,7 +957,7 @@ struct IRCFG build_ir_cfg(struct IRFunction *fn)
   return cfg;
 }
 
-void free_ir_cfg(struct IRCFG *cfg)
+static void free_ir_cfg(struct IRCFG *cfg)
 {
   for (int i = 0; i < cfg->block_count; i++) {
     vec_free(&cfg->blocks[i].succs);
@@ -984,22 +976,22 @@ void free_ir_cfg(struct IRCFG *cfg)
   cfg->block_count = 0;
 }
 
-void ir_add_use_val(VecIRNameSet *use, struct IRValue *val)
+static void ir_add_use_val(VecIRNameSet *use, struct IRValue *val)
 {
   if (val && val->kind == IRValue_VAR) {
     ir_name_set_add(use, val->as.var);
   }
 }
 
-void ir_add_def_val(VecIRNameSet *def, struct IRValue *val)
+static void ir_add_def_val(VecIRNameSet *def, struct IRValue *val)
 {
   if (val && val->kind == IRValue_VAR) {
     ir_name_set_add(def, val->as.var);
   }
 }
 
-void compute_ir_instr_use_def(struct IRInstr *instr, VecIRNameSet *use,
-                              VecIRNameSet *def)
+static void compute_ir_instr_use_def(struct IRInstr *instr, VecIRNameSet *use,
+                                     VecIRNameSet *def)
 {
   switch (instr->kind) {
     case IRInstr_BIN:
@@ -1089,8 +1081,8 @@ void compute_ir_instr_use_def(struct IRInstr *instr, VecIRNameSet *use,
   }
 }
 
-void compute_ir_block_use_def(struct IRBasicBlock *block,
-                              struct IRInstrLiveness *lv)
+static void compute_ir_block_use_def(struct IRBasicBlock *block,
+                                     struct IRInstrLiveness *lv)
 {
   for (int i = block->start; i <= block->end; i++) {
     /*
@@ -1113,7 +1105,7 @@ void compute_ir_block_use_def(struct IRBasicBlock *block,
   }
 }
 
-void solve_ir_block_liveness(struct IRCFG *cfg)
+static void solve_ir_block_liveness(struct IRCFG *cfg)
 {
   bool changed = true;
 
@@ -1155,8 +1147,8 @@ void solve_ir_block_liveness(struct IRCFG *cfg)
   }
 }
 
-void compute_ir_instr_liveness_from_blocks(struct IRCFG *cfg,
-                                           struct IRInstrLiveness *lv)
+static void compute_ir_instr_liveness_from_blocks(struct IRCFG *cfg,
+                                                  struct IRInstrLiveness *lv)
 {
   for (int bi = 0; bi < cfg->block_count; bi++) {
     struct IRBasicBlock *block = &cfg->blocks[bi];
@@ -1183,7 +1175,7 @@ void compute_ir_instr_liveness_from_blocks(struct IRCFG *cfg,
   }
 }
 
-struct IRInstrLiveness *compute_ir_liveness_cfg(struct IRFunction *fn)
+static struct IRInstrLiveness *compute_ir_liveness_cfg(struct IRFunction *fn)
 {
   int n = fn->body.len;
 
@@ -1211,7 +1203,7 @@ struct IRInstrLiveness *compute_ir_liveness_cfg(struct IRFunction *fn)
   return lv;
 }
 
-void free_ir_liveness(struct IRInstrLiveness *lv, int n)
+static void free_ir_liveness(struct IRInstrLiveness *lv, int n)
 {
   for (int i = 0; i < n; i++) {
     ir_name_set_free(&lv[i].use);
@@ -1223,7 +1215,7 @@ void free_ir_liveness(struct IRInstrLiveness *lv, int n)
   free(lv);
 }
 
-struct IRValue *ir_instr_dst(struct IRInstr *instr)
+static struct IRValue *ir_instr_dst(struct IRInstr *instr)
 {
   switch (instr->kind) {
     case IRInstr_BIN:
@@ -1260,7 +1252,7 @@ struct IRValue *ir_instr_dst(struct IRInstr *instr)
   return NULL;
 }
 
-bool ir_instr_is_removable_dead_def(struct IRInstr *instr)
+static bool ir_instr_is_removable_dead_def(struct IRInstr *instr)
 {
   switch (instr->kind) {
     case IRInstr_BIN:
@@ -1296,7 +1288,7 @@ bool ir_instr_is_removable_dead_def(struct IRInstr *instr)
   return false;
 }
 
-void remove_ir_instr_at(VecIRInstr *instrs, int idx)
+static void remove_ir_instr_at(VecIRInstr *instrs, int idx)
 {
   free_ir_instr(&instrs->data[idx]);
 
@@ -1307,7 +1299,7 @@ void remove_ir_instr_at(VecIRInstr *instrs, int idx)
   instrs->len--;
 }
 
-bool dead_store_eliminate_ir(struct IRProgram *prog)
+static bool dead_store_eliminate_ir(struct IRProgram *prog)
 {
   bool changed = false;
 
@@ -1349,14 +1341,14 @@ bool dead_store_eliminate_ir(struct IRProgram *prog)
   return changed;
 }
 
-void free_embedded_ir_val(struct IRValue *val)
+static void free_embedded_ir_val(struct IRValue *val)
 {
   if (val->kind == IRValue_VAR) {
     free(val->as.var);
   }
 }
 
-bool ir_const_is_zero(struct IRValue *val, bool *out_is_zero)
+static bool ir_const_is_zero(struct IRValue *val, bool *out_is_zero)
 {
   if (!val || val->kind != IRValue_CONST) {
     return false;
@@ -1407,7 +1399,7 @@ bool ir_const_is_zero(struct IRValue *val, bool *out_is_zero)
   }
 }
 
-bool simplify_constant_ir_branches(struct IRFunction *fn)
+static bool simplify_constant_ir_branches(struct IRFunction *fn)
 {
   bool changed = false;
 
@@ -1455,7 +1447,8 @@ bool simplify_constant_ir_branches(struct IRFunction *fn)
   return changed;
 }
 
-void mark_reachable_ir_blocks(struct IRCFG *cfg, int block_idx, bool *reachable)
+static void mark_reachable_ir_blocks(struct IRCFG *cfg, int block_idx,
+                                     bool *reachable)
 {
   if (block_idx < 0 || block_idx >= cfg->block_count) {
     return;
@@ -1473,7 +1466,7 @@ void mark_reachable_ir_blocks(struct IRCFG *cfg, int block_idx, bool *reachable)
   }
 }
 
-bool unreachable_code_eliminate_ir(struct IRProgram *prog)
+static bool unreachable_code_eliminate_ir(struct IRProgram *prog)
 {
   bool changed = false;
 
@@ -1528,7 +1521,7 @@ bool unreachable_code_eliminate_ir(struct IRProgram *prog)
   return changed;
 }
 
-bool constant_fold_ir(struct IRProgram *prog)
+static bool constant_fold_ir(struct IRProgram *prog)
 {
   bool changed = false;
 
@@ -1582,7 +1575,7 @@ bool constant_fold_ir(struct IRProgram *prog)
   return changed;
 }
 
-bool optimize_ir_once(struct IRProgram *prog)
+static bool optimize_ir_once(struct IRProgram *prog)
 {
   bool changed = false;
 

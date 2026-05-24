@@ -8,7 +8,8 @@
 #include "typechecker.h"
 #include "util.h"
 
-void varmap_insert(struct VariableMap **varmap, char *name, char *uniq_name)
+static void varmap_insert(struct VariableMap **varmap, char *name,
+                          char *uniq_name)
 {
   struct Variable v;
   struct VariableMap *node;
@@ -25,7 +26,7 @@ void varmap_insert(struct VariableMap **varmap, char *name, char *uniq_name)
   *varmap = node;
 }
 
-char *varmap_get(struct VariableMap *varmap, char *name)
+static char *varmap_get(struct VariableMap *varmap, char *name)
 {
   while (varmap) {
     if (strcmp(varmap->name, name) == 0) {
@@ -36,8 +37,8 @@ char *varmap_get(struct VariableMap *varmap, char *name)
   return NULL;
 }
 
-struct ResolveResult resolve_expr(struct VariableMap **varmap,
-                                  struct Expr *expr)
+static struct ResolveResult resolve_expr(struct VariableMap **varmap,
+                                         struct Expr *expr)
 {
   switch (expr->kind) {
     case EXPR_STRUCT_INIT: {
@@ -202,8 +203,8 @@ struct ResolveResult resolve_expr(struct VariableMap **varmap,
   return (struct ResolveResult){.is_ok = true, .msg = NULL, .as.expr = expr};
 }
 
-struct ResolveResult resolve_param(struct VariableMap **varmap,
-                                   struct Parameter *param)
+static struct ResolveResult resolve_param(struct VariableMap **varmap,
+                                          struct Parameter *param)
 {
   char *uniq_name;
 
@@ -215,8 +216,8 @@ struct ResolveResult resolve_param(struct VariableMap **varmap,
   return (struct ResolveResult){.is_ok = true, .msg = NULL, .as.param = param};
 }
 
-struct ResolveResult resolve_stmt(struct VariableMap **varmap,
-                                  struct Stmt *stmt)
+static struct ResolveResult resolve_stmt(struct VariableMap **varmap,
+                                         struct Stmt *stmt)
 {
   switch (stmt->kind) {
     case STMT_LOOP: {

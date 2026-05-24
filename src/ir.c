@@ -9,8 +9,9 @@
 #include "typechecker.h"
 #include "util.h"
 
-/* Module-owned global state. */
 VecStaticConstant global_constants = {0};
+
+static struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr);
 
 struct IRValue *clone_irval(struct IRValue *v)
 {
@@ -139,7 +140,7 @@ void free_ir_val(struct IRValue *val)
   free(val);
 }
 
-void print_ir_binary_op(enum IRInstrBinaryKind kind)
+static void print_ir_binary_op(enum IRInstrBinaryKind kind)
 {
   switch (kind) {
     case IRInstrBinary_ADD:
@@ -195,7 +196,8 @@ void print_ir_binary_op(enum IRInstrBinaryKind kind)
   }
 }
 
-enum IRInstrBinaryKind expr_bin_to_ir_bin(enum ExprBinKind kind, Type type)
+static enum IRInstrBinaryKind expr_bin_to_ir_bin(enum ExprBinKind kind,
+                                                 Type type)
 {
   switch (kind) {
     case EXPR_BIN_ADD:
@@ -241,7 +243,7 @@ enum IRInstrBinaryKind expr_bin_to_ir_bin(enum ExprBinKind kind, Type type)
   }
 }
 
-void print_ir_instr(struct IRInstr *instr, int spaces)
+static void print_ir_instr(struct IRInstr *instr, int spaces)
 {
   print_indent(spaces);
 
@@ -580,7 +582,7 @@ void free_ir_instr(struct IRInstr *instr)
   }
 }
 
-void print_ir_fn(struct IRFunction *func)
+static void print_ir_fn(struct IRFunction *func)
 {
   printf("IRFunction(\n  name = %s,\n  retval = %d,\n  body = [\n", func->name,
          func->retval.kind);
@@ -592,7 +594,7 @@ void print_ir_fn(struct IRFunction *func)
   printf(")\n");
 }
 
-void free_ir_fn(struct IRFunction *func)
+static void free_ir_fn(struct IRFunction *func)
 {
   for (int i = 0; i < func->body.len; i++) {
     free_ir_instr(&func->body.data[i]);
@@ -616,7 +618,7 @@ void free_ir_prog(struct IRProgram *prog)
   vec_free(&prog->funcs);
 }
 
-struct IRValue *mkirvar(void)
+static struct IRValue *mkirvar(void)
 {
   struct IRValue *var;
   int i;
@@ -630,7 +632,8 @@ struct IRValue *mkirvar(void)
   return var;
 }
 
-struct IRValue *irfy_expr_and_convert(VecIRInstr *instrs, struct Expr *expr)
+static struct IRValue *irfy_expr_and_convert(VecIRInstr *instrs,
+                                             struct Expr *expr)
 {
   /* evaluates an expr and forces lvalue2rvalue conversion. */
   struct ExpResult result;
@@ -709,66 +712,7 @@ void free_global_constants(void)
   vec_free(&global_constants);
 }
 
-int get_type_size(Type t)
-{
-  switch (t.kind) {
-    case I8_T:
-    case U8_T:
-    case BOOL_T:
-      return 1;
-    case I16_T:
-    case U16_T:
-      return 2;
-    case I32_T:
-    case U32_T:
-    case F32_T:
-      return 4;
-    case I64_T:
-    case U64_T:
-    case F64_T:
-    case STR_T:
-    case PTR_T:
-      return 8;
-    case STRUCT_T: {
-      struct StructDef *def = struct_get(struct_table, t.as.struct_name);
-      return def->size;
-    }
-    default:
-      return -1;
-  }
-}
-
-bool is_unsigned(enum TypeKind kind)
-{
-  switch (kind) {
-    case U8_T:
-    case U16_T:
-    case U32_T:
-    case U64_T:
-      return true;
-    default:
-      return false;
-  }
-}
-
-bool is_integer_type(enum TypeKind kind)
-{
-  switch (kind) {
-    case I8_T:
-    case I16_T:
-    case I32_T:
-    case I64_T:
-    case U8_T:
-    case U16_T:
-    case U32_T:
-    case U64_T:
-      return true;
-    default:
-      return false;
-  }
-}
-
-enum IRCastKind get_cast_kind(Type src, Type dst)
+static enum IRCastKind get_cast_kind(Type src, Type dst)
 {
   if (types_equal(src, dst)) {
     return IRCast_None;
@@ -822,7 +766,7 @@ enum IRCastKind get_cast_kind(Type src, Type dst)
   return src_unsigned ? IRCast_ZeroExtend : IRCast_SignExtend;
 }
 
-struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
+static struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
 {
   switch (expr->kind) {
     case EXPR_LITERAL: {
@@ -1469,7 +1413,7 @@ struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
   assert(0);
 }
 
-int extract_label_number(const char *label)
+static int extract_label_number(const char *label)
 {
   if (!label) {
     return -1;
@@ -1491,7 +1435,7 @@ int extract_label_number(const char *label)
   return -1;
 }
 
-void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
+static void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
 {
   switch (stmt->kind) {
     case STMT_FN:
@@ -1766,7 +1710,7 @@ void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
   }
 }
 
-struct IRFunction *irfy_fn(struct Stmt *stmt)
+static struct IRFunction *irfy_fn(struct Stmt *stmt)
 {
   if (stmt->kind != STMT_FN) {
     return NULL;

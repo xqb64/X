@@ -8,7 +8,7 @@
 #include "parser.h"
 #include "util.h"
 
-struct LoopLabelResult loop_label_stmt(struct Stmt *stmt, char *label)
+static struct LoopLabelResult loop_label_stmt(struct Stmt *stmt, char *label)
 {
   switch (stmt->kind) {
     case STMT_LOOP: {
@@ -130,9 +130,9 @@ struct LoopLabelResult loop_label(struct AST *ast)
   return (struct LoopLabelResult){.is_ok = true, .msg = NULL, .ast = ast};
 }
 
-struct CollectLabelsResult collect_labels_stmt(struct Stmt *stmt,
-                                               VecCharPtr *labels,
-                                               char *funcname)
+static struct CollectLabelsResult collect_labels_stmt(struct Stmt *stmt,
+                                                      VecCharPtr *labels,
+                                                      char *funcname)
 {
   switch (stmt->kind) {
     case STMT_LABELED: {
@@ -240,8 +240,9 @@ struct CollectLabelsResult collect_labels(struct AST *ast)
       .is_ok = true, .msg = NULL, .labels = labels};
 }
 
-struct LabelCheckResult check_labels_stmt(struct Stmt *stmt, VecCharPtr *labels,
-                                          char *funcname)
+static struct LabelCheckResult check_labels_stmt(struct Stmt *stmt,
+                                                 VecCharPtr *labels,
+                                                 char *funcname)
 {
   switch (stmt->kind) {
     case STMT_FN: {

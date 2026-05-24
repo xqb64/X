@@ -12,7 +12,7 @@
 #include "typechecker.h"
 #include "util.h"
 
-void print_binary_op(enum ExprBinKind kind)
+static void print_binary_op(enum ExprBinKind kind)
 {
   switch (kind) {
     case EXPR_BIN_ADD:
@@ -886,7 +886,7 @@ static struct Token fetch_next(struct Parser *parser)
   return next_token(parser->tokenizer);
 }
 
-struct Token *advance_parser(struct Parser *parser)
+static struct Token *advance_parser(struct Parser *parser)
 {
   parser->prev_tok = parser->curr_tok;
   parser->curr_tok = fetch_next(parser);
@@ -894,7 +894,7 @@ struct Token *advance_parser(struct Parser *parser)
   return parser->prev;
 }
 
-bool check_next(struct Parser *parser, enum TokenKind kind)
+static bool check_next(struct Parser *parser, enum TokenKind kind)
 {
   if (!parser->has_peek) {
     parser->peek_tok = next_token(parser->tokenizer);
@@ -903,17 +903,12 @@ bool check_next(struct Parser *parser, enum TokenKind kind)
   return parser->peek_tok.kind == kind;
 }
 
-bool check(struct Parser *parser, enum TokenKind kind)
+static bool check(struct Parser *parser, enum TokenKind kind)
 {
   return parser->curr->kind == kind;
 }
 
-bool check2(struct Parser *parser, enum TokenKind kind1, enum TokenKind kind2)
-{
-  return parser->prev->kind == kind1 && parser->curr->kind == kind2;
-}
-
-bool match(struct Parser *parser, int size, ...)
+static bool match(struct Parser *parser, int size, ...)
 {
   va_list ap;
   va_start(ap, size);
@@ -929,7 +924,7 @@ bool match(struct Parser *parser, int size, ...)
   return false;
 }
 
-struct Token *consume(struct Parser *parser, enum TokenKind kind)
+static struct Token *consume(struct Parser *parser, enum TokenKind kind)
 {
   if (parser->curr && parser->curr->kind == kind) {
     return advance_parser(parser);
@@ -943,7 +938,7 @@ struct Token *consume(struct Parser *parser, enum TokenKind kind)
   return NULL;
 }
 
-struct Token *consume_any(struct Parser *parser, int n, ...)
+static struct Token *consume_any(struct Parser *parser, int n, ...)
 {
   va_list ap;
   va_start(ap, n);
@@ -962,7 +957,9 @@ struct Token *consume_any(struct Parser *parser, int n, ...)
   return NULL;
 }
 
-struct ParseFnResult primary(struct Parser *parser)
+static struct ParseFnResult parse_expr(struct Parser *parser);
+
+static struct ParseFnResult primary(struct Parser *parser)
 {
   struct ParseFnResult res;
 
@@ -1152,7 +1149,8 @@ struct ParseFnResult primary(struct Parser *parser)
   return res;
 }
 
-struct ParseFnResult finish_call(struct Parser *parser, struct Expr callee)
+static struct ParseFnResult finish_call(struct Parser *parser,
+                                        struct Expr callee)
 {
   VecExpr arguments = {0};
   if (!check(parser, TOKEN_RPAREN)) {
@@ -1199,7 +1197,7 @@ struct ParseFnResult finish_call(struct Parser *parser, struct Expr callee)
   return (struct ParseFnResult){.as.expr = e, .is_ok = true, .msg = NULL};
 }
 
-bool parse_enum_body(struct Parser *parser, VecEnumVariant *out_variants)
+static bool parse_enum_body(struct Parser *parser, VecEnumVariant *out_variants)
 {
   int current_val = 0;
 
@@ -1280,7 +1278,21 @@ bool parse_enum_body(struct Parser *parser, VecEnumVariant *out_variants)
   return true;
 }
 
-Type parse_type(struct Parser *parser)
+static bool is_enum_type(char *name)
+{
+  struct EnumTypeItem *curr;
+
+  curr = enum_types;
+  while (curr) {
+    if (strcmp(curr->name, name) == 0) {
+      return true;
+    }
+    curr = curr->next;
+  }
+  return false;
+}
+
+static Type parse_type(struct Parser *parser)
 {
   if (match(parser, 1, TOKEN_STAR)) {
     Type *base = malloc(sizeof(Type));
@@ -1444,7 +1456,7 @@ Type parse_type(struct Parser *parser)
   return (Type){.kind = UNKNOWN_T};
 }
 
-struct ParseFnResult postfix(struct Parser *parser)
+static struct ParseFnResult postfix(struct Parser *parser)
 {
   struct ParseFnResult expr_result;
 
@@ -1499,7 +1511,7 @@ struct ParseFnResult postfix(struct Parser *parser)
   return (struct ParseFnResult){.as.expr = expr, .is_ok = true, .msg = NULL};
 }
 
-struct ParseFnResult unary(struct Parser *parser)
+static struct ParseFnResult unary(struct Parser *parser)
 {
   if (match(parser, 5, TOKEN_MINUS, TOKEN_BANG, TOKEN_TILDE, TOKEN_AMPERSAND,
             TOKEN_STAR)) {
@@ -1607,7 +1619,7 @@ struct ParseFnResult unary(struct Parser *parser)
   return postfix(parser);
 }
 
-struct ParseFnResult factor(struct Parser *parser)
+static struct ParseFnResult factor(struct Parser *parser)
 {
   struct ParseFnResult left_res, right_res;
   struct Expr left, right;
@@ -1652,7 +1664,7 @@ struct ParseFnResult factor(struct Parser *parser)
   return left_res;
 }
 
-struct ParseFnResult term(struct Parser *parser)
+static struct ParseFnResult term(struct Parser *parser)
 {
   struct ParseFnResult left_res, right_res;
   struct Expr left, right;
@@ -1697,7 +1709,7 @@ struct ParseFnResult term(struct Parser *parser)
   return left_res;
 }
 
-struct ParseFnResult shift(struct Parser *parser)
+static struct ParseFnResult shift(struct Parser *parser)
 {
   struct ParseFnResult left_res, right_res;
   struct Expr left, right;
@@ -1731,7 +1743,7 @@ struct ParseFnResult shift(struct Parser *parser)
   return left_res;
 }
 
-struct ParseFnResult comparison(struct Parser *parser)
+static struct ParseFnResult comparison(struct Parser *parser)
 {
   struct ParseFnResult left_res, right_res;
   struct Expr left, right;
@@ -1779,7 +1791,7 @@ struct ParseFnResult comparison(struct Parser *parser)
   return left_res;
 }
 
-struct ParseFnResult bitwise_and(struct Parser *parser)
+static struct ParseFnResult bitwise_and(struct Parser *parser)
 {
   struct ParseFnResult left_res, right_res;
   struct Expr left, right;
@@ -1810,7 +1822,7 @@ struct ParseFnResult bitwise_and(struct Parser *parser)
   return left_res;
 }
 
-struct ParseFnResult bitwise_xor(struct Parser *parser)
+static struct ParseFnResult bitwise_xor(struct Parser *parser)
 {
   struct ParseFnResult left_res, right_res;
   struct Expr left, right;
@@ -1841,7 +1853,7 @@ struct ParseFnResult bitwise_xor(struct Parser *parser)
   return left_res;
 }
 
-struct ParseFnResult bitwise_or(struct Parser *parser)
+static struct ParseFnResult bitwise_or(struct Parser *parser)
 {
   struct ParseFnResult left_res, right_res;
   struct Expr left, right;
@@ -1872,7 +1884,7 @@ struct ParseFnResult bitwise_or(struct Parser *parser)
   return left_res;
 }
 
-struct ParseFnResult logical_and(struct Parser *parser)
+static struct ParseFnResult logical_and(struct Parser *parser)
 {
   struct ParseFnResult left_res, right_res;
   struct Expr left, right;
@@ -1903,7 +1915,7 @@ struct ParseFnResult logical_and(struct Parser *parser)
   return left_res;
 }
 
-struct ParseFnResult logical_or(struct Parser *parser)
+static struct ParseFnResult logical_or(struct Parser *parser)
 {
   struct ParseFnResult left_res, right_res;
   struct Expr left, right;
@@ -1934,7 +1946,7 @@ struct ParseFnResult logical_or(struct Parser *parser)
   return left_res;
 }
 
-struct ParseFnResult assignment(struct Parser *parser)
+static struct ParseFnResult assignment(struct Parser *parser)
 {
   struct ParseFnResult expr_result, right_result;
   struct Expr expr, right;
@@ -1999,7 +2011,7 @@ struct ParseFnResult assignment(struct Parser *parser)
   return (struct ParseFnResult){.as.expr = expr, .is_ok = true, .msg = NULL};
 }
 
-struct ParseFnResult parse_expr(struct Parser *parser)
+static struct ParseFnResult parse_expr(struct Parser *parser)
 {
   struct ParseFnResult res;
   struct Expr expr;
@@ -2017,7 +2029,9 @@ struct ParseFnResult parse_expr(struct Parser *parser)
   return (struct ParseFnResult){.is_ok = true, .msg = NULL, .as.expr = expr};
 }
 
-struct ParseFnResult block(struct Parser *parser)
+static struct ParseFnResult parse_stmt(struct Parser *parser);
+
+static struct ParseFnResult block(struct Parser *parser)
 {
   VecStmt stmts = {0};
   struct ParseFnResult result;
@@ -2058,7 +2072,7 @@ struct ParseFnResult block(struct Parser *parser)
   return result;
 }
 
-struct ParseFnResult parse_fn_stmt(struct Parser *parser)
+static struct ParseFnResult parse_fn_stmt(struct Parser *parser)
 {
   struct ParseFnResult result;
   struct Token *token_fn, *token_id, *token_lparen, *token_void, *token_rparen,
@@ -2185,7 +2199,7 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
   return result;
 }
 
-struct ParseFnResult parse_let_stmt(struct Parser *parser)
+static struct ParseFnResult parse_let_stmt(struct Parser *parser)
 {
   struct ParseFnResult result, init_res;
   struct Token *token_let, *token_id, *token_colon, *token_equal,
@@ -2264,7 +2278,7 @@ struct ParseFnResult parse_let_stmt(struct Parser *parser)
   return result;
 }
 
-struct ParseFnResult parse_ret_stmt(struct Parser *parser)
+static struct ParseFnResult parse_ret_stmt(struct Parser *parser)
 {
   struct ParseFnResult result;
   struct Token *token_ret, *token_semicolon;
@@ -2316,7 +2330,7 @@ skip_parsing_expr:
   return result;
 }
 
-struct ParseFnResult parse_if_stmt(struct Parser *parser)
+static struct ParseFnResult parse_if_stmt(struct Parser *parser)
 {
   struct ParseFnResult result, cond_res, then_res, else_res;
   struct Token *token_if, *token_lparen, *token_rparen, *token_else;
@@ -2388,7 +2402,7 @@ struct ParseFnResult parse_if_stmt(struct Parser *parser)
   return result;
 }
 
-struct ParseFnResult parse_do_while_stmt(struct Parser *parser)
+static struct ParseFnResult parse_do_while_stmt(struct Parser *parser)
 {
   struct ParseFnResult result, body_result, cond_result;
   struct Token *token_do, *token_while, *token_lparen, *token_rparen,
@@ -2461,7 +2475,7 @@ struct ParseFnResult parse_do_while_stmt(struct Parser *parser)
   return result;
 }
 
-struct ParseFnResult parse_while_stmt(struct Parser *parser)
+static struct ParseFnResult parse_while_stmt(struct Parser *parser)
 {
   struct ParseFnResult result, cond_result, body_result;
   struct Token *token_while, *token_lparen, *token_rparen;
@@ -2517,7 +2531,7 @@ struct ParseFnResult parse_while_stmt(struct Parser *parser)
   return result;
 }
 
-struct ParseFnResult parse_loop_stmt(struct Parser *parser)
+static struct ParseFnResult parse_loop_stmt(struct Parser *parser)
 {
   struct ParseFnResult result, body_res;
   struct Token *token_loop;
@@ -2549,7 +2563,7 @@ struct ParseFnResult parse_loop_stmt(struct Parser *parser)
   return result;
 }
 
-struct ParseFnResult parse_break_stmt(struct Parser *parser)
+static struct ParseFnResult parse_break_stmt(struct Parser *parser)
 {
   struct ParseFnResult result;
   struct Token *token_break, *token_semicolon;
@@ -2578,7 +2592,7 @@ struct ParseFnResult parse_break_stmt(struct Parser *parser)
   return result;
 }
 
-struct ParseFnResult parse_continue_stmt(struct Parser *parser)
+static struct ParseFnResult parse_continue_stmt(struct Parser *parser)
 {
   struct ParseFnResult result;
   struct Token *token_continue, *token_semicolon;
@@ -2607,7 +2621,7 @@ struct ParseFnResult parse_continue_stmt(struct Parser *parser)
   return result;
 }
 
-struct ParseFnResult parse_extern_stmt(struct Parser *parser)
+static struct ParseFnResult parse_extern_stmt(struct Parser *parser)
 {
   struct ParseFnResult result;
   struct Token *token_extern, *token_fn, *token_identifier, *token_lparen,
@@ -2744,7 +2758,7 @@ struct ParseFnResult parse_extern_stmt(struct Parser *parser)
   return result;
 }
 
-struct ParseFnResult parse_expr_stmt(struct Parser *parser)
+static struct ParseFnResult parse_expr_stmt(struct Parser *parser)
 {
   struct ParseFnResult result, expr_res;
   struct Token *token_semicolon;
@@ -2779,7 +2793,7 @@ struct ParseFnResult parse_expr_stmt(struct Parser *parser)
   return result;
 }
 
-struct ParseFnResult parse_struct_stmt(struct Parser *parser)
+static struct ParseFnResult parse_struct_stmt(struct Parser *parser)
 {
   struct ParseFnResult result;
   struct Token *token_struct_or_union, *token_id, *token_lbrace, *token_rbrace;
@@ -2862,7 +2876,7 @@ struct ParseFnResult parse_struct_stmt(struct Parser *parser)
   return result;
 }
 
-struct ParseFnResult parse_goto_stmt(struct Parser *parser)
+static struct ParseFnResult parse_goto_stmt(struct Parser *parser)
 {
   struct ParseFnResult result = {.is_ok = true, .msg = NULL};
 
@@ -2900,7 +2914,7 @@ struct ParseFnResult parse_goto_stmt(struct Parser *parser)
   return result;
 }
 
-struct ParseFnResult parse_enum_stmt(struct Parser *parser)
+static struct ParseFnResult parse_enum_stmt(struct Parser *parser)
 {
   struct ParseFnResult result = {.is_ok = true, .msg = NULL};
 
@@ -2933,7 +2947,7 @@ struct ParseFnResult parse_enum_stmt(struct Parser *parser)
   return result;
 }
 
-struct ParseFnResult parse_stmt(struct Parser *parser)
+static struct ParseFnResult parse_stmt(struct Parser *parser)
 {
   struct ParseFnResult result;
 

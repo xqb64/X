@@ -24,7 +24,7 @@ struct ReadFileResult {
   char *contents;
 };
 
-struct ReadFileResult read_file(const char *path)
+static struct ReadFileResult read_file(const char *path)
 {
   struct ReadFileResult result;
   FILE *f;
@@ -101,7 +101,7 @@ struct AssembleLinkResult {
   char *msg;
 };
 
-struct AssembleLinkResult assemble_and_link(const char *path,
+static struct AssembleLinkResult assemble_and_link(const char *path,
                                             const char *out_path,
                                             bool assemble_only)
 {
@@ -160,7 +160,7 @@ struct CompilerOptions {
   char *path;
 };
 
-struct CompilerOptions parse_args(int argc, char **argv)
+static struct CompilerOptions parse_args(int argc, char **argv)
 {
   struct CompilerOptions opts;
   opts.target_stage = STAGE_FULL;
@@ -256,7 +256,7 @@ struct RunResult {
   char *msg;
 };
 
-struct RunResult run(struct CompilerOptions *opts)
+static struct RunResult run(struct CompilerOptions *opts)
 {
   enum TargetStage target_stage;
   char *path;

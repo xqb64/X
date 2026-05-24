@@ -250,8 +250,6 @@ struct ExpResult {
   } as;
 };
 
-struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr);
-
 struct StaticConstant {
   char *name;
   char *value;
@@ -268,14 +266,11 @@ struct IrfyResult {
 };
 
 struct IrfyResult irfy_ast(struct AST *ast);
-bool is_unsigned(enum TypeKind kind);
-void free_ir_val(struct IRValue *val);
 struct IRValue *clone_irval(struct IRValue *v);
-void free_ir_instr(struct IRInstr *instr);
+void free_ir_val(struct IRValue *val);
 void print_ir(struct IRProgram *prog);
+void free_ir_instr(struct IRInstr *instr);
 void free_ir_prog(struct IRProgram *prog);
 void free_global_constants(void);
-int get_type_size(Type t);
-bool is_integer_type(enum TypeKind kind);
 
 #endif

@@ -6,23 +6,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "ir.h"
 #include "parser.h"
 #include "util.h"
 
-/* Module-owned global state. */
 struct StructTable *struct_table = NULL;
 struct EnumTypeItem *enum_types = NULL;
 struct EnumVariantItem *enum_variants = NULL;
-
-void free_struct_table(struct StructTable *table)
-{
-  while (table) {
-    struct StructTable *tmp = table;
-    table = table->next;
-    free(tmp);
-  }
-}
 
 void struct_insert(struct StructTable **table, struct StructDef def)
 {
@@ -67,20 +56,6 @@ void enum_type_insert(char *name)
   item->name = strdup(name);
   item->next = enum_types;
   enum_types = item;
-}
-
-bool is_enum_type(char *name)
-{
-  struct EnumTypeItem *curr;
-
-  curr = enum_types;
-  while (curr) {
-    if (strcmp(curr->name, name) == 0) {
-      return true;
-    }
-    curr = curr->next;
-  }
-  return false;
 }
 
 void free_enum_variants(void)
@@ -177,7 +152,7 @@ void free_type(Type *t)
   }
 }
 
-bool vectype_equal(VecType a, VecType b)
+static bool vectype_equal(VecType a, VecType b)
 {
   if (a.len != b.len) {
     return false;
@@ -357,14 +332,14 @@ void print_type(Type *type, int spaces)
 
 #define IN_RANGE(val, min, max) ((val) >= (min) && (val) <= (max))
 
-bool is_bitwise_binop(enum ExprBinKind kind)
+static bool is_bitwise_binop(enum ExprBinKind kind)
 {
   return kind == EXPR_BIN_BITWISE_AND || kind == EXPR_BIN_BITWISE_XOR ||
          kind == EXPR_BIN_BITWISE_OR || kind == EXPR_BIN_SHIFT_LEFT ||
          kind == EXPR_BIN_SHIFT_RIGHT;
 }
 
-bool is_shift_binop(enum ExprBinKind kind)
+static bool is_shift_binop(enum ExprBinKind kind)
 {
   return kind == EXPR_BIN_SHIFT_LEFT || kind == EXPR_BIN_SHIFT_RIGHT;
 }
@@ -411,7 +386,7 @@ void get_type_size_and_align(Type *type, int *size, int *align)
   }
 }
 
-Type get_common_type(struct Expr *lhs, struct Expr *rhs)
+static Type get_common_type(struct Expr *lhs, struct Expr *rhs)
 {
   Type t1 = lhs->type;
   Type t2 = rhs->type;
@@ -452,7 +427,7 @@ Type get_common_type(struct Expr *lhs, struct Expr *rhs)
   return (Type){.kind = UNKNOWN_T};
 }
 
-bool promote_literal(struct Expr *expr, Type target_type)
+static bool promote_literal(struct Expr *expr, Type target_type)
 {
   if (expr->kind == EXPR_UNARY && expr->as.unary.expr->kind == EXPR_LITERAL &&
       expr->as.unary.expr->as.literal.kind == LITERAL_NUM) {
@@ -656,18 +631,77 @@ bool promote_literal(struct Expr *expr, Type target_type)
   return false;
 }
 
-bool is_float_type(enum TypeKind k)
+static bool is_float_type(enum TypeKind k)
 {
   return k == F32_T || k == F64_T;
 }
 
-bool is_scalar_type(Type t)
+int get_type_size(Type t)
+{
+  switch (t.kind) {
+    case I8_T:
+    case U8_T:
+    case BOOL_T:
+      return 1;
+    case I16_T:
+    case U16_T:
+      return 2;
+    case I32_T:
+    case U32_T:
+    case F32_T:
+      return 4;
+    case I64_T:
+    case U64_T:
+    case F64_T:
+    case STR_T:
+    case PTR_T:
+      return 8;
+    case STRUCT_T: {
+      struct StructDef *def = struct_get(struct_table, t.as.struct_name);
+      return def->size;
+    }
+    default:
+      return -1;
+  }
+}
+
+bool is_unsigned(enum TypeKind kind)
+{
+  switch (kind) {
+    case U8_T:
+    case U16_T:
+    case U32_T:
+    case U64_T:
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool is_integer_type(enum TypeKind kind)
+{
+  switch (kind) {
+    case I8_T:
+    case I16_T:
+    case I32_T:
+    case I64_T:
+    case U8_T:
+    case U16_T:
+    case U32_T:
+    case U64_T:
+      return true;
+    default:
+      return false;
+  }
+}
+
+static bool is_scalar_type(Type t)
 {
   return is_integer_type(t.kind) || t.kind == BOOL_T || is_float_type(t.kind) ||
          t.kind == PTR_T;
 }
 
-bool can_explicit_cast(Type src, Type dst)
+static bool can_explicit_cast(Type src, Type dst)
 {
   if (types_equal(src, dst)) {
     return true;
@@ -680,8 +714,9 @@ bool can_explicit_cast(Type src, Type dst)
   return false;
 }
 
-struct TypecheckResult coerce_expr_to_type(struct Expr *expr, Type target_type,
-                                           char *err_msg)
+static struct TypecheckResult coerce_expr_to_type(struct Expr *expr,
+                                                  Type target_type,
+                                                  char *err_msg)
 {
   if (types_equal(expr->type, target_type)) {
     return (struct TypecheckResult){.is_ok = true, .msg = NULL, .ast = NULL};
@@ -703,7 +738,7 @@ struct TypecheckResult coerce_expr_to_type(struct Expr *expr, Type target_type,
   return (struct TypecheckResult){.is_ok = true, .msg = NULL, .ast = NULL};
 }
 
-bool is_expr_mutable(struct Expr *expr, struct Symbol *sym_table)
+static bool is_expr_mutable(struct Expr *expr, struct Symbol *sym_table)
 {
   switch (expr->kind) {
     case EXPR_VARIABLE: {
@@ -724,8 +759,8 @@ bool is_expr_mutable(struct Expr *expr, struct Symbol *sym_table)
   }
 }
 
-struct TypecheckResult typecheck_expr(struct Expr *expr,
-                                      struct Symbol *sym_table)
+static struct TypecheckResult typecheck_expr(struct Expr *expr,
+                                             struct Symbol *sym_table)
 {
   struct TypecheckResult res = {.is_ok = true, .msg = NULL, .ast = NULL};
 
@@ -1415,8 +1450,8 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
   return res;
 }
 
-struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
-                                      struct Symbol **sym_table)
+static struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
+                                             struct Symbol **sym_table)
 {
   struct TypecheckResult res = {.is_ok = true, .msg = NULL, .ast = NULL};
 

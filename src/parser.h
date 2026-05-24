@@ -413,19 +413,14 @@ struct ParseResult {
   struct AST *ast;
 };
 
+bool types_equal(Type a, Type b);
 void init_parser(struct Tokenizer *tokenizer, struct Parser *parser);
-struct Token *advance_parser(struct Parser *parser);
-void print_binary_op(enum ExprBinKind kind);
+struct ParseResult parse(struct Parser *parser);
 void print_expr(struct Expr *expr, int spaces);
 void free_expr(struct Expr *expr);
 void print_stmt(struct Stmt *stmt, int spaces);
 void free_stmt(struct Stmt *stmt);
 void print_ast(struct AST *ast);
 void free_ast(struct AST *ast);
-Type parse_type(struct Parser *parser);
-struct ParseFnResult parse_stmt(struct Parser *parser);
-struct ParseFnResult parse_expr(struct Parser *parser);
-struct ParseResult parse(struct Parser *parser);
-bool types_equal(Type a, Type b);
 
 #endif

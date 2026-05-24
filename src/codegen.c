@@ -10,7 +10,7 @@
 #include "typechecker.h"
 #include "util.h"
 
-bool cast_can_be_plain_mov(enum IRCastKind k)
+static bool cast_can_be_plain_mov(enum IRCastKind k)
 {
   return k == IRCast_None || k == IRCast_Truncate || k == IRCast_Bitcast;
 }
@@ -679,7 +679,7 @@ void print_asm_operand(struct AsmOperand *op)
   }
 }
 
-void print_condition_code(enum ConditionCode cc)
+static void print_condition_code(enum ConditionCode cc)
 {
   switch (cc) {
     case CC_E:
@@ -717,7 +717,7 @@ void print_condition_code(enum ConditionCode cc)
   }
 }
 
-void print_asm_binary_op(enum AsmInstrBinaryKind kind)
+static void print_asm_binary_op(enum AsmInstrBinaryKind kind)
 {
   switch (kind) {
     case AsmInstrBinary_ADD:
@@ -773,7 +773,7 @@ void print_asm_binary_op(enum AsmInstrBinaryKind kind)
   }
 }
 
-void print_asm_instr(struct AsmInstr *instr, int spaces)
+static void print_asm_instr(struct AsmInstr *instr, int spaces)
 {
   print_indent(spaces);
 
@@ -938,7 +938,7 @@ void print_asm_instr(struct AsmInstr *instr, int spaces)
   }
 }
 
-void free_asm_instr(struct AsmInstr *instr)
+static void free_asm_instr(struct AsmInstr *instr)
 {
   if (instr->kind == AsmInstr_LEA) {
     if (instr->as.lea.src.kind == AsmOperand_DATA) {
@@ -950,7 +950,7 @@ void free_asm_instr(struct AsmInstr *instr)
   }
 }
 
-void print_asm_fn(struct AsmFunction *fn)
+static void print_asm_fn(struct AsmFunction *fn)
 {
   printf("AsmFunction(\n");
   print_indent(2);
@@ -966,7 +966,7 @@ void print_asm_fn(struct AsmFunction *fn)
   printf("]\n)\n");
 }
 
-void free_asm_fn(struct AsmFunction *fn)
+static void free_asm_fn(struct AsmFunction *fn)
 {
   for (int i = 0; i < fn->body.len; i++) {
     free_asm_instr(&fn->body.data[i]);
@@ -989,7 +989,7 @@ void free_asm(struct AsmProgram *prog)
   vec_free(&prog->funcs);
 }
 
-struct AsmOperand codegen_irvalue(struct IRValue *val)
+static struct AsmOperand codegen_irvalue(struct IRValue *val)
 {
   switch (val->kind) {
     case IRValue_CONST: {
@@ -1065,14 +1065,14 @@ struct AsmOperand codegen_irvalue(struct IRValue *val)
   }
 }
 
-bool is_comparison(enum IRInstrBinaryKind kind)
+static bool is_comparison(enum IRInstrBinaryKind kind)
 {
   return kind == IRInstrBinary_E || kind == IRInstrBinary_NE ||
          kind == IRInstrBinary_L || kind == IRInstrBinary_LE ||
          kind == IRInstrBinary_G || kind == IRInstrBinary_GE;
 }
 
-struct ABIClassification classify_type(Type *type)
+static struct ABIClassification classify_type(Type *type)
 {
   struct ABIClassification result = {
       .is_memory = false, .eightbytes = {ABI_NO_CLASS, ABI_NO_CLASS}};
@@ -1142,14 +1142,14 @@ bool is_sret(Type *retval)
   return size > 16;
 }
 
-bool is_shift_asm_binary(enum AsmInstrBinaryKind kind)
+static bool is_shift_asm_binary(enum AsmInstrBinaryKind kind)
 {
   return kind == AsmInstrBinary_SHL || kind == AsmInstrBinary_SHR ||
          kind == AsmInstrBinary_SAR;
 }
 
-void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
-                   Type *fn_retval)
+static void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
+                          Type *fn_retval)
 {
   switch (ir_instr->kind) {
     case IRInstr_BIN: {
@@ -2574,7 +2574,7 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
   }
 }
 
-struct AsmFunction codegen_fn(struct IRFunction *ir_func)
+static struct AsmFunction codegen_fn(struct IRFunction *ir_func)
 {
   struct AsmFunction func = {0};
   struct AsmInstr p1, p2, p3;

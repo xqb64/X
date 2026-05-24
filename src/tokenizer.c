@@ -2,7 +2,6 @@
 
 #include <assert.h>
 #include <stddef.h>
-#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -51,7 +50,6 @@ static int lookahead(struct Tokenizer *tokenizer, int n, const char *target)
   return memcmp(tokenizer->src + 1, target, n);
 }
 
-// Added to enforce word boundaries for keywords (fixes Maximal Munch bug)
 static bool match_keyword(struct Tokenizer *tokenizer, int rest_len,
                           const char *rest)
 {
@@ -119,7 +117,7 @@ static struct Token identifier(struct Tokenizer *tokenizer)
 
 static struct Token string(struct Tokenizer *tokenizer)
 {
-  advance(tokenizer);  // consume opening quote
+  advance(tokenizer);
 
   int len = 0;
   char *start = tokenizer->src;
@@ -132,7 +130,7 @@ static struct Token string(struct Tokenizer *tokenizer)
     advance(tokenizer);
   }
 
-  advance(tokenizer);  // consume closing quote
+  advance(tokenizer);
 
   return (struct Token){.kind = TOKEN_STRING, .len = len, .start = start};
 }
@@ -670,7 +668,8 @@ void print_token(struct Token *token)
 }
 
 #ifdef DEBUG_TOKENIZER
-void print_tokens(VecToken *tokens) {
+void print_tokens(VecToken *tokens)
+{
   for (int i = 0; i < tokens->len; i++) {
     print_token(&tokens->data[i]);
   }
@@ -685,7 +684,10 @@ struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
 
     token = next_token(tokenizer);
     if (token.kind == TOKEN_ERROR) {
-      return (struct TokenizeResult){.is_ok = false, .msg = "Encountered error while tokenizing", .tokens = {0}};
+      return (struct TokenizeResult){
+          .is_ok = false,
+          .msg = "Encountered error while tokenizing",
+          .tokens = {0}};
     }
 
     if (token.kind == TOKEN_EOF) {
