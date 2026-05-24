@@ -11,7 +11,7 @@ struct AllocatedReg {
 };
 
 static enum AsmRegister allocatable_int_regs[] = {
-    AX, BX, DX, CX, SI, DI, R8, R9, R12, R13, R14, R15,
+    BX, R8, R9, R12, R13, R14, R15,
 };
 
 #define NUM_ALLOCATABLE_INT_REGS \

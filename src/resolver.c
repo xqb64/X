@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "parser.h"
 #include "typechecker.h"
 #include "util.h"
 
@@ -391,6 +392,8 @@ struct ResolveResult resolve_stmt(struct VariableMap **varmap,
 
       break;
     }
+    case STMT_STRUCT:
+      break;
     default:
       assert(0);
   }
