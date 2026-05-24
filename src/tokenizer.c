@@ -2,8 +2,8 @@
 
 #include <assert.h>
 #include <stddef.h>
-#include <stdio.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 static bool is_alpha(char c)
@@ -668,3 +668,33 @@ void print_token(struct Token *token)
 
   printf("\n");
 }
+
+#ifdef DEBUG_TOKENIZER
+void print_tokens(VecToken *tokens) {
+  for (int i = 0; i < tokens->len; i++) {
+    print_token(&tokens->data[i]);
+  }
+}
+
+struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
+{
+  VecToken tokens = {0};
+
+  for (;;) {
+    struct Token token;
+
+    token = next_token(tokenizer);
+    if (token.kind == TOKEN_ERROR) {
+      return (struct TokenizeResult){.is_ok = false, .msg = "Encountered error while tokenizing", .tokens = {0}};
+    }
+
+    if (token.kind == TOKEN_EOF) {
+      break;
+    }
+
+    vec_insert(&tokens, token);
+  }
+
+  return (struct TokenizeResult){.is_ok = true, .msg = NULL, .tokens = tokens};
+}
+#endif

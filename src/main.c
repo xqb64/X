@@ -299,6 +299,23 @@ struct RunResult run(struct CompilerOptions *opts)
 
   init_tokenizer(&tokenizer, src);
 
+#ifdef DEBUG_TOKENIZER
+  struct TokenizeResult tokenize_result;
+
+  tokenize_result = tokenize(&tokenizer);
+  if (!tokenize_result.is_ok) {
+    r.msg = tokenize_result.msg;
+    r.is_ok = false;
+    goto free_up2_tokenize;
+  }
+
+  print_tokens(&tokenize_result.tokens);
+
+  if (target_stage == STAGE_TOKENIZE) {
+    goto free_up2_tokenize;
+  }
+#endif
+
   init_parser(&tokenizer, &parser);
   parse_result = parse(&parser);
 
@@ -480,6 +497,11 @@ free_up2_collect_labels:
 
 free_up2_parse:
   free_ast(parse_result.ast);
+
+#ifdef DEBUG_TOKENIZER
+free_up2_tokenize:
+  vec_free(&tokenize_result.tokens);
+#endif
 
 free_up2_fread:
   free(read_file_result.contents);
