@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 
 #include "ir.h"
@@ -2801,6 +2802,11 @@ struct AsmResult codegen(struct IRProgram *ir_prog)
   return result;
 }
 
+static bool fits_i32(long long x)
+{
+  return x >= INT32_MIN && x <= INT32_MAX;
+}
+
 struct AsmProgram *fixup(struct AsmProgram *prog)
 {
   for (int i = 0; i < prog->funcs.len; i++) {
@@ -2809,43 +2815,69 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
       struct AsmInstr *asminstr = &prog->funcs.data[i].body.data[j];
       switch (asminstr->kind) {
         case AsmInstr_CMP: {
-          bool is_float, is_both_stack, is_dst_imm, is_dst_float_stack;
+          struct AsmType cmp_type = asminstr->as.cmp.asm_type;
 
-          is_float = (asminstr->as.cmp.asm_type.kind == AsmType_FLOAT ||
-                      asminstr->as.cmp.asm_type.kind == AsmType_DOUBLE);
+          bool is_float =
+              cmp_type.kind == AsmType_FLOAT || cmp_type.kind == AsmType_DOUBLE;
 
-          is_both_stack = (asminstr->as.cmp.lhs.kind == AsmOperand_STACK &&
-                           asminstr->as.cmp.rhs.kind == AsmOperand_STACK);
+          bool is_both_stack = asminstr->as.cmp.lhs.kind == AsmOperand_STACK &&
+                               asminstr->as.cmp.rhs.kind == AsmOperand_STACK;
 
-          is_dst_imm = (asminstr->as.cmp.rhs.kind == AsmOperand_IMM);
+          bool is_dst_imm = asminstr->as.cmp.rhs.kind == AsmOperand_IMM;
 
-          is_dst_float_stack =
-              (is_float && asminstr->as.cmp.rhs.kind == AsmOperand_STACK);
+          bool is_dst_float_stack =
+              is_float && asminstr->as.cmp.rhs.kind == AsmOperand_STACK;
 
-          if (is_both_stack || is_dst_imm || is_dst_float_stack) {
+          bool is_large_imm64 = cmp_type.kind == AsmType_QUADWORD &&
+                                asminstr->as.cmp.lhs.kind == AsmOperand_IMM &&
+                                !fits_i32(asminstr->as.cmp.lhs.as.imm);
+
+          if (is_both_stack || is_dst_imm || is_dst_float_stack ||
+              is_large_imm64) {
             enum AsmRegister scratch_reg = is_float ? XMM8 : R10;
+
             struct AsmOperand scratch_op = {
                 .kind = AsmOperand_REG,
                 .as.reg = scratch_reg,
-                .asm_type = asminstr->as.cmp.asm_type};
-            struct AsmInstr i1 = {0}, i2 = {0};
+                .asm_type = cmp_type,
+            };
 
+            struct AsmInstr i1 = {0};
             i1.kind = AsmInstr_MOV;
+            i1.asm_type = cmp_type;
+
+            if (is_large_imm64) {
+              i1.as.mov.src = asminstr->as.cmp.lhs;
+              i1.as.mov.dst = scratch_op;
+
+              struct AsmInstr i2 = {0};
+              i2.kind = AsmInstr_CMP;
+              i2.as.cmp.asm_type = cmp_type;
+              i2.as.cmp.lhs = scratch_op;
+              i2.as.cmp.rhs = asminstr->as.cmp.rhs;
+              i2.asm_type = cmp_type;
+
+              vec_insert(&instrs, i1);
+              vec_insert(&instrs, i2);
+              break;
+            }
+
             i1.as.mov.src = asminstr->as.cmp.rhs;
             i1.as.mov.dst = scratch_op;
-            i1.asm_type = asminstr->as.cmp.asm_type;
 
+            struct AsmInstr i2 = {0};
             i2.kind = AsmInstr_CMP;
+            i2.as.cmp.asm_type = cmp_type;
             i2.as.cmp.lhs = asminstr->as.cmp.lhs;
             i2.as.cmp.rhs = scratch_op;
-            i2.as.cmp.asm_type = asminstr->as.cmp.asm_type;
-            i2.asm_type = asminstr->as.cmp.asm_type;
+            i2.asm_type = cmp_type;
 
             vec_insert(&instrs, i1);
             vec_insert(&instrs, i2);
           } else {
             vec_insert(&instrs, *asminstr);
           }
+
           break;
         }
         case AsmInstr_CVT: {
