@@ -204,10 +204,10 @@ struct Parameter {
 };
 
 typedef Vector(struct Stmt) VecStmt;
+typedef Vector(struct Decl) VecDecl;
 typedef Vector(struct Parameter) VecParam;
 
 enum StmtKind {
-  STMT_FN,
   STMT_LET,
   STMT_RET,
   STMT_IF,
@@ -219,17 +219,7 @@ enum StmtKind {
   STMT_GOTO,
   STMT_LABELED,
   STMT_BLOCK,
-  STMT_EXTERN,
   STMT_EXPR,
-  STMT_STRUCT,
-  STMT_ENUM,
-};
-
-struct StmtFn {
-  char *name;
-  VecParam params;
-  Type retval;
-  VecStmt body;
 };
 
 struct StmtLet {
@@ -288,13 +278,6 @@ struct StmtBlock {
   VecStmt stmts;
 };
 
-struct StmtExtern {
-  char *name;
-  VecParam params;
-  Type retval;
-  bool is_variadic;
-};
-
 struct StmtExpr {
   struct Expr expr;
 };
@@ -337,12 +320,6 @@ struct EnumVariantItem {
 
 extern struct EnumVariantItem *enum_variants;
 
-struct StmtStruct {
-  char *name;
-  VecStructField fields;
-  bool is_union;
-};
-
 struct EnumVariant {
   char *name;
   int value;
@@ -350,15 +327,60 @@ struct EnumVariant {
 
 typedef Vector(struct EnumVariant) VecEnumVariant;
 
-struct StmtEnum {
+enum DeclKind {
+  DECL_FN,
+  DECL_STRUCT,
+  DECL_VARIABLE,
+  DECL_ENUM,
+  DECL_UNION,
+};
+
+struct DeclFn {
+  char *name;
+  VecParam params;
+  Type retval;
+  VecStmt body;
+  bool is_extern;
+  bool is_variadic;
+};
+
+struct DeclStruct {
+  char *name;
+  VecStructField fields;
+};
+
+struct DeclUnion {
+  char *name;
+  VecStructField fields;
+};
+
+struct DeclVariable {
+  char *name;
+  Type type;
+  struct Expr *init;
+  bool is_mut;
+  bool is_extern;
+};
+
+struct DeclEnum {
   char *name;
   VecEnumVariant variants;
+};
+
+struct Decl {
+  enum DeclKind kind;
+  union {
+    struct DeclFn fn;
+    struct DeclStruct struct_decl;
+    struct DeclUnion union_decl;
+    struct DeclVariable variable;
+    struct DeclEnum enum_decl;
+  } as;
 };
 
 struct Stmt {
   enum StmtKind kind;
   union {
-    struct StmtFn fn;
     struct StmtLet let;
     struct StmtRet ret;
     struct StmtIf if_stmt;
@@ -370,15 +392,12 @@ struct Stmt {
     struct StmtGoto goto_stmt;
     struct StmtLabeled labeled;
     struct StmtBlock block;
-    struct StmtExtern extern_stmt;
     struct StmtExpr expr_stmt;
-    struct StmtStruct struct_stmt;
-    struct StmtEnum enum_stmt;
   } as;
 };
 
 struct AST {
-  VecStmt stmts;
+  VecDecl decls;
 };
 
 struct Parser {
@@ -394,8 +413,8 @@ struct Parser {
   struct Token *prev;
   struct Token *curr;
 
-  struct StmtFn *current_fn;
-  VecStmt *global_stmts;
+  struct DeclFn *current_fn;
+  VecDecl *global_decls;
 };
 
 struct ParseFnResult {
@@ -404,6 +423,7 @@ struct ParseFnResult {
   union {
     struct Expr expr;
     struct Stmt stmt;
+    struct Decl decl;
   } as;
 };
 
@@ -419,7 +439,9 @@ struct ParseResult parse(struct Parser *parser);
 void print_expr(struct Expr *expr, int spaces);
 void free_expr(struct Expr *expr);
 void print_stmt(struct Stmt *stmt, int spaces);
+void print_decl(struct Decl *decl, int spaces);
 void free_stmt(struct Stmt *stmt);
+void free_decl(struct Decl *decl);
 void print_ast(struct AST *ast);
 void free_ast(struct AST *ast);
 

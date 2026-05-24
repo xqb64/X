@@ -220,8 +220,13 @@ static struct AsmOperand codegen_irvalue(struct IRValue *val)
     }
     case IRValue_VAR: {
       struct AsmOperand operand;
-      operand.kind = AsmOperand_PSEUDO;
-      operand.as.pseudo = val->as.var;
+      if (is_data_variable(val->as.var)) {
+        operand.kind = AsmOperand_DATA;
+        operand.as.data = strdup(val->as.var);
+      } else {
+        operand.kind = AsmOperand_PSEUDO;
+        operand.as.pseudo = val->as.var;
+      }
       operand.asm_type = type_to_asm_type(val->type);
       return operand;
     }

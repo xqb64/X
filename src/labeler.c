@@ -68,16 +68,6 @@ static struct LoopLabelResult loop_label_stmt(struct Stmt *stmt, char *label)
 
       break;
     }
-    case STMT_FN: {
-      for (int i = 0; i < stmt->as.fn.body.len; i++) {
-        struct LoopLabelResult r;
-        r = loop_label_stmt(&stmt->as.fn.body.data[i], label);
-        if (!r.is_ok) {
-          return r;
-        }
-      }
-      break;
-    }
     case STMT_IF: {
       struct LoopLabelResult then_res, else_res;
 
@@ -107,9 +97,6 @@ static struct LoopLabelResult loop_label_stmt(struct Stmt *stmt, char *label)
     case STMT_RET:
     case STMT_EXPR:
     case STMT_LET:
-    case STMT_EXTERN:
-    case STMT_STRUCT:
-    case STMT_ENUM:
     case STMT_GOTO:
       break;
     default:
@@ -120,11 +107,18 @@ static struct LoopLabelResult loop_label_stmt(struct Stmt *stmt, char *label)
 
 struct LoopLabelResult loop_label(struct AST *ast)
 {
-  for (int i = 0; i < ast->stmts.len; i++) {
-    struct LoopLabelResult r;
-    r = loop_label_stmt(&ast->stmts.data[i], NULL);
-    if (!r.is_ok) {
-      return r;
+  for (int i = 0; i < ast->decls.len; i++) {
+    struct Decl *decl = &ast->decls.data[i];
+    if (decl->kind != DECL_FN || decl->as.fn.is_extern) {
+      continue;
+    }
+
+    for (int j = 0; j < decl->as.fn.body.len; j++) {
+      struct LoopLabelResult r;
+      r = loop_label_stmt(&decl->as.fn.body.data[j], NULL);
+      if (!r.is_ok) {
+        return r;
+      }
     }
   }
   return (struct LoopLabelResult){.is_ok = true, .msg = NULL, .ast = ast};
@@ -156,18 +150,6 @@ static struct CollectLabelsResult collect_labels_stmt(struct Stmt *stmt,
       r = collect_labels_stmt(stmt->as.labeled.stmt, labels, funcname);
       if (!r.is_ok) {
         return r;
-      }
-      break;
-    }
-    case STMT_FN: {
-      for (int i = 0; i < stmt->as.fn.body.len; i++) {
-        struct CollectLabelsResult r;
-
-        r = collect_labels_stmt(&stmt->as.fn.body.data[i], labels,
-                                stmt->as.fn.name);
-        if (!r.is_ok) {
-          return r;
-        }
       }
       break;
     }
@@ -219,21 +201,24 @@ struct CollectLabelsResult collect_labels(struct AST *ast)
 {
   VecCharPtr labels = {0};
 
-  for (int i = 0; i < ast->stmts.len; i++) {
-    struct CollectLabelsResult r;
-
-    r = collect_labels_stmt(&ast->stmts.data[i], &labels, NULL);
-    if (!r.is_ok) {
-      for (int j = 0; j < labels.len; j++) {
-        free(labels.data[j]);
-      }
-      vec_free(&labels);
-      return r;
+  for (int i = 0; i < ast->decls.len; i++) {
+    struct Decl *decl = &ast->decls.data[i];
+    if (decl->kind != DECL_FN || decl->as.fn.is_extern) {
+      continue;
     }
-  }
 
-  for (int i = 0; i < labels.len; i++) {
-    printf("found label: %s\n", labels.data[i]);
+    for (int j = 0; j < decl->as.fn.body.len; j++) {
+      struct CollectLabelsResult r;
+      r = collect_labels_stmt(&decl->as.fn.body.data[j], &labels,
+                              decl->as.fn.name);
+      if (!r.is_ok) {
+        for (int k = 0; k < labels.len; k++) {
+          free(labels.data[k]);
+        }
+        vec_free(&labels);
+        return r;
+      }
+    }
   }
 
   return (struct CollectLabelsResult){
@@ -245,18 +230,6 @@ static struct LabelCheckResult check_labels_stmt(struct Stmt *stmt,
                                                  char *funcname)
 {
   switch (stmt->kind) {
-    case STMT_FN: {
-      for (int i = 0; i < stmt->as.fn.body.len; i++) {
-        struct LabelCheckResult r;
-
-        r = check_labels_stmt(&stmt->as.fn.body.data[i], labels,
-                              stmt->as.fn.name);
-        if (!r.is_ok) {
-          return r;
-        }
-      }
-      break;
-    }
     case STMT_GOTO: {
       bool is_found;
       char *label;
@@ -264,9 +237,7 @@ static struct LabelCheckResult check_labels_stmt(struct Stmt *stmt,
       is_found = false;
       label = mkstr("%s.%s", funcname, stmt->as.goto_stmt.label);
 
-      printf("labels->len is: %d\n", labels->len);
       for (int i = 0; i < labels->len; i++) {
-        printf("label inside is: %s\n", labels->data[i]);
         if (strcmp(labels->data[i], label) == 0) {
           is_found = true;
           break;
@@ -330,6 +301,16 @@ static struct LabelCheckResult check_labels_stmt(struct Stmt *stmt,
 
       break;
     }
+    case STMT_BLOCK: {
+      for (int i = 0; i < stmt->as.block.stmts.len; i++) {
+        struct LabelCheckResult r;
+        r = check_labels_stmt(&stmt->as.block.stmts.data[i], labels, funcname);
+        if (!r.is_ok) {
+          return r;
+        }
+      }
+      break;
+    }
     default:
       break;
   }
@@ -338,12 +319,19 @@ static struct LabelCheckResult check_labels_stmt(struct Stmt *stmt,
 
 struct LabelCheckResult check_labels(struct AST *ast, VecCharPtr *labels)
 {
-  for (int i = 0; i < ast->stmts.len; i++) {
-    struct LabelCheckResult r;
+  for (int i = 0; i < ast->decls.len; i++) {
+    struct Decl *decl = &ast->decls.data[i];
+    if (decl->kind != DECL_FN || decl->as.fn.is_extern) {
+      continue;
+    }
 
-    r = check_labels_stmt(&ast->stmts.data[i], labels, NULL);
-    if (!r.is_ok) {
-      return r;
+    for (int j = 0; j < decl->as.fn.body.len; j++) {
+      struct LabelCheckResult r;
+      r = check_labels_stmt(&decl->as.fn.body.data[j], labels,
+                            decl->as.fn.name);
+      if (!r.is_ok) {
+        return r;
+      }
     }
   }
   return (struct LabelCheckResult){.is_ok = true, .msg = NULL};

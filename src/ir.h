@@ -256,8 +256,11 @@ struct StaticConstant {
 };
 
 typedef Vector(struct StaticConstant) VecStaticConstant;
+typedef Vector(char *) VecExternVariable;
 
 extern VecStaticConstant global_constants;
+extern VecStaticConstant global_variables;
+extern VecExternVariable extern_variables;
 
 struct IrfyResult {
   bool is_ok;
@@ -272,6 +275,9 @@ void print_ir(struct IRProgram *prog);
 void free_ir_instr(struct IRInstr *instr);
 void free_ir_prog(struct IRProgram *prog);
 void free_global_constants(void);
+void free_global_variables(void);
+void free_extern_variables(void);
+bool is_data_variable(char *name);
 
 #if defined(DEBUG_IR) || defined(DEBUG_IR_OPT)
 void print_ir(struct IRProgram *prog);

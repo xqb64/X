@@ -1361,6 +1361,48 @@ static struct TypecheckResult typecheck_expr(struct Expr *expr,
   return res;
 }
 
+static struct TypecheckResult typecheck_initializer(struct Expr *init,
+                                                     Type expected_type,
+                                                     struct Symbol **sym_table,
+                                                     char *error_msg)
+{
+  struct TypecheckResult res;
+
+  res = typecheck_expr(init, *sym_table);
+  if (!res.is_ok) {
+    return res;
+  }
+
+  Type actual_type = init->type;
+  if (!types_equal(actual_type, expected_type)) {
+    bool is_literal =
+        (init->kind == EXPR_LITERAL && init->as.literal.kind == LITERAL_NUM);
+    bool is_unary_literal =
+        (init->kind == EXPR_UNARY &&
+         init->as.unary.expr->kind == EXPR_LITERAL &&
+         init->as.unary.expr->as.literal.kind == LITERAL_NUM);
+
+    if (is_literal || is_unary_literal) {
+      if (!promote_literal(init, expected_type)) {
+        return (struct TypecheckResult){
+            .is_ok = false,
+            .msg = error_msg,
+            .ast = NULL,
+        };
+      }
+    } else {
+      struct Expr *inner = malloc(sizeof(struct Expr));
+      *inner = *init;
+
+      init->kind = EXPR_CAST;
+      init->type = expected_type;
+      init->as.cast.expr = inner;
+    }
+  }
+
+  return (struct TypecheckResult){.is_ok = true, .msg = NULL, .ast = NULL};
+}
+
 static struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
                                              struct Symbol **sym_table)
 {
@@ -1377,123 +1419,6 @@ static struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
 
       break;
     }
-    case STMT_STRUCT: {
-      struct StructDef def;
-      def.name = stmt->as.struct_stmt.name;
-      def.fields = stmt->as.struct_stmt.fields; /* sharing the pointer */
-      def.size = 0;
-      def.alignment = 1;
-      def.is_union = stmt->as.struct_stmt.is_union;
-
-      /* Calculate offsets with x86_64 ABI padding */
-      for (int i = 0; i < def.fields.len; i++) {
-        int field_size, field_align;
-        get_type_size_and_align(&def.fields.data[i].type, &field_size,
-                                &field_align);
-
-        if (field_size == -1) {
-          return (struct TypecheckResult){
-              .is_ok = false, .msg = "Struct/Union field has invalid type"};
-        }
-
-        if (def.is_union) {
-          /* Union: All fields start at offset 0 */
-          stmt->as.struct_stmt.fields.data[i].offset = 0;
-          def.fields.data[i].offset = 0;
-
-          /* Size and alignment are simply the maximum of all fields */
-          if (field_size > def.size) {
-            def.size = field_size;
-          }
-          if (field_align > def.alignment) {
-            def.alignment = field_align;
-          }
-        } else {
-          /* Pad the current size to match the field's required alignment */
-          if (def.size % field_align != 0) {
-            def.size += field_align - (def.size % field_align);
-          }
-
-          /* Write back the calculated offset to the AST */
-          stmt->as.struct_stmt.fields.data[i].offset = def.size;
-          def.fields.data[i].offset = def.size; /* Update our table copy */
-
-          def.size += field_size;
-
-          /* Struct alignment is the largest alignment of its fields */
-          if (field_align > def.alignment) {
-            def.alignment = field_align;
-          }
-        }
-      }
-
-      /* Final padding so arrays of this struct align properly */
-      if (def.size % def.alignment != 0) {
-        def.size += def.alignment - (def.size % def.alignment);
-      }
-
-      struct_insert(&struct_table, def);
-      break;
-    }
-    case STMT_EXTERN: {
-      Type t = {0};
-      VecType param_types = {0};
-      for (int i = 0; i < stmt->as.extern_stmt.params.len; i++) {
-        vec_insert(&param_types,
-                   clone_type(stmt->as.extern_stmt.params.data[i].type));
-      }
-
-      t.kind = FN_T;
-      t.as.func.retval = malloc(sizeof(Type));
-      *t.as.func.retval = clone_type(stmt->as.extern_stmt.retval);
-      t.as.func.params = param_types;
-      t.as.func.is_variadic = stmt->as.extern_stmt.is_variadic;
-
-      sym_insert(sym_table, stmt->as.extern_stmt.name, t, false);
-      break;
-    }
-    case STMT_FN: {
-      if (sym_table) {
-        Type t = {0};
-
-        VecType types = {0};
-        for (int i = 0; i < stmt->as.fn.params.len; i++) {
-          vec_insert(&types, clone_type(stmt->as.fn.params.data[i].type));
-        }
-
-        t.kind = FN_T;
-        t.as.func.retval = malloc(sizeof(Type));
-        *t.as.func.retval = clone_type(stmt->as.fn.retval);
-        t.as.func.params = types;
-        t.as.func.is_variadic = false;
-
-        sym_insert(sym_table, stmt->as.fn.name, clone_type(t), false);
-      }
-
-      struct Symbol *fn_sym_table = sym_table ? *sym_table : NULL;
-      struct Symbol *outer_sym = fn_sym_table;
-
-      for (int i = 0; i < stmt->as.fn.params.len; i++) {
-        sym_insert(&fn_sym_table, stmt->as.fn.params.data[i].name,
-                   clone_type(stmt->as.fn.params.data[i].type),
-                   stmt->as.fn.params.data[i].is_mut);
-      }
-
-      for (int i = 0; i < stmt->as.fn.body.len; i++) {
-        res = typecheck_stmt(&stmt->as.fn.body.data[i], &fn_sym_table);
-        if (!res.is_ok) {
-          return res;
-        }
-      }
-
-      while (fn_sym_table && fn_sym_table != outer_sym) {
-        struct Symbol *tmp = fn_sym_table;
-        fn_sym_table = fn_sym_table->next;
-        free_symbol(tmp);
-      }
-
-      break;
-    }
     case STMT_BLOCK: {
       for (int i = 0; i < stmt->as.block.stmts.len; i++) {
         res = typecheck_stmt(&stmt->as.block.stmts.data[i], sym_table);
@@ -1504,39 +1429,13 @@ static struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
       break;
     }
     case STMT_LET: {
-      res = typecheck_expr(stmt->as.let.init, *sym_table);
+      res = typecheck_initializer(
+          stmt->as.let.init, stmt->as.let.type, sym_table,
+          "Type error: let init does not fit in the expected type");
       if (!res.is_ok) {
         return res;
       }
 
-      Type actual_type = stmt->as.let.init->type;
-      Type expected_type = stmt->as.let.type;
-
-      if (!types_equal(actual_type, expected_type)) {
-        bool is_literal = (stmt->as.let.init->kind == EXPR_LITERAL &&
-                           stmt->as.let.init->as.literal.kind == LITERAL_NUM);
-        bool is_unary_literal =
-            (stmt->as.let.init->kind == EXPR_UNARY &&
-             stmt->as.let.init->as.unary.expr->kind == EXPR_LITERAL &&
-             stmt->as.let.init->as.unary.expr->as.literal.kind == LITERAL_NUM);
-
-        if (is_literal || is_unary_literal) {
-          if (!promote_literal(stmt->as.let.init, expected_type)) {
-            return (struct TypecheckResult){
-                .is_ok = false,
-                .msg = "Type error: let init does not fit in the expected type",
-                .ast = NULL,
-            };
-          }
-        } else {
-          struct Expr *inner = malloc(sizeof(struct Expr));
-          *inner = *stmt->as.let.init;
-
-          stmt->as.let.init->kind = EXPR_CAST;
-          stmt->as.let.init->type = expected_type;
-          stmt->as.let.init->as.cast.expr = inner;
-        }
-      }
       sym_insert(sym_table, stmt->as.let.name, clone_type(stmt->as.let.type),
                  stmt->as.let.is_mut);
       break;
@@ -1649,7 +1548,6 @@ static struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
     }
     case STMT_BREAK:
     case STMT_CONTINUE:
-    case STMT_ENUM:
     case STMT_GOTO:
       break;
     default:
@@ -1659,13 +1557,171 @@ static struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
   return res;
 }
 
+static Type make_fn_type(struct DeclFn *fn)
+{
+  Type t = {0};
+  VecType param_types = {0};
+
+  for (int i = 0; i < fn->params.len; i++) {
+    vec_insert(&param_types, clone_type(fn->params.data[i].type));
+  }
+
+  t.kind = FN_T;
+  t.as.func.retval = malloc(sizeof(Type));
+  *t.as.func.retval = clone_type(fn->retval);
+  t.as.func.params = param_types;
+  t.as.func.is_variadic = fn->is_variadic;
+
+  return t;
+}
+
+static struct TypecheckResult typecheck_record_decl(char *name,
+                                                    VecStructField *fields,
+                                                    bool is_union)
+{
+  struct StructDef def;
+  def.name = name;
+  def.fields = *fields; /* sharing the pointer */
+  def.size = 0;
+  def.alignment = 1;
+  def.is_union = is_union;
+
+  /* Calculate offsets with x86_64 ABI padding */
+  for (int i = 0; i < def.fields.len; i++) {
+    int field_size, field_align;
+    get_type_size_and_align(&def.fields.data[i].type, &field_size,
+                            &field_align);
+
+    if (field_size == -1) {
+      return (struct TypecheckResult){
+          .is_ok = false, .msg = "Struct/Union field has invalid type"};
+    }
+
+    if (def.is_union) {
+      /* Union: All fields start at offset 0 */
+      fields->data[i].offset = 0;
+      def.fields.data[i].offset = 0;
+
+      /* Size and alignment are simply the maximum of all fields */
+      if (field_size > def.size) {
+        def.size = field_size;
+      }
+      if (field_align > def.alignment) {
+        def.alignment = field_align;
+      }
+    } else {
+      /* Pad the current size to match the field's required alignment */
+      if (def.size % field_align != 0) {
+        def.size += field_align - (def.size % field_align);
+      }
+
+      /* Write back the calculated offset to the AST */
+      fields->data[i].offset = def.size;
+      def.fields.data[i].offset = def.size; /* Update our table copy */
+
+      def.size += field_size;
+
+      /* Struct alignment is the largest alignment of its fields */
+      if (field_align > def.alignment) {
+        def.alignment = field_align;
+      }
+    }
+  }
+
+  /* Final padding so arrays of this struct align properly */
+  if (def.size % def.alignment != 0) {
+    def.size += def.alignment - (def.size % def.alignment);
+  }
+
+  struct_insert(&struct_table, def);
+  return (struct TypecheckResult){.is_ok = true, .msg = NULL, .ast = NULL};
+}
+
+static struct TypecheckResult typecheck_fn_decl(struct DeclFn *fn,
+                                                struct Symbol **sym_table)
+{
+  Type t;
+
+  t = make_fn_type(fn);
+  sym_insert(sym_table, fn->name, t, false);
+
+  if (fn->is_extern) {
+    return (struct TypecheckResult){.is_ok = true, .msg = NULL, .ast = NULL};
+  }
+
+  struct Symbol *fn_sym_table = sym_table ? *sym_table : NULL;
+  struct Symbol *outer_sym = fn_sym_table;
+
+  for (int i = 0; i < fn->params.len; i++) {
+    sym_insert(&fn_sym_table, fn->params.data[i].name,
+               clone_type(fn->params.data[i].type), fn->params.data[i].is_mut);
+  }
+
+  for (int i = 0; i < fn->body.len; i++) {
+    struct TypecheckResult res = typecheck_stmt(&fn->body.data[i],
+                                                &fn_sym_table);
+    if (!res.is_ok) {
+      return res;
+    }
+  }
+
+  while (fn_sym_table && fn_sym_table != outer_sym) {
+    struct Symbol *tmp = fn_sym_table;
+    fn_sym_table = fn_sym_table->next;
+    free_symbol(tmp);
+  }
+
+  return (struct TypecheckResult){.is_ok = true, .msg = NULL, .ast = NULL};
+}
+
+static struct TypecheckResult typecheck_variable_decl(
+    struct DeclVariable *variable, struct Symbol **sym_table)
+{
+  if (variable->init) {
+    struct TypecheckResult res = typecheck_initializer(
+        variable->init, variable->type, sym_table,
+        "Type error: variable init does not fit in the expected type");
+    if (!res.is_ok) {
+      return res;
+    }
+  }
+
+  sym_insert(sym_table, variable->name, clone_type(variable->type),
+             variable->is_mut);
+
+  return (struct TypecheckResult){.is_ok = true, .msg = NULL, .ast = NULL};
+}
+
+static struct TypecheckResult typecheck_decl(struct Decl *decl,
+                                             struct Symbol **sym_table)
+{
+  switch (decl->kind) {
+    case DECL_STRUCT:
+      return typecheck_record_decl(decl->as.struct_decl.name,
+                                   &decl->as.struct_decl.fields, false);
+    case DECL_UNION:
+      return typecheck_record_decl(decl->as.union_decl.name,
+                                   &decl->as.union_decl.fields, true);
+    case DECL_FN:
+      return typecheck_fn_decl(&decl->as.fn, sym_table);
+    case DECL_VARIABLE:
+      return typecheck_variable_decl(&decl->as.variable, sym_table);
+    case DECL_ENUM:
+      break;
+    default:
+      assert(0);
+  }
+
+  return (struct TypecheckResult){.is_ok = true, .msg = NULL, .ast = NULL};
+}
+
 struct TypecheckResult typecheck(struct AST *ast)
 {
   struct Symbol *global_sym = NULL;
 
-  for (int i = 0; i < ast->stmts.len; i++) {
+  for (int i = 0; i < ast->decls.len; i++) {
     struct TypecheckResult r;
-    r = typecheck_stmt(&ast->stmts.data[i], &global_sym);
+    r = typecheck_decl(&ast->decls.data[i], &global_sym);
     if (!r.is_ok) {
       while (global_sym) {
         struct Symbol *tmp = global_sym;

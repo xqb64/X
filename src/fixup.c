@@ -14,6 +14,12 @@ static bool is_shift_asm_binary(enum AsmInstrBinaryKind kind)
          kind == AsmInstrBinary_SAR;
 }
 
+static bool is_memory_operand(struct AsmOperand *op)
+{
+  return op->kind == AsmOperand_STACK || op->kind == AsmOperand_DATA ||
+         op->kind == AsmOperand_MEMORY || op->kind == AsmOperand_INDEXED;
+}
+
 struct FixupResult fixup(struct AsmProgram *prog)
 {
   struct FixupResult r;
@@ -32,19 +38,19 @@ struct FixupResult fixup(struct AsmProgram *prog)
           bool is_float =
               cmp_type.kind == AsmType_FLOAT || cmp_type.kind == AsmType_DOUBLE;
 
-          bool is_both_stack = asminstr->as.cmp.lhs.kind == AsmOperand_STACK &&
-                               asminstr->as.cmp.rhs.kind == AsmOperand_STACK;
+          bool is_both_memory = is_memory_operand(&asminstr->as.cmp.lhs) &&
+                                is_memory_operand(&asminstr->as.cmp.rhs);
 
           bool is_dst_imm = asminstr->as.cmp.rhs.kind == AsmOperand_IMM;
 
-          bool is_dst_float_stack =
-              is_float && asminstr->as.cmp.rhs.kind == AsmOperand_STACK;
+          bool is_dst_float_memory =
+              is_float && is_memory_operand(&asminstr->as.cmp.rhs);
 
           bool is_large_imm64 = cmp_type.kind == AsmType_QUADWORD &&
                                 asminstr->as.cmp.lhs.kind == AsmOperand_IMM &&
                                 !fits_i32(asminstr->as.cmp.lhs.as.imm);
 
-          if (is_both_stack || is_dst_imm || is_dst_float_stack ||
+          if (is_both_memory || is_dst_imm || is_dst_float_memory ||
               is_large_imm64) {
             enum AsmRegister scratch_reg = is_float ? XMM8 : R10;
 
@@ -159,13 +165,11 @@ struct FixupResult fixup(struct AsmProgram *prog)
           break;
         }
         case AsmInstr_MOV: {
-          if ((asminstr->as.mov.src.kind == AsmOperand_STACK &&
-               asminstr->as.mov.dst.kind == AsmOperand_STACK) ||
+          if ((is_memory_operand(&asminstr->as.mov.src) &&
+               is_memory_operand(&asminstr->as.mov.dst)) ||
               ((asminstr->asm_type.kind == AsmType_FLOAT ||
                 asminstr->asm_type.kind == AsmType_DOUBLE) &&
-               asminstr->as.mov.dst.kind == AsmOperand_STACK) ||
-              (asminstr->as.mov.src.kind == AsmOperand_MEMORY &&
-               asminstr->as.mov.dst.kind == AsmOperand_STACK)) {
+               is_memory_operand(&asminstr->as.mov.dst))) {
             enum AsmRegister scratch_reg;
             struct AsmOperand scratch_op;
             struct AsmInstrMov mov1, mov2;
@@ -232,7 +236,7 @@ struct FixupResult fixup(struct AsmProgram *prog)
 
           /* imul and float ops cannot use mem as dst */
           if ((asminstr->as.binary.kind == AsmInstrBinary_MUL || is_float) &&
-              asminstr->as.binary.rhs.kind == AsmOperand_STACK) {
+              is_memory_operand(&asminstr->as.binary.rhs)) {
             enum AsmRegister scratch_reg = is_float ? XMM8 : R10;
             struct AsmOperand scratch_op = {.kind = AsmOperand_REG,
                                             .as.reg = scratch_reg,
@@ -268,8 +272,8 @@ struct FixupResult fixup(struct AsmProgram *prog)
           }
 
           /* integer binary ops cannot use mem as both operands */
-          if (asminstr->as.binary.lhs.kind == AsmOperand_STACK &&
-              asminstr->as.binary.rhs.kind == AsmOperand_STACK) {
+          if (is_memory_operand(&asminstr->as.binary.lhs) &&
+              is_memory_operand(&asminstr->as.binary.rhs)) {
             enum AsmRegister scratch_reg = R10;
             struct AsmOperand scratch_op;
             struct AsmInstrMov mov;

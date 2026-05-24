@@ -240,16 +240,8 @@ static struct ResolveResult resolve_stmt(struct VariableMap **varmap,
 
       break;
     }
-    case STMT_EXTERN: {
-      char *cpy;
-
-      cpy = strdup(stmt->as.extern_stmt.name);
-      varmap_insert(varmap, stmt->as.extern_stmt.name, cpy);
-      break;
-    }
     case STMT_BREAK:
     case STMT_CONTINUE:
-    case STMT_ENUM:
     case STMT_GOTO:
       break;
     case STMT_EXPR: {
@@ -313,50 +305,6 @@ static struct ResolveResult resolve_stmt(struct VariableMap **varmap,
 
       break;
     }
-    case STMT_FN: {
-      struct VariableMap *variable_map, *outer_map;
-      char *cpy;
-
-      cpy = strdup(stmt->as.fn.name);
-
-      if (varmap) {
-        varmap_insert(varmap, stmt->as.fn.name, cpy);
-      }
-
-      variable_map = varmap ? *varmap : NULL;
-      outer_map = variable_map;
-
-      for (int i = 0; i < stmt->as.fn.params.len; i++) {
-        struct ResolveResult r;
-
-        r = resolve_param(&variable_map, &stmt->as.fn.params.data[i]);
-        if (!r.is_ok) {
-          return r;
-        }
-      }
-
-      for (int i = 0; i < stmt->as.fn.body.len; i++) {
-        struct ResolveResult r;
-
-        r = resolve_stmt(&variable_map, &stmt->as.fn.body.data[i]);
-        if (!r.is_ok) {
-          return r;
-        }
-      }
-
-      while (variable_map && variable_map != outer_map) {
-        struct VariableMap *tmp;
-
-        tmp = variable_map;
-        variable_map = variable_map->next;
-
-        free(tmp->name);
-        free(tmp->value.uniq_name);
-        free(tmp);
-      }
-
-      break;
-    }
     case STMT_BLOCK: {
       struct VariableMap *outer_map = *varmap;
 
@@ -399,17 +347,17 @@ static struct ResolveResult resolve_stmt(struct VariableMap **varmap,
       break;
     }
     case STMT_RET: {
-      struct ResolveResult r;
+      if (stmt->as.ret.val) {
+        struct ResolveResult r;
 
-      r = resolve_expr(varmap, stmt->as.ret.val);
-      if (!r.is_ok) {
-        return r;
+        r = resolve_expr(varmap, stmt->as.ret.val);
+        if (!r.is_ok) {
+          return r;
+        }
       }
 
       break;
     }
-    case STMT_STRUCT:
-      break;
     default:
       assert(0);
   }
@@ -417,13 +365,101 @@ static struct ResolveResult resolve_stmt(struct VariableMap **varmap,
   return (struct ResolveResult){.is_ok = true, .msg = NULL, .as.stmt = stmt};
 }
 
+static struct ResolveResult resolve_fn_decl(struct VariableMap **varmap,
+                                            struct DeclFn *fn)
+{
+  struct VariableMap *variable_map, *outer_map;
+  char *cpy;
+
+  cpy = strdup(fn->name);
+
+  if (varmap) {
+    varmap_insert(varmap, fn->name, cpy);
+  }
+
+  if (fn->is_extern) {
+    return (struct ResolveResult){.is_ok = true, .msg = NULL};
+  }
+
+  variable_map = varmap ? *varmap : NULL;
+  outer_map = variable_map;
+
+  for (int i = 0; i < fn->params.len; i++) {
+    struct ResolveResult r;
+
+    r = resolve_param(&variable_map, &fn->params.data[i]);
+    if (!r.is_ok) {
+      return r;
+    }
+  }
+
+  for (int i = 0; i < fn->body.len; i++) {
+    struct ResolveResult r;
+
+    r = resolve_stmt(&variable_map, &fn->body.data[i]);
+    if (!r.is_ok) {
+      return r;
+    }
+  }
+
+  while (variable_map && variable_map != outer_map) {
+    struct VariableMap *tmp;
+
+    tmp = variable_map;
+    variable_map = variable_map->next;
+
+    free(tmp->name);
+    free(tmp->value.uniq_name);
+    free(tmp);
+  }
+
+  return (struct ResolveResult){.is_ok = true, .msg = NULL};
+}
+
+static struct ResolveResult resolve_variable_decl(struct VariableMap **varmap,
+                                                  struct DeclVariable *variable)
+{
+  char *resolved_name;
+
+  if (variable->init) {
+    struct ResolveResult r = resolve_expr(varmap, variable->init);
+    if (!r.is_ok) {
+      return r;
+    }
+  }
+
+  resolved_name = strdup(variable->name);
+  varmap_insert(varmap, variable->name, resolved_name);
+
+  return (struct ResolveResult){.is_ok = true, .msg = NULL};
+}
+
+static struct ResolveResult resolve_decl(struct VariableMap **varmap,
+                                         struct Decl *decl)
+{
+  switch (decl->kind) {
+    case DECL_FN:
+      return resolve_fn_decl(varmap, &decl->as.fn);
+    case DECL_VARIABLE:
+      return resolve_variable_decl(varmap, &decl->as.variable);
+    case DECL_STRUCT:
+    case DECL_UNION:
+    case DECL_ENUM:
+      break;
+    default:
+      assert(0);
+  }
+
+  return (struct ResolveResult){.is_ok = true, .msg = NULL, .as.decl = decl};
+}
+
 struct ResolveResult resolve(struct AST *ast)
 {
   struct VariableMap *global_map = NULL;
-  for (int i = 0; i < ast->stmts.len; i++) {
+  for (int i = 0; i < ast->decls.len; i++) {
     struct ResolveResult r;
 
-    r = resolve_stmt(&global_map, &ast->stmts.data[i]);
+    r = resolve_decl(&global_map, &ast->decls.data[i]);
     if (!r.is_ok) {
       while (global_map) {
         struct VariableMap *tmp;
