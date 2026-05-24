@@ -420,6 +420,14 @@ Type get_common_type(struct Expr *lhs, struct Expr *rhs)
     return t1;
   }
 
+  if (t1.kind == F64_T || t2.kind == F64_T) {
+    return (Type){.kind = F64_T};
+  }
+
+  if (t1.kind == F32_T || t2.kind == F32_T) {
+    return (Type){.kind = F32_T};
+  }
+
   int size1 = get_type_size(t1);
   int size2 = get_type_size(t2);
 
@@ -1012,17 +1020,65 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
       }
 
       if (expr->as.binary.kind == EXPR_BIN_LOGICAL_AND ||
-          expr->as.binary.kind == EXPR_BIN_LOGICAL_OR ||
-          expr->as.binary.kind == EXPR_BIN_LESS ||
+          expr->as.binary.kind == EXPR_BIN_LOGICAL_OR) {
+        if (expr->as.binary.lhs->type.kind != BOOL_T ||
+            expr->as.binary.rhs->type.kind != BOOL_T) {
+          return (struct TypecheckResult){
+              .is_ok = false,
+              .msg = "Type error: logical operators require bool operands",
+              .ast = NULL};
+        }
+
+        struct TypecheckResult lhs_coerce =
+            coerce_expr_to_type(expr->as.binary.lhs, (Type){.kind = BOOL_T},
+                                "Type error: logical lhs must be bool");
+        if (!lhs_coerce.is_ok) {
+          return lhs_coerce;
+        }
+
+        struct TypecheckResult rhs_coerce =
+            coerce_expr_to_type(expr->as.binary.rhs, (Type){.kind = BOOL_T},
+                                "Type error: logical rhs must be bool");
+        if (!rhs_coerce.is_ok) {
+          return rhs_coerce;
+        }
+
+        expr->type = (Type){.kind = BOOL_T};
+        break;
+      }
+
+      if (expr->as.binary.kind == EXPR_BIN_LESS ||
           expr->as.binary.kind == EXPR_BIN_LESS_EQUAL ||
           expr->as.binary.kind == EXPR_BIN_GREATER ||
           expr->as.binary.kind == EXPR_BIN_GREATER_EQUAL ||
           expr->as.binary.kind == EXPR_BIN_EQUAL_EQUAL ||
           expr->as.binary.kind == EXPR_BIN_BANG_EQUAL) {
+        Type common_type =
+            get_common_type(expr->as.binary.lhs, expr->as.binary.rhs);
+        if (common_type.kind == UNKNOWN_T) {
+          return (struct TypecheckResult){
+              .is_ok = false,
+              .msg = "Unable to compute common type",
+              .ast = NULL};
+        }
+
+        struct TypecheckResult lhs_coerce = coerce_expr_to_type(
+            expr->as.binary.lhs, common_type,
+            "Type error: comparison lhs does not fit in the common type");
+        if (!lhs_coerce.is_ok) {
+          return lhs_coerce;
+        }
+
+        struct TypecheckResult rhs_coerce = coerce_expr_to_type(
+            expr->as.binary.rhs, common_type,
+            "Type error: comparison rhs does not fit in the common type");
+        if (!rhs_coerce.is_ok) {
+          return rhs_coerce;
+        }
+
         expr->type = (Type){.kind = BOOL_T};
         break;
       }
-
       if (is_bitwise_binop(expr->as.binary.kind)) {
         if (!is_integer_type(expr->as.binary.lhs->type.kind) ||
             !is_integer_type(expr->as.binary.rhs->type.kind)) {

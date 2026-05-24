@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "tokenizer.h"
 #include "typechecker.h"
 #include "util.h"
 
@@ -930,7 +931,25 @@ struct ParseFnResult primary(struct Parser *parser)
   res.is_ok = true;
   res.msg = NULL;
 
-  if (check(parser, TOKEN_NUMBER) || check(parser, TOKEN_FP_NUMBER)) {
+  if (check(parser, TOKEN_TRUE) || check(parser, TOKEN_FALSE)) {
+    bool is_true;
+    struct Token *token_literal;
+    struct Literal literal;
+
+    is_true = check(parser, TOKEN_TRUE);
+    token_literal = consume(parser, is_true ? TOKEN_TRUE : TOKEN_FALSE);
+    if (!token_literal) {
+      return (struct ParseFnResult){
+          .is_ok = false, .as.expr = {0}, .msg = "Expected 'true' or 'false'"};
+    }
+
+    literal.kind = LITERAL_BOOL;
+    literal.as.boolean = (bool) is_true;
+    literal.type = (Type){.kind = BOOL_T};
+
+    res.as.expr = (struct Expr){
+        .kind = EXPR_LITERAL, .as.literal = literal, .type = literal.type};
+  } else if (check(parser, TOKEN_NUMBER) || check(parser, TOKEN_FP_NUMBER)) {
     struct Literal literal;
     struct Token *token_literal;
     unsigned long long val;

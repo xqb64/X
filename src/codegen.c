@@ -2805,8 +2805,8 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
         case AsmInstr_CMP: {
           bool is_float, is_both_stack, is_dst_imm, is_dst_float_stack;
 
-          is_float = (asminstr->asm_type.kind == AsmType_FLOAT ||
-                      asminstr->asm_type.kind == AsmType_DOUBLE);
+          is_float = (asminstr->as.cmp.asm_type.kind == AsmType_FLOAT ||
+                      asminstr->as.cmp.asm_type.kind == AsmType_DOUBLE);
 
           is_both_stack = (asminstr->as.cmp.lhs.kind == AsmOperand_STACK &&
                            asminstr->as.cmp.rhs.kind == AsmOperand_STACK);
@@ -2818,20 +2818,22 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
 
           if (is_both_stack || is_dst_imm || is_dst_float_stack) {
             enum AsmRegister scratch_reg = is_float ? XMM8 : R10;
-            struct AsmOperand scratch_op = {.kind = AsmOperand_REG,
-                                            .as.reg = scratch_reg,
-                                            .asm_type = asminstr->asm_type};
+            struct AsmOperand scratch_op = {
+                .kind = AsmOperand_REG,
+                .as.reg = scratch_reg,
+                .asm_type = asminstr->as.cmp.asm_type};
             struct AsmInstr i1 = {0}, i2 = {0};
 
             i1.kind = AsmInstr_MOV;
             i1.as.mov.src = asminstr->as.cmp.rhs;
             i1.as.mov.dst = scratch_op;
-            i1.asm_type = asminstr->asm_type;
+            i1.asm_type = asminstr->as.cmp.asm_type;
 
             i2.kind = AsmInstr_CMP;
             i2.as.cmp.lhs = asminstr->as.cmp.lhs;
             i2.as.cmp.rhs = scratch_op;
-            i2.asm_type = asminstr->asm_type;
+            i2.as.cmp.asm_type = asminstr->as.cmp.asm_type;
+            i2.asm_type = asminstr->as.cmp.asm_type;
 
             vec_insert(&instrs, i1);
             vec_insert(&instrs, i2);
