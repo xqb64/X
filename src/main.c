@@ -278,6 +278,11 @@ struct RunResult run(struct CompilerOptions *opts)
   struct AsmResult asm_result;
   struct AsmProgram asm_prog;
   struct RunResult r;
+  char *asm_path, *o_path, *exe_path;
+
+  asm_path = NULL;
+  o_path = NULL;
+  exe_path = NULL;
 
   r.is_ok = true;
   r.msg = NULL;
@@ -464,7 +469,6 @@ struct RunResult run(struct CompilerOptions *opts)
     goto free_up2_asm;
   }
 
-  char *asm_path;
   asm_path = replace_ext(path, "s");
 
   emit(&asm_prog, asm_path);
@@ -472,7 +476,6 @@ struct RunResult run(struct CompilerOptions *opts)
     goto free_up2_asm;
   }
 
-  char *o_path, *exe_path;
   o_path = replace_ext(path, "o");
   exe_path = strip_ext(path);
 

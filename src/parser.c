@@ -934,7 +934,7 @@ struct ParseFnResult primary(struct Parser *parser)
   if (check(parser, TOKEN_TRUE) || check(parser, TOKEN_FALSE)) {
     bool is_true;
     struct Token *token_literal;
-    struct Literal literal;
+    struct Literal literal = {0};
 
     is_true = check(parser, TOKEN_TRUE);
     token_literal = consume(parser, is_true ? TOKEN_TRUE : TOKEN_FALSE);
@@ -950,7 +950,7 @@ struct ParseFnResult primary(struct Parser *parser)
     res.as.expr = (struct Expr){
         .kind = EXPR_LITERAL, .as.literal = literal, .type = literal.type};
   } else if (check(parser, TOKEN_NUMBER) || check(parser, TOKEN_FP_NUMBER)) {
-    struct Literal literal;
+    struct Literal literal = {0};
     struct Token *token_literal;
     unsigned long long val;
     bool is_float;
@@ -2574,6 +2574,7 @@ struct ParseFnResult parse_extern_stmt(struct Parser *parser)
 
       p.name = name;
       p.type = type;
+      p.is_mut = is_mut;
 
       vec_insert(&parameters, p);
 

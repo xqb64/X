@@ -81,6 +81,7 @@ char *strip_ext(char *path)
   total = a + 1;
 
   dot = strrchr(path, '.');
+
   new = malloc(total);
 
   strncpy(new, path, dot - path);

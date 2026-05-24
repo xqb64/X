@@ -22,7 +22,7 @@ struct RegAllocState {
   bool reg_used[NUM_ALLOCATABLE_INT_REGS];
 };
 
-static enum AsmRegister allocatable_sse_regs[] = {
+static __attribute__((unused)) enum AsmRegister allocatable_sse_regs[] = {
     XMM0,
     XMM1,
     XMM2,
@@ -133,14 +133,14 @@ struct InterferenceGraph {
   VecInterferenceNode nodes;
 };
 
-static enum AsmRegister caller_saved_int_regs[] = {
+static __attribute__((unused)) enum AsmRegister caller_saved_int_regs[] = {
     AX, DX, CX, SI, DI, R8, R9,
 };
 
 #define NUM_CALLER_SAVED_INT_REGS \
   ((int) (sizeof(caller_saved_int_regs) / sizeof(caller_saved_int_regs[0])))
 
-static enum AsmRegister caller_saved_sse_regs[] = {
+static __attribute__((unused)) enum AsmRegister caller_saved_sse_regs[] = {
     XMM0, XMM1,  XMM2,  XMM3,  XMM4,  XMM5,  XMM6,  XMM7,
     XMM9, XMM10, XMM11, XMM12, XMM13, XMM14, XMM15,
 };
@@ -148,7 +148,7 @@ static enum AsmRegister caller_saved_sse_regs[] = {
 #define NUM_CALLER_SAVED_SSE_REGS \
   ((int) (sizeof(caller_saved_sse_regs) / sizeof(caller_saved_sse_regs[0])))
 
-static enum AsmRegister callee_saved_int_regs[] = {
+static __attribute__((unused)) enum AsmRegister callee_saved_int_regs[] = {
     BX, R12, R13, R14, R15,
 };
 

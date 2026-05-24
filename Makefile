@@ -9,12 +9,9 @@ CFLAGS += -std=gnu11
 CFLAGS += -Wshadow -Wall -Wextra -Werror
 CFLAGS += -fsanitize=undefined
 CFLAGS += -Wswitch-default
-CFLAGS += -Wredundant-decls
-CFLAGS += -Wno-unused-parameter -Wno-unused-variable
 CFLAGS += -Wformat-security
 CFLAGS += -Wunreachable-code
 CFLAGS += -O3
-CFLAGS += -Wno-maybe-uninitialized
 LDLIBS += -lm
 
 # Optional build switches:

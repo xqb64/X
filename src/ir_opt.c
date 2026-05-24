@@ -1089,7 +1089,7 @@ void compute_ir_instr_use_def(struct IRInstr *instr, VecIRNameSet *use,
   }
 }
 
-void compute_ir_block_use_def(struct IRFunction *fn, struct IRBasicBlock *block,
+void compute_ir_block_use_def(struct IRBasicBlock *block,
                               struct IRInstrLiveness *lv)
 {
   for (int i = block->start; i <= block->end; i++) {
@@ -1155,8 +1155,7 @@ void solve_ir_block_liveness(struct IRCFG *cfg)
   }
 }
 
-void compute_ir_instr_liveness_from_blocks(struct IRFunction *fn,
-                                           struct IRCFG *cfg,
+void compute_ir_instr_liveness_from_blocks(struct IRCFG *cfg,
                                            struct IRInstrLiveness *lv)
 {
   for (int bi = 0; bi < cfg->block_count; bi++) {
@@ -1201,11 +1200,11 @@ struct IRInstrLiveness *compute_ir_liveness_cfg(struct IRFunction *fn)
   struct IRCFG cfg = build_ir_cfg(fn);
 
   for (int bi = 0; bi < cfg.block_count; bi++) {
-    compute_ir_block_use_def(fn, &cfg.blocks[bi], lv);
+    compute_ir_block_use_def(&cfg.blocks[bi], lv);
   }
 
   solve_ir_block_liveness(&cfg);
-  compute_ir_instr_liveness_from_blocks(fn, &cfg, lv);
+  compute_ir_instr_liveness_from_blocks(&cfg, lv);
 
   free_ir_cfg(&cfg);
 
