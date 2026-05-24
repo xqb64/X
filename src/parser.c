@@ -1105,6 +1105,12 @@ struct ParseFnResult primary(struct Parser *parser)
     }
 
     res = expr_res;
+  } else {
+    return (struct ParseFnResult){
+      .is_ok = false, 
+      .msg = "Expected primary expression", 
+      .as.expr = {0}
+    };
   }
 
   return res;
