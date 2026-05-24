@@ -1508,7 +1508,7 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
     }
     case STMT_FN: {
       if (sym_table) {
-        Type t;
+        Type t = {0};
 
         VecType types = {0};
         for (int i = 0; i < stmt->as.fn.params.len; i++) {
@@ -1519,6 +1519,7 @@ struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
         t.as.func.retval = malloc(sizeof(Type));
         *t.as.func.retval = clone_type(stmt->as.fn.retval);
         t.as.func.params = types;
+        t.as.func.is_variadic = false;
 
         sym_insert(sym_table, stmt->as.fn.name, clone_type(t), false);
       }

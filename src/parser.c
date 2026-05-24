@@ -2089,6 +2089,7 @@ struct ParseFnResult parse_fn_stmt(struct Parser *parser)
 
       p.name = name;
       p.type = type;
+      p.is_mut = is_mut;
 
       vec_insert(&parameters, p);
 

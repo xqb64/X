@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "codegen.h"
 #include "util.h"
 
 bool asm_type_can_live_in_int_reg(struct AsmType type)
@@ -187,12 +188,17 @@ VecPseudoType collect_pseudo_types(struct AsmFunction *fn)
         remember_operand_type(&types, &instr->as.lea.dst);
         break;
 
+      case AsmInstr_DIV:
+        remember_operand_type(&types, &instr->as.div.divisor);
+        break;
+
       case AsmInstr_CALL:
       case AsmInstr_RET:
       case AsmInstr_JMP:
       case AsmInstr_JmpCC:
       case AsmInstr_LBL:
       case AsmInstr_REP_MOVSB:
+      case AsmInstr_SIGN_EXTEND_AX:
         break;
 
       default:
@@ -1092,6 +1098,12 @@ void compute_instr_use_def(struct AsmInstr *instr, VecPseudo *use,
       break;
     }
 
+    case AsmInstr_DIV: {
+      add_def_operand(def, &instr->as.div.divisor);
+      add_use_operand(use, &instr->as.div.divisor);
+      break;
+    }
+
     case AsmInstr_LEA: {
       /*
        * Important:
@@ -1110,7 +1122,8 @@ void compute_instr_use_def(struct AsmInstr *instr, VecPseudo *use,
     case AsmInstr_JMP:
     case AsmInstr_JmpCC:
     case AsmInstr_LBL:
-    case AsmInstr_REP_MOVSB: {
+    case AsmInstr_REP_MOVSB:
+    case AsmInstr_SIGN_EXTEND_AX: {
       break;
     }
 
@@ -2019,12 +2032,19 @@ struct AsmInstr *regalloc_instr_from_homes(struct AsmInstr *instr,
       break;
     }
 
+    case AsmInstr_DIV: {
+      regalloc_op_from_homes(&instr->as.div.divisor, homes, map,
+                             used_stack_bytes);
+      break;
+    }
+
     case AsmInstr_CALL:
     case AsmInstr_RET:
     case AsmInstr_JMP:
     case AsmInstr_JmpCC:
     case AsmInstr_LBL:
-    case AsmInstr_REP_MOVSB: {
+    case AsmInstr_REP_MOVSB:
+    case AsmInstr_SIGN_EXTEND_AX: {
       break;
     }
 

@@ -1056,6 +1056,41 @@ void emit(struct AsmProgram *prog, char *path)
           fprintf(f, "rep movsb\n");
           break;
         }
+        case AsmInstr_SIGN_EXTEND_AX: {
+          switch (instr->asm_type.kind) {
+            case AsmType_LONGWORD:
+              fprintf(f, "cdq\n");
+              break;
+            case AsmType_QUADWORD:
+              fprintf(f, "cqo\n");
+              break;
+            default:
+              assert(0 && "integer div currently supports only 32/64-bit");
+          }
+          break;
+        }
+        case AsmInstr_DIV: {
+          if (instr->as.div.is_signed) {
+            fprintf(f, "idiv");
+          } else {
+            fprintf(f, "div");
+          }
+
+          switch (instr->asm_type.kind) {
+            case AsmType_LONGWORD:
+              fprintf(f, "l ");
+              break;
+            case AsmType_QUADWORD:
+              fprintf(f, "q ");
+              break;
+            default:
+              assert(0 && "integer div currently supports only 32/64-bit");
+          }
+
+          emit_operand(f, &instr->as.div.divisor);
+          fprintf(f, "\n");
+          break;
+        }
         default:
           break;
       }

@@ -1,9 +1,9 @@
 #include "codegen.h"
 
 #include <assert.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdint.h>
 #include <string.h>
 
 #include "ir.h"
@@ -1153,6 +1153,105 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
 {
   switch (ir_instr->kind) {
     case IRInstr_BIN: {
+      if (ir_instr->as.binary.kind == IRInstrBinary_DIV) {
+        struct AsmOperand lhs = codegen_irvalue(ir_instr->as.binary.lhs);
+        struct AsmOperand rhs = codegen_irvalue(ir_instr->as.binary.rhs);
+        struct AsmOperand dst = codegen_irvalue(ir_instr->as.binary.dst);
+
+        bool is_float = dst.asm_type.kind == AsmType_FLOAT ||
+                        dst.asm_type.kind == AsmType_DOUBLE;
+
+        if (!is_float) {
+          bool is_signed = !is_unsigned(ir_instr->as.binary.dst->type.kind);
+
+          assert((dst.asm_type.kind == AsmType_LONGWORD ||
+                  dst.asm_type.kind == AsmType_QUADWORD) &&
+                 "start with 32/64-bit integer division; promote smaller ints "
+                 "first");
+
+          struct AsmOperand ax = {
+              .kind = AsmOperand_REG,
+              .as.reg = AX,
+              .asm_type = dst.asm_type,
+          };
+
+          struct AsmOperand dx = {
+              .kind = AsmOperand_REG,
+              .as.reg = DX,
+              .asm_type = dst.asm_type,
+          };
+
+          struct AsmOperand r10 = {
+              .kind = AsmOperand_REG,
+              .as.reg = R10,
+              .asm_type = dst.asm_type,
+          };
+
+          /*
+            Save divisor before clobbering AX/DX.
+            Also avoids illegal `div $imm`.
+          */
+          vec_insert(instrs, ((struct AsmInstr){
+                                 .kind = AsmInstr_MOV,
+                                 .asm_type = dst.asm_type,
+                                 .as.mov = {.src = rhs, .dst = r10},
+                             }));
+
+          /*
+            Dividend goes in AX.
+          */
+          vec_insert(instrs, ((struct AsmInstr){
+                                 .kind = AsmInstr_MOV,
+                                 .asm_type = dst.asm_type,
+                                 .as.mov = {.src = lhs, .dst = ax},
+                             }));
+
+          if (is_signed) {
+            /*
+              cdq/cqo: sign-extend AX into DX:AX.
+            */
+            vec_insert(instrs, ((struct AsmInstr){
+                                   .kind = AsmInstr_SIGN_EXTEND_AX,
+                                   .asm_type = dst.asm_type,
+                               }));
+          } else {
+            /*
+              Unsigned division requires high half = 0.
+            */
+            vec_insert(instrs,
+                       ((struct AsmInstr){
+                           .kind = AsmInstr_MOV,
+                           .asm_type = dst.asm_type,
+                           .as.mov =
+                               {
+                                   .src = {.kind = AsmOperand_IMM, .as.imm = 0},
+                                   .dst = dx,
+                               },
+                       }));
+          }
+
+          vec_insert(instrs, ((struct AsmInstr){
+                                 .kind = AsmInstr_DIV,
+                                 .asm_type = dst.asm_type,
+                                 .as.div =
+                                     {
+                                         .is_signed = is_signed,
+                                         .divisor = r10,
+                                     },
+                             }));
+
+          /*
+            Quotient is in AX.
+          */
+          vec_insert(instrs, ((struct AsmInstr){
+                                 .kind = AsmInstr_MOV,
+                                 .asm_type = dst.asm_type,
+                                 .as.mov = {.src = ax, .dst = dst},
+                             }));
+
+          break;
+        }
+      }
       if (is_comparison(ir_instr->as.binary.kind)) {
         Type common = ir_instr->as.binary.dst->type;
         bool is_signed = !is_unsigned(common.kind);
@@ -1551,9 +1650,9 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
       break;
     }
     case IRInstr_CALL: {
-      /* According to the SystemV ABI, the first six int arguments and pointers
-       * are passed via the int regs, and the first eight floating point
-       * arguments are passed via the SSE registers. */
+      /* According to the SystemV ABI, the first six int arguments and
+       * pointers are passed via the int regs, and the first eight floating
+       * point arguments are passed via the SSE registers. */
       enum AsmRegister int_arg_regs[] = {DI, SI, DX, CX, R8, R9};
       enum AsmRegister xmm_arg_regs[] = {XMM0, XMM1, XMM2, XMM3,
                                          XMM4, XMM5, XMM6, XMM7};
@@ -1630,9 +1729,9 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
         }
       }
 
-      /* The SystemV ABI requires the stack pointer (%rsp) to be 16-byte aligned
-       * right before the `call` instruction is executed.
-       * We calculate the padding needed to satisfy this requirement. */
+      /* The SystemV ABI requires the stack pointer (%rsp) to be 16-byte
+       * aligned right before the `call` instruction is executed. We calculate
+       * the padding needed to satisfy this requirement. */
       int stack_padding =
           num_stack_bytes % 16 != 0 ? 16 - (num_stack_bytes % 16) : 0;
       int total_stack_adjustment = num_stack_bytes + stack_padding;
@@ -1699,7 +1798,8 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
                                  .as.mov = {.src = scratch_reg, .dst = dst_op},
                                  .asm_type = dst_op.asm_type}));
         } else {
-          /* If it is a large struct, we need rep movsb to copy it to the stack.
+          /* If it is a large struct, we need rep movsb to copy it to the
+           * stack.
            */
           struct AsmOperand rsi = {
               .kind = AsmOperand_REG,
@@ -1764,7 +1864,8 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
 
         if (arg_locs[i].num_eightbytes == 1) {
           if (ir_instr->as.call.args.data[i]->type.kind == STRUCT_T) {
-            /* Small struct passed in a single register: move it from memory. */
+            /* Small struct passed in a single register: move it from memory.
+             */
             struct AsmOperand r10 = {
                 .kind = AsmOperand_REG,
                 .as.reg = R10,
@@ -1885,9 +1986,9 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
         struct AsmOperand dst_op = codegen_irvalue(ir_instr->as.call.dst);
 
         if (ir_instr->as.call.dst->type.kind == STRUCT_T) {
-          /* If a struct is returned in registers, the ABI says it will be split
-           * across %rax and %rdx (or %xmm0 and %xmm1). We must piece it back
-           * together into our local memory destination. */
+          /* If a struct is returned in registers, the ABI says it will be
+           * split across %rax and %rdx (or %xmm0 and %xmm1). We must piece it
+           * back together into our local memory destination. */
           struct ABIClassification cls =
               classify_type(&ir_instr->as.call.dst->type);
 
@@ -2569,8 +2670,8 @@ struct AsmFunction codegen_fn(struct IRFunction *ir_func)
    * this will decrement the stack pointer by 8.  Then an instruction
    * like `pushq %rbp`, will decrement the stack pointer by another 8.
    * Then we have `movq %rsp, %rbp`, which means that the return address
-   * is at 8(%rbp), and first stack-passed argument will have been at 16(%rbp).
-   * The locals are starting off at -8(%rbp).  */
+   * is at 8(%rbp), and first stack-passed argument will have been at
+   * 16(%rbp). The locals are starting off at -8(%rbp).  */
   int stack_offset = 16;
 
   /* Loop through every parameter and classify it.
@@ -2594,8 +2695,8 @@ struct AsmFunction codegen_fn(struct IRFunction *ir_func)
      * If size is 9 to 16 bytes: (size + 7) is 16 to 23. Integer division by 8
      * results in 2 eightbytes.
      *
-     * If size is 17 to 24 bytes: (size + 7) is 24 to 31. Integer division by 8
-     * results in 3 eightbytes. */
+     * If size is 17 to 24 bytes: (size + 7) is 24 to 31. Integer division by
+     * 8 results in 3 eightbytes. */
     int num_eb = (size + 7) / 8;
 
     bool falls_to_memory = cls.is_memory;

@@ -108,6 +108,8 @@ enum AsmInstrKind {
   AsmInstr_UNARY,
   AsmInstr_CVT,
   AsmInstr_REP_MOVSB,
+  AsmInstr_SIGN_EXTEND_AX,
+  AsmInstr_DIV,
 };
 
 struct AsmInstrMov {
@@ -228,6 +230,15 @@ struct AsmInstrCvt {
   struct AsmOperand dst;
 };
 
+struct AsmInstrSignExtendAX {
+  short __dummy;
+};
+
+struct AsmInstrDiv {
+  bool is_signed;
+  struct AsmOperand divisor;
+};
+
 struct AsmInstr {
   enum AsmInstrKind kind;
   struct AsmType asm_type;
@@ -246,6 +257,8 @@ struct AsmInstr {
     struct AsmInstrLea lea;
     struct AsmInstrUnary unary;
     struct AsmInstrCvt cvt;
+    struct AsmInstrSignExtendAX sign_extend_ax;
+    struct AsmInstrDiv div;
   } as;
 };
 
