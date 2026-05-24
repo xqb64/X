@@ -1,6 +1,7 @@
 #ifndef X_TYPECHECKER_H
 #define X_TYPECHECKER_H
 
+#include "ir.h"
 #include "parser.h"
 
 struct TypecheckResult {

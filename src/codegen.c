@@ -9,6 +9,11 @@
 #include "typechecker.h"
 #include "util.h"
 
+bool cast_can_be_plain_mov(enum IRCastKind k)
+{
+  return k == IRCast_None || k == IRCast_Truncate || k == IRCast_Bitcast;
+}
+
 void print_asm_type(struct AsmType type)
 {
   switch (type.kind) {
@@ -2153,7 +2158,8 @@ void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
       struct AsmOperand src = codegen_irvalue(ir_instr->as.cast.src);
       struct AsmOperand dst = codegen_irvalue(ir_instr->as.cast.dst);
 
-      if (src.kind == AsmOperand_IMM) {
+      if (src.kind == AsmOperand_IMM &&
+          cast_can_be_plain_mov(ir_instr->as.cast.kind)) {
         struct AsmInstr i = {0};
         i.kind = AsmInstr_MOV;
         i.as.mov.src = src;
@@ -2843,34 +2849,44 @@ struct AsmProgram *fixup(struct AsmProgram *prog)
           break;
         }
         case AsmInstr_CVT: {
-          if (asminstr->as.cvt.dst.kind == AsmOperand_STACK) {
-            bool is_float_dst =
-                (asminstr->as.cvt.dst.asm_type.kind == AsmType_FLOAT ||
-                 asminstr->as.cvt.dst.asm_type.kind == AsmType_DOUBLE);
+          bool src_is_imm = asminstr->as.cvt.src.kind == AsmOperand_IMM;
 
-            struct AsmOperand scratch_op = {
-                .kind = AsmOperand_REG,
-                .as.reg = is_float_dst ? XMM8 : R10,
-                .asm_type = asminstr->as.cvt.dst.asm_type};
+          if (src_is_imm && (asminstr->as.cvt.kind == AsmCast_ZeroExtend ||
+                             asminstr->as.cvt.kind == AsmCast_SignExtend)) {
+            struct AsmInstr mov = {0};
+            mov.kind = AsmInstr_MOV;
+            mov.asm_type = asminstr->as.cvt.dst.asm_type;
+            mov.as.mov.src = asminstr->as.cvt.src;
+            mov.as.mov.dst = asminstr->as.cvt.dst;
 
-            struct AsmInstr i1 = {0}, i2 = {0};
+            mov.as.mov.src.asm_type = asminstr->as.cvt.dst.asm_type;
 
-            i1.kind = AsmInstr_CVT;
-            i1.as.cvt.kind = asminstr->as.cvt.kind;
-            i1.as.cvt.src = asminstr->as.cvt.src;
-            i1.as.cvt.dst = scratch_op;
-            i1.asm_type = asminstr->asm_type;
-
-            i2.kind = AsmInstr_MOV;
-            i2.as.mov.src = scratch_op;
-            i2.as.mov.dst = asminstr->as.cvt.dst;
-            i2.asm_type = asminstr->as.cvt.dst.asm_type;
-
-            vec_insert(&instrs, i1);
-            vec_insert(&instrs, i2);
-          } else {
-            vec_insert(&instrs, *asminstr);
+            vec_insert(&instrs, mov);
+            break;
           }
+
+          if (src_is_imm) {
+            struct AsmOperand scratch = {
+                .kind = AsmOperand_REG,
+                .as.reg = R10,
+                .asm_type = asminstr->as.cvt.src.asm_type,
+            };
+
+            struct AsmInstr mov = {0};
+            mov.kind = AsmInstr_MOV;
+            mov.asm_type = scratch.asm_type;
+            mov.as.mov.src = asminstr->as.cvt.src;
+            mov.as.mov.dst = scratch;
+
+            struct AsmInstr cvt = *asminstr;
+            cvt.as.cvt.src = scratch;
+
+            vec_insert(&instrs, mov);
+            vec_insert(&instrs, cvt);
+            break;
+          }
+
+          vec_insert(&instrs, *asminstr);
           break;
         }
         case AsmInstr_LEA: {

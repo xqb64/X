@@ -656,6 +656,30 @@ bool promote_literal(struct Expr *expr, Type target_type)
   return false;
 }
 
+bool is_float_type(enum TypeKind k)
+{
+  return k == F32_T || k == F64_T;
+}
+
+bool is_scalar_type(Type t)
+{
+  return is_integer_type(t.kind) || t.kind == BOOL_T || is_float_type(t.kind) ||
+         t.kind == PTR_T;
+}
+
+bool can_explicit_cast(Type src, Type dst)
+{
+  if (types_equal(src, dst)) {
+    return true;
+  }
+
+  if (is_scalar_type(src) && is_scalar_type(dst)) {
+    return true;
+  }
+
+  return false;
+}
+
 struct TypecheckResult coerce_expr_to_type(struct Expr *expr, Type target_type,
                                            char *err_msg)
 {
@@ -925,10 +949,10 @@ struct TypecheckResult typecheck_expr(struct Expr *expr,
         return r;
       }
 
-      struct TypecheckResult coerce_r = coerce_expr_to_type(
-          expr->as.cast.expr, expr->as.cast.target_type, "Invalid cast");
-      if (!coerce_r.is_ok) {
-        return coerce_r;
+      if (!can_explicit_cast(expr->as.cast.expr->type,
+                             expr->as.cast.target_type)) {
+        return (struct TypecheckResult){
+            .is_ok = false, .msg = "Invalid cast", .ast = NULL};
       }
 
       expr->type = clone_type(expr->as.cast.target_type);
