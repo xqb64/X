@@ -1081,7 +1081,7 @@ struct ParseFnResult primary(struct Parser *parser)
       res.as.expr =
           (struct Expr){.kind = EXPR_STRUCT_INIT, .as.struct_init = init};
     } else {
-      struct ExprVar var;
+      struct ExprVar var = {0};
       var.name = strndup(token_id->start, token_id->len);
       var.type = (Type){.kind = UNKNOWN_T};
 
