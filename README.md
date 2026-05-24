@@ -20,6 +20,7 @@ The X code is first tokenized, then parsed with a classic handcrafted recursive-
   - if/else
   - loop {}
   - while
+  - do while
   - break/continue
   - goto
 - mut keyword for variables
@@ -39,7 +40,6 @@ The X code is first tokenized, then parsed with a classic handcrafted recursive-
 ## Roadmap
 - named loops
 - for loops
-- do while loops
 - comments
 - switch and/or match
 - e.g. f64 literals
