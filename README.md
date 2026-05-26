@@ -113,6 +113,41 @@ The primary responsibility of the fixup pass is to enforce the operand constrain
 - asm
 - etc
 
+## Examples
+
+Just imagine you're writing C, but use the Rust syntax:
+
+```rust
+extern fn printf(fmt: str, ...) -> i32;
+
+fn main() -> i32 {
+  let mut x: i32 = 0;
+  while (x < 5) {
+    printf("%d\n", x);
+    x += 1;
+  }
+  ret 0;
+}
+```
+
+## Building
+
+See Makefile.
+
+e.g.
+
+```
+make -j16
+```
+
+...then run:
+
+```
+./compiler spam.x
+./spam
+```
+
+
 ## License
 
 Licensed under the MIT license, for details see LICENSE.
