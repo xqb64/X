@@ -1,7 +1,7 @@
 #include "fixup.h"
 
-#include <stdlib.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 static bool fits_i32(long long x)
 {

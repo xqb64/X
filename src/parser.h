@@ -23,6 +23,7 @@ enum TypeKind {
   F64_T,
   BOOL_T,
   STR_T,
+  TASK_T,
   FN_T,
   VOID_T,
   PTR_T,
@@ -40,6 +41,7 @@ struct Type {
       VecType params;
       Type *retval;
       bool is_variadic;
+      bool is_async;
     } func;
     struct Type *base;
     char *struct_name;
@@ -79,6 +81,7 @@ enum ExprKind {
   EXPR_CAST,
   EXPR_STRUCT_INIT,
   EXPR_MEMBER,
+  EXPR_AWAIT,
 };
 
 enum ExprBinKind {
@@ -176,6 +179,10 @@ struct ExprAs {
   Type target_type;
 };
 
+struct ExprAwait {
+  struct Expr *expr;
+};
+
 struct Expr {
   enum ExprKind kind;
   union {
@@ -192,6 +199,7 @@ struct Expr {
     struct ExprCast cast;
     struct ExprStructInit struct_init;
     struct ExprMember member;
+    struct ExprAwait await_expr;
     struct ExprAs as;
   } as;
   Type type;
@@ -220,6 +228,7 @@ enum StmtKind {
   STMT_LABELED,
   STMT_BLOCK,
   STMT_EXPR,
+  STMT_YIELD,
 };
 
 struct StmtLet {
@@ -342,6 +351,7 @@ struct DeclFn {
   VecStmt body;
   bool is_extern;
   bool is_variadic;
+  bool is_async;
 };
 
 struct DeclStruct {
@@ -445,7 +455,8 @@ void free_decl(struct Decl *decl);
 void print_ast(struct AST *ast);
 void free_ast(struct AST *ast);
 
-#if defined(DEBUG_PARSER) || defined(DEBUG_RESOLVER) || defined(DEBUG_TYPECHECKER) || defined(DEBUG_LABELER)
+#if defined(DEBUG_PARSER) || defined(DEBUG_RESOLVER) || \
+    defined(DEBUG_TYPECHECKER) || defined(DEBUG_LABELER)
 void print_ast(struct AST *ast);
 #endif
 

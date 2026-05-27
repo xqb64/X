@@ -8,6 +8,7 @@
 #include "parser.h"
 #include "typechecker.h"
 #include "util.h"
+#include "vector.h"
 
 VecStaticConstant global_constants = {0};
 VecStaticConstant global_variables = {0};
@@ -135,6 +136,17 @@ void free_ir_instr(struct IRInstr *instr)
       }
       break;
     }
+    case IRInstr_SPAWN: {
+      for (int i = 0; i < instr->as.spawn.args.len; i++) {
+        free_ir_val(instr->as.spawn.args.data[i]);
+      }
+      vec_free(&instr->as.spawn.args);
+
+      if (instr->as.spawn.dst) {
+        free_ir_val(instr->as.spawn.dst);
+      }
+      break;
+    }
     case IRInstr_JMP: {
       free(instr->as.jmp.target);
       break;
@@ -190,7 +202,6 @@ void free_ir_instr(struct IRInstr *instr)
       assert(0 && "Unhandled IR instruction in free_ir_instr");
   }
 }
-
 
 static void free_ir_fn(struct IRFunction *func)
 {
@@ -832,6 +843,28 @@ static struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
 
       break;
     }
+    case EXPR_AWAIT: {
+      VecIRValuePtr args = {0};
+      vec_insert(&args,
+                 irfy_expr_and_convert(instrs, expr->as.await_expr.expr));
+
+      struct IRValue *dst = mkirvar();
+      dst->type = expr->type;
+
+      struct Expr target = {0};
+      target.kind = EXPR_VARIABLE;
+      target.as.var.name = strdup("__x_task_await");
+      target.as.var.type = (Type){.kind = UNKNOWN_T};
+
+      struct IRInstr instr = {0};
+      instr.kind = IRInstr_CALL;
+      instr.as.call.target = target;
+      instr.as.call.args = args;
+      instr.as.call.dst = clone_irval(dst);
+      vec_insert(instrs, instr);
+
+      return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = dst};
+    }
     case EXPR_SIZEOF: {
       struct ExpResult result;
       struct IRValue sz;
@@ -1351,11 +1384,24 @@ static void irfy_stmt(VecIRInstr *instrs, struct Stmt *stmt)
 
       break;
     }
+    case STMT_YIELD: {
+      struct Expr target = {0};
+      target.kind = EXPR_VARIABLE;
+      target.as.var.name = strdup("__x_task_yield");
+      target.as.var.type = (Type){.kind = UNKNOWN_T};
+
+      struct IRInstr instr = {0};
+      instr.kind = IRInstr_CALL;
+      instr.as.call.target = target;
+      instr.as.call.args = (VecIRValuePtr){0};
+      instr.as.call.dst = NULL;
+      vec_insert(instrs, instr);
+      break;
+    }
     default:
       assert(0);
   }
 }
-
 
 static bool is_negative_literal(struct Expr *expr, struct Literal **literal,
                                 bool *is_negative)
@@ -1431,8 +1477,7 @@ static char *global_initializer_directive(struct DeclVariable *variable)
     if (is_negative) {
       return NULL;
     }
-    return format_directive(".byte %llu",
-                            literal->as.boolean ? 1ULL : 0ULL);
+    return format_directive(".byte %llu", literal->as.boolean ? 1ULL : 0ULL);
   }
 
   if (literal->kind != LITERAL_NUM) {
@@ -1441,36 +1486,32 @@ static char *global_initializer_directive(struct DeclVariable *variable)
 
   switch (variable->type.kind) {
     case I8_T:
-      return format_signed_directive(".byte %lld",
-                                     is_negative ? -literal->as.i8
-                                                 : literal->as.i8);
+      return format_signed_directive(
+          ".byte %lld", is_negative ? -literal->as.i8 : literal->as.i8);
     case U8_T:
       if (is_negative) {
         return NULL;
       }
       return format_directive(".byte %llu", literal->as.u8);
     case I16_T:
-      return format_signed_directive(".value %lld",
-                                     is_negative ? -literal->as.i16
-                                                 : literal->as.i16);
+      return format_signed_directive(
+          ".value %lld", is_negative ? -literal->as.i16 : literal->as.i16);
     case U16_T:
       if (is_negative) {
         return NULL;
       }
       return format_directive(".value %llu", literal->as.u16);
     case I32_T:
-      return format_signed_directive(".long %lld",
-                                     is_negative ? -literal->as.i32
-                                                 : literal->as.i32);
+      return format_signed_directive(
+          ".long %lld", is_negative ? -literal->as.i32 : literal->as.i32);
     case U32_T:
       if (is_negative) {
         return NULL;
       }
       return format_directive(".long %llu", literal->as.u32);
     case I64_T:
-      return format_signed_directive(".quad %lld",
-                                     is_negative ? -literal->as.i64
-                                                 : literal->as.i64);
+      return format_signed_directive(
+          ".quad %lld", is_negative ? -literal->as.i64 : literal->as.i64);
     case U64_T:
       if (is_negative) {
         return NULL;
@@ -1504,13 +1545,1385 @@ static char *global_initializer_directive(struct DeclVariable *variable)
   }
 }
 
-static struct IRFunction *irfy_fn(struct DeclFn *fn)
+/* Stackless async lowering
+ *
+ * Async functions are lowered into two ordinary functions:
+ *   f(args...)              -> task      constructor/wrapper
+ *   f__async_step(task)     -> i64       one poll of the state machine
+ *
+ * The step function never keeps async locals on its C stack across a suspend.
+ * Instead every IR pseudo used by the original async body gets a slot in the
+ * task frame.  Each poll loads operands out of the frame, executes until the
+ * next suspension point, stores destinations back to the frame, records the
+ * next program counter, and returns 0.  Returning 1 means the task completed.
+ */
+
+typedef Vector(char *) VecCharPtr;
+
+typedef struct AsyncSlot {
+  char *name;
+  Type type;
+  int slot;
+} AsyncSlot;
+
+typedef Vector(AsyncSlot) VecAsyncSlot;
+
+/* "Compiler notebook" carried through the async lowering pass.
+ *
+ * It answers to questions while rewriting an async function:
+ *   1)  Which async variable/temporary lives in which frame slot?
+ *   2)  What is the synthetic IR variable name for the current task?
+ *
+ * When the compiler turns an async function into a state machine,
+ * locals can no longer safely live in ordinary temporaries and registers,
+ * because the function can suspend.  They must live in the task frame. So,
+ * the compiler needs a mapping:
+ *
+ *   x        -> frame slot 0
+ *   y        -> frame slot 1
+ *   tmp.17   -> frame slot 2
+ *   tmp.18   -> frame slot 3
+ *
+ * ...and this is stored in `ctx->slots`.
+ *
+ * So one entry might mean:
+ *
+ *   name = "y"
+ *   type = i64
+ *   slot = 1
+ *
+ * ... Then whenever lowered code wants to read `y`, it can emit:
+ *
+ *   y = __x_task_frame_get(task, 1)
+ *
+ * ... and whenever it wants to write `y`, it can emit:
+ *
+ *   __x_task_frame_set(task, 1, value)
+ *
+ * The generated step function has a hidden task parameter.
+ *
+ * Conceptually:
+ *
+ *   i64 f__async_step(task self) {
+ *     ...
+ *   }
+ *
+ * ...but in the IR, that task parameter needs a variable name, which the
+ * lowering creates:
+ *
+ *   ctx.task_name = mkstr("var.__async_task.%d", mktmp());
+ *
+ * ...So inside helpers like this:
+ *
+ *   static struct IRValue *async_task_value(struct AsyncLowerCtx *ctx)
+ *   {
+ *     return ir_named_var(ctx->task_name, (Type){.kind = TASK_T});
+ *   }
+ *
+ * ...the compiler can conveniently generate IR for “current task handle”.  */
+struct AsyncLowerCtx {
+  VecAsyncSlot slots;
+  char *task_name;
+};
+
+static bool ir_target_is(struct Expr *target, const char *name)
 {
-  if (fn->is_extern) {
-    return NULL;
+  return target && target->kind == EXPR_VARIABLE && target->as.var.name &&
+         strcmp(target->as.var.name, name) == 0;
+}
+
+static bool ir_value_is_frame_candidate(struct IRValue *v)
+{
+  return v && v->kind == IRValue_VAR && !is_data_variable(v->as.var);
+}
+
+static int async_find_slot(struct AsyncLowerCtx *ctx, const char *name)
+{
+  for (int i = 0; i < ctx->slots.len; i++) {
+    if (strcmp(ctx->slots.data[i].name, name) == 0) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+static int async_add_slot(struct AsyncLowerCtx *ctx, const char *name,
+                          Type type)
+{
+  int existing = async_find_slot(ctx, name);
+  if (existing >= 0) {
+    return existing;
   }
 
-  struct IRFunction f;
+  AsyncSlot slot = {
+      .name = strdup(name), .type = clone_type(type), .slot = ctx->slots.len};
+  vec_insert(&ctx->slots, slot);
+  return slot.slot;
+}
+
+static struct IRValue *ir_const_u64(unsigned long long x)
+{
+  struct IRValue *v = malloc(sizeof(struct IRValue));
+  v->kind = IRValue_CONST;
+  v->type = (Type){.kind = U64_T};
+  v->as.konst.kind = LITERAL_NUM;
+  v->as.konst.type = (Type){.kind = U64_T};
+  v->as.konst.as.u64 = x;
+  return v;
+}
+
+static struct IRValue *ir_const_i64(long long x)
+{
+  struct IRValue *v = malloc(sizeof(struct IRValue));
+  v->kind = IRValue_CONST;
+  v->type = (Type){.kind = I64_T};
+  v->as.konst.kind = LITERAL_NUM;
+  v->as.konst.type = (Type){.kind = I64_T};
+  v->as.konst.as.i64 = x;
+  return v;
+}
+
+static struct IRValue *ir_named_var(const char *name, Type type)
+{
+  struct IRValue *v = malloc(sizeof(struct IRValue));
+  v->kind = IRValue_VAR;
+  v->as.var = strdup(name);
+  v->type = clone_type(type);
+  return v;
+}
+
+static struct Expr ir_func_target(const char *name)
+{
+  struct Expr target = {0};
+  target.kind = EXPR_VARIABLE;
+  target.as.var.name = strdup(name);
+  target.as.var.type = (Type){.kind = UNKNOWN_T};
+  return target;
+}
+
+static void ir_emit_call(VecIRInstr *out, const char *name, VecIRValuePtr args,
+                         struct IRValue *dst)
+{
+  struct IRInstr instr = {0};
+  instr.kind = IRInstr_CALL;
+  instr.as.call.target = ir_func_target(name);
+  instr.as.call.args = args;
+  instr.as.call.dst = clone_irval(dst);
+  vec_insert(out, instr);
+}
+
+static struct IRValue *async_task_value(struct AsyncLowerCtx *ctx)
+{
+  return ir_named_var(ctx->task_name, (Type){.kind = TASK_T});
+}
+
+static struct IRValue *async_frame_get(VecIRInstr *out,
+                                       struct AsyncLowerCtx *ctx, int slot,
+                                       Type type)
+{
+  VecIRValuePtr args = {0};
+  vec_insert(&args, async_task_value(ctx));
+  vec_insert(&args, ir_const_u64((unsigned long long) slot));
+
+  struct IRValue *dst = mkirvar();
+  dst->type = clone_type(type);
+  ir_emit_call(out, "__x_task_frame_get", args, dst);
+  return dst;
+}
+
+static void async_frame_set(VecIRInstr *out, struct AsyncLowerCtx *ctx,
+                            int slot, struct IRValue *value)
+{
+  VecIRValuePtr args = {0};
+  vec_insert(&args, async_task_value(ctx));
+  vec_insert(&args, ir_const_u64((unsigned long long) slot));
+  vec_insert(&args, clone_irval(value));
+  ir_emit_call(out, "__x_task_frame_set", args, NULL);
+}
+
+/*
+ * Mental model for:
+ *  - async_materialize_value,
+ *  - async_prepare_dst
+ *  - async_store_dst_if_needed:
+ *
+ * These helpers implement this rule:
+ *
+ * When reading a frame-backed variable:
+ *   frame_get into temp
+ *
+ * When writing a frame-backed variable:
+ *   compute into temp
+ *   frame_set from temp  */
+static struct IRValue *async_materialize_value(VecIRInstr *out,
+                                               struct AsyncLowerCtx *ctx,
+                                               struct IRValue *value)
+{
+  /* In the state-machine transform, many original IR variables
+   * no longer live as ordinary locals.  They live in the task frame.
+   * So before an instruction can use one of those variables, the compiler
+   * may need to emit a frame load.
+   *
+   * Because a frame-backed variable is not directly available as a
+   * normal IR value anymore. It exists inside `task->frame[slot]`,
+   * and to use it in an instruction, the compiler must “materialize”
+   * it into a temporary value for the current poll.
+   *
+   * So:
+   *
+   * frame slot value -> ordinary IR temporary  */
+
+  /* If this value is not something that should live in the frame, just clone
+   * it.  */
+  if (!ir_value_is_frame_candidate(value)) {
+    return clone_irval(value);
+  }
+
+  /* Does this value live in the frame?  */
+  int slot = async_find_slot(ctx, value->as.var);
+  if (slot < 0) {
+    /* No, it does not.  Clone it.  */
+    return clone_irval(value);
+  }
+
+  /* Yes it does, go get it.  */
+  return async_frame_get(out, ctx, slot, value->type);
+}
+
+static struct IRValue *async_prepare_dst(struct AsyncLowerCtx *ctx,
+                                         struct IRValue *dst, bool *needs_store)
+{
+  /* Start by assuming that no frame store is needed.  */
+  *needs_store = false;
+
+  /* If dst is not a frame candidate, just use it normally.  */
+  if (!ir_value_is_frame_candidate(dst)) {
+    return clone_irval(dst);
+  }
+
+  /* Does dst live in the frame?  */
+  int slot = async_find_slot(ctx, dst->as.var);
+  if (slot < 0) {
+    /* No, it does not, clone it and use it normally.  */
+    return clone_irval(dst);
+  }
+
+  /* It lives in the frame.  Make a temp.  */
+  struct IRValue *local = mkirvar();
+  local->type = clone_type(dst->type);
+
+  *needs_store = true;
+
+  return local;
+}
+
+static void async_store_dst_if_needed(VecIRInstr *out,
+                                      struct AsyncLowerCtx *ctx,
+                                      struct IRValue *original_dst,
+                                      struct IRValue *local_dst,
+                                      bool needs_store)
+{
+  /* If no store is needed, do nothing.  */
+  if (!needs_store) {
+    return;
+  }
+
+  int slot = async_find_slot(ctx, original_dst->as.var);
+
+  /* The assert is valid because this helper should only be called
+   * with `needs_store = true`, which only happens when a slot was found.  */
+  assert(slot >= 0);
+
+  async_frame_set(out, ctx, slot, local_dst);
+}
+
+static void async_collect_value(struct AsyncLowerCtx *ctx, struct IRValue *v)
+{
+  if (ir_value_is_frame_candidate(v)) {
+    async_add_slot(ctx, v->as.var, v->type);
+  }
+}
+
+static void async_collect_instr_vars(struct AsyncLowerCtx *ctx,
+                                     struct IRInstr *instr)
+{
+  switch (instr->kind) {
+    case IRInstr_BIN:
+      async_collect_value(ctx, instr->as.binary.lhs);
+      async_collect_value(ctx, instr->as.binary.rhs);
+      async_collect_value(ctx, instr->as.binary.dst);
+      break;
+    case IRInstr_UNARY:
+      async_collect_value(ctx, instr->as.unary.src);
+      async_collect_value(ctx, instr->as.unary.dst);
+      break;
+    case IRInstr_RET:
+      async_collect_value(ctx, instr->as.ret.val);
+      break;
+    case IRInstr_CPY:
+      async_collect_value(ctx, instr->as.copy.src);
+      async_collect_value(ctx, instr->as.copy.dst);
+      break;
+    case IRInstr_CALL:
+      for (int i = 0; i < instr->as.call.args.len; i++) {
+        async_collect_value(ctx, instr->as.call.args.data[i]);
+      }
+      async_collect_value(ctx, instr->as.call.dst);
+      break;
+    case IRInstr_SPAWN:
+      for (int i = 0; i < instr->as.spawn.args.len; i++) {
+        async_collect_value(ctx, instr->as.spawn.args.data[i]);
+      }
+      async_collect_value(ctx, instr->as.spawn.dst);
+      break;
+    case IRInstr_JZ:
+      async_collect_value(ctx, &instr->as.jz.cond);
+      break;
+    case IRInstr_GETADDR:
+      async_collect_value(ctx, instr->as.getaddr.src);
+      async_collect_value(ctx, instr->as.getaddr.dst);
+      break;
+    case IRInstr_LOAD:
+      async_collect_value(ctx, instr->as.load.src);
+      async_collect_value(ctx, instr->as.load.dst);
+      break;
+    case IRInstr_STORE:
+      async_collect_value(ctx, instr->as.store.val);
+      async_collect_value(ctx, instr->as.store.dst);
+      break;
+    case IRInstr_CAST:
+      async_collect_value(ctx, instr->as.cast.src);
+      async_collect_value(ctx, instr->as.cast.dst);
+      break;
+    case IRInstr_CPY_FROM_OFFSET:
+      async_collect_value(ctx, instr->as.cpy_from_offset.src);
+      async_collect_value(ctx, instr->as.cpy_from_offset.dst);
+      break;
+    case IRInstr_CPY_TO_OFFSET:
+      async_collect_value(ctx, instr->as.cpy_to_offset.dst);
+      async_collect_value(ctx, instr->as.cpy_to_offset.src);
+      break;
+    case IRInstr_ADD_PTR:
+      async_collect_value(ctx, instr->as.add_ptr.ptr);
+      async_collect_value(ctx, instr->as.add_ptr.index);
+      async_collect_value(ctx, instr->as.add_ptr.dst);
+      break;
+    case IRInstr_JMP:
+    case IRInstr_LBL:
+      break;
+    default:
+      assert(0);
+  }
+}
+
+static bool async_instr_is_io_wait(struct IRInstr *instr)
+{
+  return instr->kind == IRInstr_CALL &&
+         (ir_target_is(&instr->as.call.target, "__x_io_wait_read") ||
+          ir_target_is(&instr->as.call.target, "__x_io_wait_write") ||
+          ir_target_is(&instr->as.call.target, "__x_sleep_ms"));
+}
+
+static const char *async_wait_runtime_helper(struct IRInstr *instr)
+{
+  assert(async_instr_is_io_wait(instr));
+  if (ir_target_is(&instr->as.call.target, "__x_io_wait_read")) {
+    return "__x_task_wait_read";
+  }
+  if (ir_target_is(&instr->as.call.target, "__x_io_wait_write")) {
+    return "__x_task_wait_write";
+  }
+  if (ir_target_is(&instr->as.call.target, "__x_sleep_ms")) {
+    return "__x_task_sleep_ms";
+  }
+  assert(0 && "unreachable async wait helper");
+}
+
+static bool async_instr_is_suspend(struct IRInstr *instr)
+{
+  return instr->kind == IRInstr_CALL &&
+         (ir_target_is(&instr->as.call.target, "__x_task_yield") ||
+          ir_target_is(&instr->as.call.target, "__x_task_await") ||
+          async_instr_is_io_wait(instr));
+}
+
+static VecCharPtr async_collect_resume_labels(VecIRInstr *orig)
+{
+  VecCharPtr labels = {0};
+  for (int i = 0; i < orig->len; i++) {
+    if (async_instr_is_suspend(&orig->data[i])) {
+      vec_insert(&labels, mklbl("AsyncResume", mktmp()));
+    }
+  }
+  return labels;
+}
+
+static VecCharPtr async_collect_preempt_labels(VecIRInstr *orig)
+{
+  VecCharPtr labels = {0};
+  for (int i = 0; i < orig->len; i++) {
+    if (async_instr_is_suspend(&orig->data[i]) ||
+        orig->data[i].kind == IRInstr_RET) {
+      vec_insert(&labels, NULL);
+    } else {
+      vec_insert(&labels, mklbl("AsyncPreempt", mktmp()));
+    }
+  }
+  return labels;
+}
+
+static VecCharPtr async_concat_pc_labels(VecCharPtr *resume_labels,
+                                         VecCharPtr *preempt_labels)
+{
+  VecCharPtr labels = {0};
+  for (int i = 0; i < resume_labels->len; i++) {
+    vec_insert(&labels, resume_labels->data[i]);
+  }
+  for (int i = 0; i < preempt_labels->len; i++) {
+    if (preempt_labels->data[i]) {
+      vec_insert(&labels, preempt_labels->data[i]);
+    }
+  }
+  return labels;
+}
+
+static void async_emit_ret_status(VecIRInstr *out, long long status)
+{
+  struct IRInstr ret = {0};
+  ret.kind = IRInstr_RET;
+  ret.as.ret.val = ir_const_i64(status);
+  vec_insert(out, ret);
+}
+
+static void async_emit_set_pc(VecIRInstr *out, struct AsyncLowerCtx *ctx,
+                              int pc)
+{
+  VecIRValuePtr args = {0};
+  vec_insert(&args, async_task_value(ctx));
+  vec_insert(&args, ir_const_u64((unsigned long long) pc));
+  ir_emit_call(out, "__x_task_set_pc", args, NULL);
+}
+
+static void async_emit_preempt_point(VecIRInstr *out, struct AsyncLowerCtx *ctx,
+                                     int pc, char *resume_label)
+{
+  char *continue_label = mklbl("AsyncTickContinue", mktmp());
+
+  struct IRInstr resume = {0};
+  resume.kind = IRInstr_LBL;
+  resume.as.label.name = strdup(resume_label);
+  vec_insert(out, resume);
+
+  VecIRValuePtr tick_args = {0};
+  vec_insert(&tick_args, async_task_value(ctx));
+
+  struct IRValue *should_preempt = mkirvar();
+  should_preempt->type = (Type){.kind = BOOL_T};
+  ir_emit_call(out, "__x_task_tick", tick_args, should_preempt);
+
+  struct IRInstr jz = {0};
+  jz.kind = IRInstr_JZ;
+  jz.as.jz.cond = *should_preempt;
+  free(should_preempt);
+  jz.as.jz.target = strdup(continue_label);
+  vec_insert(out, jz);
+
+  async_emit_set_pc(out, ctx, pc);
+  async_emit_ret_status(out, 0);
+
+  struct IRInstr cont = {0};
+  cont.kind = IRInstr_LBL;
+  cont.as.label.name = continue_label;
+  vec_insert(out, cont);
+}
+
+static void async_emit_dispatch(VecIRInstr *out, struct AsyncLowerCtx *ctx,
+                                VecCharPtr *resume_labels, char *start_label)
+{
+  /* u64 pc = __x_task_get_pc(self); */
+  VecIRValuePtr pc_args = {0};
+
+  vec_insert(&pc_args, async_task_value(ctx));
+
+  struct IRValue *pc = mkirvar();
+  pc->type = (Type){.kind = U64_T};
+
+  ir_emit_call(out, "__x_task_get_pc", pc_args, pc);
+
+  for (int i = 0; i <= resume_labels->len; i++) {
+    char *target_label = i == 0 ? start_label : resume_labels->data[i - 1];
+    char *next_label = mklbl("AsyncDispatchNext", mktmp());
+
+    /* bool eq = pc == i; */
+    struct IRValue *eq = mkirvar();
+    eq->type = (Type){.kind = BOOL_T};
+
+    struct IRInstr cmp = {0};
+    cmp.kind = IRInstr_BIN;
+    cmp.as.binary.kind = IRInstrBinary_E;
+    cmp.as.binary.lhs = clone_irval(pc);
+    cmp.as.binary.rhs = ir_const_u64((unsigned long long) i);
+    cmp.as.binary.dst = clone_irval(eq);
+
+    vec_insert(out, cmp);
+
+    /* if (!eq) goto next_label */
+    struct IRInstr jz = {0};
+    jz.kind = IRInstr_JZ;
+    jz.as.jz.cond = *eq;
+
+    free(eq);
+
+    jz.as.jz.target = strdup(next_label);
+
+    vec_insert(out, jz);
+
+    /* goto target_label */
+    struct IRInstr jmp = {0};
+    jmp.kind = IRInstr_JMP;
+    jmp.as.jmp.target = strdup(target_label);
+    vec_insert(out, jmp);
+
+    struct IRInstr lbl = {0};
+    lbl.kind = IRInstr_LBL;
+    lbl.as.label.name = next_label;
+    vec_insert(out, lbl);
+  }
+
+  /*   __x_async_bad_pc(task);
+      return 1;  */
+  VecIRValuePtr bad_args = {0};
+  vec_insert(&bad_args, async_task_value(ctx));
+  ir_emit_call(out, "__x_async_bad_pc", bad_args, NULL);
+  async_emit_ret_status(out, 1);
+
+  /* This is where the transformed original function body begins.
+   *
+   * So after `async_emit_dispatch`, the output body looks like:
+   *
+   *   pc = __x_task_get_pc(task);
+   *
+   *   if pc == 0 goto AsyncStart
+   *   if pc == 1 goto AsyncResume0
+   *   if pc == 2 goto AsyncResume1
+   *
+   *   ...
+   *
+   *   __x_async_bad_pc(task)
+   *   ret 1
+   *
+   *   AsyncStart:
+   *     ...
+   *
+   * Then `async_transform_body` continues appending the transformed
+   * original instructions after that `AsyncStart:` label. */
+  struct IRInstr start = {0};
+  start.kind = IRInstr_LBL;
+  start.as.label.name = strdup(start_label);
+  vec_insert(out, start);
+}
+
+/* async_transform_io_wait
+ *   rewrites async runtime wait calls into non-blocking state-machine waits.
+ *
+ * Source inside an async function may contain calls such as:
+ *
+ *   __x_io_wait_read(fd);
+ *   __x_io_wait_write(fd);
+ *   __x_sleep_ms(ms);
+ *
+ * In synchronous code those are ordinary blocking runtime calls.  Inside an
+ * async step function, though, they are suspension markers.  The transform
+ * registers the current task with the runtime wait queue, saves the resume pc,
+ * returns pending, then resumes after the original call once the event loop
+ * wakes the task.  */
+static void async_transform_io_wait(VecIRInstr *out, struct AsyncLowerCtx *ctx,
+                                    struct IRInstr *instr, int pc,
+                                    char *resume_label)
+{
+  assert(instr->as.call.args.len == 1);
+
+  struct IRValue *wait_arg =
+      async_materialize_value(out, ctx, instr->as.call.args.data[0]);
+
+  VecIRValuePtr wait_args = {0};
+  vec_insert(&wait_args, async_task_value(ctx));
+  vec_insert(&wait_args, wait_arg);
+  ir_emit_call(out, async_wait_runtime_helper(instr), wait_args, NULL);
+
+  async_emit_set_pc(out, ctx, pc);
+  async_emit_ret_status(out, 0);
+
+  struct IRInstr resume = {0};
+  resume.kind = IRInstr_LBL;
+  resume.as.label.name = strdup(resume_label);
+  vec_insert(out, resume);
+
+  if (instr->as.call.dst) {
+    bool store_dst = false;
+    struct IRValue *dst =
+        async_prepare_dst(ctx, instr->as.call.dst, &store_dst);
+    struct IRInstr zero = {0};
+    zero.kind = IRInstr_CPY;
+    zero.as.copy.src = ir_const_i64(0);
+    zero.as.copy.dst = clone_irval(dst);
+    vec_insert(out, zero);
+    async_store_dst_if_needed(out, ctx, instr->as.call.dst, dst, store_dst);
+  }
+}
+
+/* async_transform_await
+ *   rewrites `await t` inside an async function into
+ *   non-blocking state-machine logic.
+ *
+ * Inside a normal synchronous function, the `__x_task_await(t)` marker
+ * can block and run the scheduler until t finishes.
+ *
+ * But inside an async step function, we do not want to block.
+ * The step function should run a little bit, then return `0`
+ * if it cannot continue yet.
+ *
+ * So `await` inside async becomes:
+ *
+ *   ResumeLabel:
+ *     child = load child task;
+ *     if (!__x_task_is_done(child)) {
+ *         __x_task_set_pc(self, pc);
+ *         return 0;
+ *     }
+ *
+ *     result = __x_task_take_result(child);
+ *     store result into await destination;
+ *     goto AwaitEnd;
+ *
+ *   AwaitEnd:
+ *     continue...  */
+static void async_transform_await(VecIRInstr *out, struct AsyncLowerCtx *ctx,
+                                  struct IRInstr *instr, int pc,
+                                  char *resume_label)
+{
+  assert(instr->as.call.args.len == 1);
+
+  char *suspend_label, *end_label;
+
+  suspend_label = mklbl("AsyncAwaitSuspend", mktmp());
+  end_label = mklbl("AsyncAwaitEnd", mktmp());
+
+  /* Emit `AsyncResume:` label.  */
+  struct IRInstr resume = {0};
+  resume.kind = IRInstr_LBL;
+  resume.as.label.name = strdup(resume_label);
+  vec_insert(out, resume);
+
+  /* Gets the task handle we are awaiting.
+   * If the awaited task handle lives in the async frame,
+   * this emits something like:
+   *
+   *   tmp_task = __x_task_frame_get(self, SLOT_child_task)
+   *
+   * If it is already a usable local value or constant, it
+   * just clones it.  */
+  struct IRValue *task_to_wait =
+      async_materialize_value(out, ctx, instr->as.call.args.data[0]);
+
+  /* done = __x_task_is_done(task_to_wait) */
+  VecIRValuePtr done_args = {0};
+  vec_insert(&done_args, clone_irval(task_to_wait));
+  struct IRValue *done = mkirvar();
+  done->type = (Type){.kind = BOOL_T};
+  ir_emit_call(out, "__x_task_is_done", done_args, done);
+
+  /* if (!done) goto suspend_label;  */
+  struct IRInstr jz = {0};
+  jz.kind = IRInstr_JZ;
+  jz.as.jz.cond = *done;
+
+  free(done);
+  jz.as.jz.target = strdup(suspend_label);
+
+  vec_insert(out, jz);
+
+  /* If done, take the result.  */
+  VecIRValuePtr result_args = {0};
+  vec_insert(&result_args, clone_irval(task_to_wait));
+
+  /* If the original await had a destination,
+   * like: `let v: i64 = await t;`,
+   * the transform needs somewhere to put the result.
+   *
+   * Again, async_prepare_dst decides:
+   *   - Can I write directly to the destination?
+   *   - Or should I write to a temporary and later
+   *     store into the async frame?  */
+  struct IRValue *await_dst = NULL;
+  bool store_dst = false;
+  if (instr->as.call.dst) {
+    await_dst = async_prepare_dst(ctx, instr->as.call.dst, &store_dst);
+  }
+
+  /* await_dst = __x_task_take_result(task_to_wait); */
+  ir_emit_call(out, "__x_task_take_result", result_args, await_dst);
+
+  if (instr->as.call.dst) {
+    async_store_dst_if_needed(out, ctx, instr->as.call.dst, await_dst,
+                              store_dst);
+  }
+
+  /* If the task was done and we took the result, we should skip
+   * the suspend block. */
+  struct IRInstr jmp_end = {0};
+  jmp_end.kind = IRInstr_JMP;
+  jmp_end.as.jmp.target = strdup(end_label);
+  vec_insert(out, jmp_end);
+
+  /* Emit suspend block.  */
+  struct IRInstr suspend = {0};
+  suspend.kind = IRInstr_LBL;
+  suspend.as.label.name = suspend_label;
+  vec_insert(out, suspend);
+
+  /* The child task is not ready.
+   * Save its pc so it resumes at this await check.
+   * Return pending to the scheduler.  */
+  async_emit_set_pc(out, ctx, pc);
+  async_emit_ret_status(out, 0);
+
+  /* Emit the end label.  */
+  struct IRInstr end = {0};
+  end.kind = IRInstr_LBL;
+  end.as.label.name = end_label;
+  vec_insert(out, end);
+}
+
+/* async_transform_regular_instr
+     rewrites ordinary IR instructions so their inputs/outputs
+     go through the async task frame. */
+static void async_transform_regular_instr(VecIRInstr *out,
+                                          struct AsyncLowerCtx *ctx,
+                                          struct IRInstr *instr)
+{
+  switch (instr->kind) {
+    case IRInstr_BIN: {
+      bool store = false;
+      struct IRValue *dst =
+          async_prepare_dst(ctx, instr->as.binary.dst, &store);
+      struct IRInstr ni = {0};
+      ni.kind = IRInstr_BIN;
+      ni.as.binary.kind = instr->as.binary.kind;
+      ni.as.binary.lhs =
+          async_materialize_value(out, ctx, instr->as.binary.lhs);
+      ni.as.binary.rhs =
+          async_materialize_value(out, ctx, instr->as.binary.rhs);
+      ni.as.binary.dst = clone_irval(dst);
+      vec_insert(out, ni);
+      async_store_dst_if_needed(out, ctx, instr->as.binary.dst, dst, store);
+      break;
+    }
+    case IRInstr_UNARY: {
+      bool store = false;
+      struct IRValue *dst = async_prepare_dst(ctx, instr->as.unary.dst, &store);
+      struct IRInstr ni = {0};
+      ni.kind = IRInstr_UNARY;
+      ni.as.unary.kind = instr->as.unary.kind;
+      ni.as.unary.src = async_materialize_value(out, ctx, instr->as.unary.src);
+      ni.as.unary.dst = clone_irval(dst);
+      vec_insert(out, ni);
+      async_store_dst_if_needed(out, ctx, instr->as.unary.dst, dst, store);
+      break;
+    }
+    case IRInstr_CPY: {
+      bool store = false;
+      struct IRValue *dst = async_prepare_dst(ctx, instr->as.copy.dst, &store);
+      struct IRInstr ni = {0};
+      ni.kind = IRInstr_CPY;
+      ni.as.copy.src = async_materialize_value(out, ctx, instr->as.copy.src);
+      ni.as.copy.dst = clone_irval(dst);
+      vec_insert(out, ni);
+      async_store_dst_if_needed(out, ctx, instr->as.copy.dst, dst, store);
+      break;
+    }
+    case IRInstr_CALL: {
+      VecIRValuePtr args = {0};
+      for (int i = 0; i < instr->as.call.args.len; i++) {
+        vec_insert(&args, async_materialize_value(out, ctx,
+                                                  instr->as.call.args.data[i]));
+      }
+      bool store = false;
+      struct IRValue *dst = NULL;
+      if (instr->as.call.dst) {
+        dst = async_prepare_dst(ctx, instr->as.call.dst, &store);
+      }
+      struct IRInstr ni = {0};
+      ni.kind = IRInstr_CALL;
+      ni.as.call.target = instr->as.call.target;
+      ni.as.call.args = args;
+      ni.as.call.dst = clone_irval(dst);
+      vec_insert(out, ni);
+      if (instr->as.call.dst) {
+        async_store_dst_if_needed(out, ctx, instr->as.call.dst, dst, store);
+      }
+      break;
+    }
+    case IRInstr_JMP: {
+      struct IRInstr ni = {0};
+      ni.kind = IRInstr_JMP;
+      ni.as.jmp.target = strdup(instr->as.jmp.target);
+      vec_insert(out, ni);
+      break;
+    }
+    case IRInstr_JZ: {
+      struct IRValue *cond =
+          async_materialize_value(out, ctx, &instr->as.jz.cond);
+      struct IRInstr ni = {0};
+      ni.kind = IRInstr_JZ;
+      ni.as.jz.cond = *cond;
+      free(cond);
+      ni.as.jz.target = strdup(instr->as.jz.target);
+      vec_insert(out, ni);
+      break;
+    }
+    case IRInstr_LBL: {
+      struct IRInstr ni = {0};
+      ni.kind = IRInstr_LBL;
+      ni.as.label.name = strdup(instr->as.label.name);
+      vec_insert(out, ni);
+      break;
+    }
+    case IRInstr_LOAD: {
+      bool store = false;
+      struct IRValue *dst = async_prepare_dst(ctx, instr->as.load.dst, &store);
+      struct IRInstr ni = {0};
+      ni.kind = IRInstr_LOAD;
+      ni.as.load.src = async_materialize_value(out, ctx, instr->as.load.src);
+      ni.as.load.dst = clone_irval(dst);
+      vec_insert(out, ni);
+      async_store_dst_if_needed(out, ctx, instr->as.load.dst, dst, store);
+      break;
+    }
+    case IRInstr_STORE: {
+      struct IRInstr ni = {0};
+      ni.kind = IRInstr_STORE;
+      ni.as.store.val = async_materialize_value(out, ctx, instr->as.store.val);
+      ni.as.store.dst = async_materialize_value(out, ctx, instr->as.store.dst);
+      vec_insert(out, ni);
+      break;
+    }
+    case IRInstr_CAST: {
+      bool store = false;
+      struct IRValue *dst = async_prepare_dst(ctx, instr->as.cast.dst, &store);
+      struct IRInstr ni = {0};
+      ni.kind = IRInstr_CAST;
+      ni.as.cast.kind = instr->as.cast.kind;
+      ni.as.cast.src = async_materialize_value(out, ctx, instr->as.cast.src);
+      ni.as.cast.dst = clone_irval(dst);
+      vec_insert(out, ni);
+      async_store_dst_if_needed(out, ctx, instr->as.cast.dst, dst, store);
+      break;
+    }
+    case IRInstr_ADD_PTR: {
+      bool store = false;
+      struct IRValue *dst =
+          async_prepare_dst(ctx, instr->as.add_ptr.dst, &store);
+      struct IRInstr ni = {0};
+      ni.kind = IRInstr_ADD_PTR;
+      ni.as.add_ptr.ptr =
+          async_materialize_value(out, ctx, instr->as.add_ptr.ptr);
+      ni.as.add_ptr.index =
+          async_materialize_value(out, ctx, instr->as.add_ptr.index);
+      ni.as.add_ptr.scale = instr->as.add_ptr.scale;
+      ni.as.add_ptr.dst = clone_irval(dst);
+      vec_insert(out, ni);
+      async_store_dst_if_needed(out, ctx, instr->as.add_ptr.dst, dst, store);
+      break;
+    }
+    case IRInstr_GETADDR: {
+      bool store = false;
+      struct IRValue *dst =
+          async_prepare_dst(ctx, instr->as.getaddr.dst, &store);
+      struct IRInstr ni = {0};
+      ni.kind = IRInstr_GETADDR;
+      ni.as.getaddr.src = clone_irval(instr->as.getaddr.src);
+      ni.as.getaddr.dst = clone_irval(dst);
+      vec_insert(out, ni);
+      async_store_dst_if_needed(out, ctx, instr->as.getaddr.dst, dst, store);
+      break;
+    }
+    case IRInstr_CPY_FROM_OFFSET:
+    case IRInstr_CPY_TO_OFFSET:
+    case IRInstr_SPAWN:
+      /* These are not expected in the small first async-state-machine ABI. */
+      assert(0 && "unsupported IR instruction in async state machine");
+      break;
+    case IRInstr_RET:
+      assert(0 && "RET is handled by async_transform_body");
+      break;
+    default:
+      assert(0);
+  }
+}
+
+static VecIRInstr async_transform_body(VecIRInstr *orig,
+                                       struct AsyncLowerCtx *ctx,
+                                       VecCharPtr *resume_labels,
+                                       VecCharPtr *preempt_labels)
+{
+  VecIRInstr out = {0};
+  char *start_label;
+  VecCharPtr pc_labels = async_concat_pc_labels(resume_labels, preempt_labels);
+  int preempt_pc_base = resume_labels->len + 1;
+
+  /* This emits the top-of-function state dispatch.
+   * Conceptually it appends:
+   *
+   *   pc = __x_task_get_pc(task);
+   *   if (pc == 0) goto AsyncStart;
+   *   if (pc == 1) goto AsyncResume0;
+   *   if (pc == 2) goto AsyncResume1;
+   *   ...
+   *   __x_async_bad_pc(task);
+   *   return 1;
+   *
+   *   AsyncStart:
+   *     ... */
+  start_label = mklbl("AsyncStart", mktmp());
+
+  async_emit_dispatch(&out, ctx, &pc_labels, start_label);
+
+  free(start_label);
+
+  int suspend_index = 0;
+  int preempt_index = 0;
+  for (int i = 0; i < orig->len; i++) {
+    struct IRInstr *instr = &orig->data[i];
+
+    /* Track which kind of suspension point we are handling.  */
+    if (instr->kind == IRInstr_CALL &&
+        ir_target_is(&instr->as.call.target, "__x_task_yield")) {
+      /* If it is a yield...
+       *
+       * Earlier in IR lowering, a source-level:
+       *
+       *   yield;
+       *
+       * ...was represented as a fake call:
+       *
+       *   call __x_task_yield()
+       *
+       * Inside an async function, this call is not meant to survive.
+       * It is just a marker saying that this is a suspension point.
+       *
+       * The transform replaces it with state-machine code.  */
+
+      /* Get the next pc and resume label.  */
+      int pc = suspend_index + 1;
+      char *resume_label = resume_labels->data[suspend_index++];
+
+      /* Emit `task.pc = pc`.  */
+      async_emit_set_pc(&out, ctx, pc);
+
+      /* Emit ret value.  0 for pending, 1 for completed.  */
+      async_emit_ret_status(&out, 0);
+
+      /* This emits:
+       *
+       * AsyncResume0:
+       *
+       * ...right after the `return 0`.
+       *
+       * That looks strange at first, because code after the return
+       * is unreachable in a normal call. But, the next poll starts
+       * at the top of the step function, reads `task.pc`, and jumps
+       * directly to this label. */
+      struct IRInstr resume = {0};
+      resume.kind = IRInstr_LBL;
+      resume.as.label.name = strdup(resume_label);
+
+      vec_insert(&out, resume);
+
+      continue;
+    }
+
+    if (instr->kind == IRInstr_CALL &&
+        ir_target_is(&instr->as.call.target, "__x_task_await")) {
+      /* If it's an await...
+       *
+       * Earlier, source:
+       *
+       *   let v = await t;
+       *
+       * ...became marker IR:
+       *
+       *   v = call __x_task_await(t)
+       *
+       * In a synchronous function, `__x_task_await` can be a blocking runtime
+       * call. But inside an async step function, blocking would be wrong. The
+       * task must suspend if the awaited task is not ready.
+       *
+       * So this transform replaces the blocking call with non-blocking poll
+       * logic. */
+
+      /* Get the next pc and resume label.  */
+      int pc = suspend_index + 1;
+      char *resume_label = resume_labels->data[suspend_index++];
+
+      /* This emits something conceptually like:
+       *
+       *   AsyncResumeN:
+       *     child = load awaited task;
+       *
+       *     if (__x_task_is_done(child)) {
+       *         result = __x_task_take_result(child);
+       *         store result into destination;
+       *         goto AsyncAwaitEnd;
+       *     }
+       *
+       *     __x_task_set_pc(current_task, pc);
+       *     return 0;
+       *
+       *   AsyncAwaitEnd:
+       *
+       * The key difference from `yield` is that `yield` always
+       * suspends immediately, and `await` only suspends if the
+       * awaited task is not done.*/
+      async_transform_await(&out, ctx, instr, pc, resume_label);
+
+      continue;
+    }
+
+    if (async_instr_is_io_wait(instr)) {
+      int pc = suspend_index + 1;
+      char *resume_label = resume_labels->data[suspend_index++];
+      async_transform_io_wait(&out, ctx, instr, pc, resume_label);
+      continue;
+    }
+
+    if (instr->kind == IRInstr_RET) {
+      /* If it is a ret...
+       *
+       * If the original ret has a value, this loads/prepares it.
+       * For example, if the return value is a variable stored
+       * in the async frame:
+       *
+       *  ret y
+       *
+       * ...then `async_materialize_value` may emit:
+       *
+       *  tmp_y = __x_task_frame_get(task, SLOT_y);
+       *
+       * ...and return `tmp_y`.
+       *
+       *  If there is no return value, it uses `0`. */
+      struct IRValue *ret_val =
+          instr->as.ret.val
+              ? async_materialize_value(&out, ctx, instr->as.ret.val)
+              : ir_const_u64(0);
+      VecIRValuePtr args = {0};
+      vec_insert(&args, async_task_value(ctx));
+      vec_insert(&args, ret_val);
+      ir_emit_call(&out, "__x_task_set_result", args, NULL);
+
+      /* Task is completed.  */
+      async_emit_ret_status(&out, 1);
+
+      continue;
+    }
+
+    char *preempt_label = preempt_labels->data[i];
+    int preempt_pc = preempt_pc_base + preempt_index++;
+    assert(preempt_label);
+
+    if (instr->kind == IRInstr_LBL) {
+      async_transform_regular_instr(&out, ctx, instr);
+      async_emit_preempt_point(&out, ctx, preempt_pc, preempt_label);
+      continue;
+    }
+
+    async_emit_preempt_point(&out, ctx, preempt_pc, preempt_label);
+
+    /* If the instruction is not `yield`, not `await`, and not `ret`,
+     * it gets transformed normally. This means reads and writes are
+     * rewritten through the task frame.
+     *
+     * For example, original IR:
+     *
+     *   tmp = x + 1
+     *
+     * ...becomes roughly:
+     *
+     *   tmp_x = __x_task_frame_get(task, SLOT_x)
+     *   tmp_local = tmp_x + 1
+     *   __x_task_frame_set(task, SLOT_tmp, tmp_local)
+     *
+     * Another example:
+     *
+     * Original IR:
+     *
+     *   call printf(fmt, x)
+     *
+     * ...becomes roughly:
+     *
+     *   tmp_x = __x_task_frame_get(task, SLOT_x)
+     *   call printf(fmt, tmp_x)
+     *
+     * This is what makes local variables and temporaries
+     * survive across suspension points like `yield` or `await`. */
+    async_transform_regular_instr(&out, ctx, instr);
+  }
+
+  /* Falling off the end of an async function is completion with result 0. */
+  VecIRValuePtr args = {0};
+  vec_insert(&args, async_task_value(ctx));
+  vec_insert(&args, ir_const_u64(0));
+  ir_emit_call(&out, "__x_task_set_result", args, NULL);
+  async_emit_ret_status(&out, 1);
+
+  return out;
+}
+
+static struct IRFunction *irfy_async_wrapper(struct DeclFn *fn,
+                                             struct AsyncLowerCtx *ctx,
+                                             char *step_name)
+{
+  VecIRInstr body = {0};
+  VecIRValuePtr spawn_args = {0};
+  vec_insert(&spawn_args, ir_const_u64((unsigned long long) ctx->slots.len));
+
+  struct IRValue *task = mkirvar();
+  task->type = (Type){.kind = TASK_T};
+
+  struct Expr target = {0};
+  target.kind = EXPR_VARIABLE;
+  target.as.var.name = strdup(step_name);
+  target.as.var.type = (Type){.kind = UNKNOWN_T};
+
+  struct IRInstr spawn = {0};
+  spawn.kind = IRInstr_SPAWN;
+  spawn.as.spawn.target = target;
+  spawn.as.spawn.args = spawn_args;
+  spawn.as.spawn.dst = clone_irval(task);
+  vec_insert(&body, spawn);
+
+  for (int i = 0; i < fn->params.len; i++) {
+    struct Parameter *param = &fn->params.data[i];
+    int slot = async_find_slot(ctx, param->name);
+    assert(slot >= 0);
+
+    VecIRValuePtr set_args = {0};
+    vec_insert(&set_args, clone_irval(task));
+    vec_insert(&set_args, ir_const_u64((unsigned long long) slot));
+    vec_insert(&set_args, ir_named_var(param->name, param->type));
+    ir_emit_call(&body, "__x_task_frame_set", set_args, NULL);
+  }
+
+  struct IRInstr ret = {0};
+  ret.kind = IRInstr_RET;
+  ret.as.ret.val = clone_irval(task);
+  vec_insert(&body, ret);
+
+  struct IRFunction f = {0};
+  f.name = fn->name;
+  f.params = fn->params;
+  f.retval = (Type){.kind = TASK_T};
+  f.body = body;
+  return ALLOC(f);
+}
+
+static struct IRFunction *irfy_async_step(struct AsyncLowerCtx *ctx,
+                                          VecIRInstr body, char *step_name)
+{
+  struct Parameter task_param = {0};
+  task_param.name = ctx->task_name;
+  task_param.type = (Type){.kind = TASK_T};
+  task_param.is_mut = false;
+
+  VecParam params = {0};
+  vec_insert(&params, task_param);
+
+  struct IRFunction f = {0};
+  f.name = step_name;
+  f.params = params;
+  f.retval = (Type){.kind = I64_T};
+  f.body = body;
+  return ALLOC(f);
+}
+
+static void irfy_async_fn(struct DeclFn *fn, VecIRFunctionPtr *funcs)
+{
+  VecIRInstr orig = {0};
+  for (int i = 0; i < fn->body.len; i++) {
+    irfy_stmt(&orig, &fn->body.data[i]);
+  }
+
+  struct AsyncLowerCtx ctx = {0};
+  ctx.task_name = mkstr("var.__async_task.%d", mktmp());
+
+  /* Add fn params to the async frame-layout context.
+   *
+   * async fn count(name: str, start: i64) -> i64 {
+   *   ...
+   * }
+   *
+   * ...it creates entries roughly like:
+   *
+   *   slot 0 = name   str
+   *   slot 1 = start  i64
+   *
+   * Those entries go into `ctx.slots`.  */
+  for (int i = 0; i < fn->params.len; i++) {
+    async_add_slot(&ctx, fn->params.data[i].name, fn->params.data[i].type);
+  }
+
+  /* Add locals and temporaries to frame slots.
+   *
+   * For example, a source like:
+   *
+   *   async fn f(x: i64) -> i64 {
+   *     let y: i64 = x + 1;
+   *     yield;
+   *     ret y;
+   *   }
+   *
+   * ...might first become normal-ish IR like:
+   *
+   *   tmp.1 = x + 1
+   *   y = tmp.1
+   *   call __x_task_yield()
+   *   ret y
+   *
+   * Then this loop finds `x`, `tmp.1`, and `y`, and adds them to
+   * `ctx.slots`, producing a frame layout like:
+   *
+   *   slot 0 = x
+   *   slot 1 = tmp.1
+   *   slot 2 = y
+   *
+   * Later, when transforming the body, reads/writes of those values
+   * become frame operations:
+   *
+   *   tmp_x = __x_task_frame_get(task, slot_x)
+   *   tmp_1 = tmp_x + 1;
+   *   __x_task_frame_set(task, slot_tmp_1, tmp_1)
+   *   __x_task_frame_set(task, slot_y, tmp_1)
+   *
+   *   ...
+   *
+   *   tmp_y = __x_task_frame_get(task, slot_y)
+   *   __x_task_set_result(task, tmp_y)  */
+  for (int i = 0; i < orig.len; i++) {
+    async_collect_instr_vars(&ctx, &orig.data[i]);
+  }
+
+  /* This line creates the list of resume labels for the async state machine:
+   * At this point, `orig` is the ordinary IR for the async function body.=
+   * It still contains marker calls like:
+   *
+   * call __x_task_yield()
+   * dst = call __x_task_await(task)
+   *
+   * It scans that IR and creates one label per suspension point (`yield` or
+   * `await`, because both can pause the async function and return control to
+   * the scheduler).
+   *
+   * So for a source like:
+   *
+   *   async fn f() -> i64 {
+   *     print(1);
+   *     yield;
+   *     print(2);
+   *     yield;
+   *     print(3);
+   *     ret 0
+   *   }
+   *
+   * ...it will create something like:
+   *
+   *   resume_labels[0] = ".LAsyncResume.10"
+   *   resume_labels[1] = ".LAsyncResume.11"  */
+  VecCharPtr resume_labels = async_collect_resume_labels(&orig);
+  VecCharPtr preempt_labels = async_collect_preempt_labels(&orig);
+
+  /* The async lowering starts building the generated step function.
+   *
+   * For an async function like:
+   *
+   *   async fn count(name: str, start: i64) -> i64 {
+   *     ...
+   *   }
+   *
+   * ...the first line creates the generated step-function name:
+   * `count__async_step`.
+   *
+   * After lowering, the compiler will emit two IR functions:
+   *
+   *   count                 // public wrapper/constructor
+   *   count__async_step     // hidden state-machine body
+   *
+   * The wrapper `count(...)` allocates a task and stores parameters
+   * into the task frame. The step function `count__async_step(task)`
+   * is what the scheduler repeatedly polls.
+   *
+   * The original ordinary IR body is taken along with the async
+   * lowering context and resume labels, and rewritten it into
+   * the actual state-machine body.
+   *
+   * So if orig looked conceptually like:
+   *
+   *   tmp = start + 1
+   *   call __x_task_yield()
+   *   ret tmp
+   *
+   * ..the body will be transformed into:
+   *
+   *   pc = __x_task_get_pc(task)
+   *   if pc == 0 goto AsyncStart
+   *   if pc == 1 goto AsyncResume0
+   *   call __x_async_bad_pc(task)
+   *   ret 1
+   *
+   *   AsyncStart:
+   *     start_local = __x_task_frame_get(task, SLOT_start)
+   *     tmp_local = start_local + 1
+   *     __x_task_frame_set(task, SLOT_tmp, tmp_local)
+   *
+   *     __x_task_set_pc(task, 1)
+   *     ret 0
+   *
+   *   AsyncResume0:
+   *     tmp_local = __x_task_frame_get(task, SLOT_tmp)
+   *     __x_task_set_result(task, tmp_local)
+   *     ret 1 */
+  char *step_name = mkstr("%s__async_step", fn->name);
+  VecIRInstr step_body =
+      async_transform_body(&orig, &ctx, &resume_labels, &preempt_labels);
+
+  /* This builds the public function with the original name:
+   *
+   *   count(name: str, start: i64) -> task
+   *
+   * Its job is not to run the async body, but to create
+   * and initialize a task object. Conceptually it emits IR for:
+   *
+   *   task count(char *name, int64_t start) {
+   *     task t = __x_task_new(count__async_step, frame_slot_count);
+   *
+   *     __x_task_frame_set(t, SLOT_name, name);
+   *     __x_task_frame_set(t, SLOT_start, start);
+   *
+   *     return t;
+   *   } */
+  struct IRFunction *wrapper = irfy_async_wrapper(fn, &ctx, step_name);
+  struct IRFunction *step = irfy_async_step(&ctx, step_body, step_name);
+  vec_insert(funcs, wrapper);
+  vec_insert(funcs, step);
+}
+
+static void irfy_fn(struct DeclFn *fn, VecIRFunctionPtr *funcs)
+{
+  if (fn->is_extern) {
+    return;
+  }
+
+  struct IRFunction f = {0};
   VecIRInstr instrs = {0};
 
   for (int i = 0; i < fn->body.len; i++) {
@@ -1522,7 +2935,7 @@ static struct IRFunction *irfy_fn(struct DeclFn *fn)
   f.params = fn->params;
   f.retval = fn->retval;
 
-  return ALLOC(f);
+  vec_insert(funcs, ALLOC(f));
 }
 
 struct IrfyResult irfy_ast(struct AST *ast)
@@ -1535,7 +2948,6 @@ struct IrfyResult irfy_ast(struct AST *ast)
   result.msg = NULL;
 
   for (int i = 0; i < ast->decls.len; i++) {
-    struct IRFunction *f;
     struct Decl *decl = &ast->decls.data[i];
 
     if (decl->kind == DECL_VARIABLE) {
@@ -1545,8 +2957,7 @@ struct IrfyResult irfy_ast(struct AST *ast)
         char *directive = global_initializer_directive(&decl->as.variable);
         if (!directive) {
           result.is_ok = false;
-          result.msg =
-              "Global variable initializers must be constant literals";
+          result.msg = "Global variable initializers must be constant literals";
           prog.funcs = funcs;
           result.prog = prog;
           return result;
@@ -1560,9 +2971,10 @@ struct IrfyResult irfy_ast(struct AST *ast)
       continue;
     }
 
-    f = irfy_fn(&decl->as.fn);
-    if (f) {
-      vec_insert(&funcs, f);
+    if (decl->as.fn.is_async) {
+      irfy_async_fn(&decl->as.fn, &funcs);
+    } else {
+      irfy_fn(&decl->as.fn, &funcs);
     }
   }
 
@@ -1573,7 +2985,7 @@ struct IrfyResult irfy_ast(struct AST *ast)
   return result;
 }
 
-#if defined (DEBUG_IR) || defined(DEBUG_IR_OPT)
+#if defined(DEBUG_IR) || defined(DEBUG_IR_OPT)
 void print_ir_val(struct IRValue *ir_val, int spaces)
 {
   switch (ir_val->kind) {
@@ -1910,6 +3322,33 @@ static void print_ir_instr(struct IRInstr *instr, int spaces)
       printf(")");
       break;
     }
+    case IRInstr_SPAWN: {
+      printf("IRInstr_SPAWN(\n");
+
+      print_indent(spaces + 2);
+      printf("target = ");
+      print_expr(&instr->as.spawn.target, spaces + 2);
+      printf(",\n");
+
+      print_indent(spaces + 2);
+      printf("args: [\n");
+      for (int k = 0; k < instr->as.spawn.args.len; k++) {
+        print_indent(spaces + 4);
+        print_ir_val(instr->as.spawn.args.data[k], spaces + 4);
+        printf(",\n");
+      }
+      print_indent(spaces + 2);
+      printf("],\n");
+
+      print_indent(spaces + 2);
+      printf("dst: ");
+      print_ir_val(instr->as.spawn.dst, spaces + 2);
+      printf("\n");
+
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
     case IRInstr_CPY_FROM_OFFSET: {
       printf("IRInstr_CPY_FROM_OFFSET(\n");
       print_indent(spaces + 2);
@@ -1986,4 +3425,3 @@ void print_ir(struct IRProgram *prog)
   }
 }
 #endif
-

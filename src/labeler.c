@@ -98,6 +98,7 @@ static struct LoopLabelResult loop_label_stmt(struct Stmt *stmt, char *label)
     case STMT_EXPR:
     case STMT_LET:
     case STMT_GOTO:
+    case STMT_YIELD:
       break;
     default:
       assert(0);

@@ -1112,6 +1112,6 @@ struct EmitResult emit(struct AsmProgram *prog, char *path)
   }
 
   fclose(f);
-  
+
   return r;
 }

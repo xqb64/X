@@ -7,8 +7,6 @@
 
 #include "codegen.h"
 #include "util.h"
-
-#include "codegen.h"
 #include "vector.h"
 
 struct AllocatedReg {
@@ -1485,7 +1483,8 @@ static bool fixed_reg_is_used(VecActiveInterval *active, enum AsmRegister reg)
   return false;
 }
 
-static bool fixed_find_free_reg(VecActiveInterval *active, enum AsmRegister *out_reg)
+static bool fixed_find_free_reg(VecActiveInterval *active,
+                                enum AsmRegister *out_reg)
 {
   for (int i = 0; i < NUM_ALLOCATABLE_INT_REGS; i++) {
     enum AsmRegister reg = allocatable_int_regs[i];
@@ -1728,8 +1727,8 @@ static void add_precolored_register_nodes(struct InterferenceGraph *graph)
   }
 }
 
-static void interference_add_edge_by_index(struct InterferenceGraph *graph, int ai,
-                                    int bi)
+static void interference_add_edge_by_index(struct InterferenceGraph *graph,
+                                           int ai, int bi)
 {
   if (ai == bi) {
     return;
@@ -1744,7 +1743,8 @@ static void interference_add_edge_by_index(struct InterferenceGraph *graph, int 
   }
 }
 
-static void interference_add_edge(struct InterferenceGraph *graph, char *a, char *b)
+static void interference_add_edge(struct InterferenceGraph *graph, char *a,
+                                  char *b)
 {
   int ai;
   int bi;
@@ -3947,9 +3947,7 @@ static void print_spill_costs(VecSpillCost *costs)
   printf("  %-24s %-8s\n", "pseudo", "cost");
 
   for (int i = 0; i < costs->len; i++) {
-    printf("  %-24s %-8.2f\n",
-           costs->data[i].pseudo,
-           costs->data[i].cost);
+    printf("  %-24s %-8.2f\n", costs->data[i].pseudo, costs->data[i].cost);
   }
 }
 #endif

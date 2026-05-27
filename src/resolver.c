@@ -61,6 +61,13 @@ static struct ResolveResult resolve_expr(struct VariableMap **varmap,
       }
       break;
     }
+    case EXPR_AWAIT: {
+      struct ResolveResult r = resolve_expr(varmap, expr->as.await_expr.expr);
+      if (!r.is_ok) {
+        return r;
+      }
+      break;
+    }
     case EXPR_CAST: {
       struct ResolveResult r;
 
@@ -89,8 +96,9 @@ static struct ResolveResult resolve_expr(struct VariableMap **varmap,
           expr->as.literal.as.i32 = val;
           expr->type = (Type){.kind = I32_T};
         } else {
-          return (struct ResolveResult){.is_ok = false,
-                                        .msg = "Undefined variable"};
+          return (struct ResolveResult){
+              .is_ok = false,
+              .msg = mkstr("Undefined variable '%s'", expr->as.var.name)};
         }
       }
       break;
@@ -243,6 +251,7 @@ static struct ResolveResult resolve_stmt(struct VariableMap **varmap,
     case STMT_BREAK:
     case STMT_CONTINUE:
     case STMT_GOTO:
+    case STMT_YIELD:
       break;
     case STMT_EXPR: {
       struct ResolveResult r;

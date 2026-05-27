@@ -357,6 +357,7 @@ static bool constant_propagate_ir(struct IRProgram *prog)
         case IRInstr_JMP:
         case IRInstr_JZ:
         case IRInstr_CALL:
+        case IRInstr_SPAWN:
         case IRInstr_LOAD:
         case IRInstr_STORE:
         case IRInstr_GETADDR:
@@ -593,6 +594,20 @@ static bool copy_propagate_ir(struct IRProgram *prog)
 
           if (instr->as.call.dst && instr->as.call.dst->kind == IRValue_VAR) {
             copy_env_kill_var(&env, instr->as.call.dst->as.var);
+          }
+
+          break;
+        }
+
+        case IRInstr_SPAWN: {
+          for (int k = 0; k < instr->as.spawn.args.len; k++) {
+            changed |= replace_copy_use(&env, &instr->as.spawn.args.data[k]);
+          }
+
+          copy_env_clear(&env);
+
+          if (instr->as.spawn.dst && instr->as.spawn.dst->kind == IRValue_VAR) {
+            copy_env_kill_var(&env, instr->as.spawn.dst->as.var);
           }
 
           break;
@@ -1027,6 +1042,13 @@ static void compute_ir_instr_use_def(struct IRInstr *instr, VecIRNameSet *use,
       ir_add_def_val(def, instr->as.call.dst);
       break;
 
+    case IRInstr_SPAWN:
+      for (int i = 0; i < instr->as.spawn.args.len; i++) {
+        ir_add_use_val(use, instr->as.spawn.args.data[i]);
+      }
+      ir_add_def_val(def, instr->as.spawn.dst);
+      break;
+
     case IRInstr_JMP:
       break;
 
@@ -1232,6 +1254,8 @@ static struct IRValue *ir_instr_dst(struct IRInstr *instr)
       return instr->as.copy.dst;
     case IRInstr_CALL:
       return instr->as.call.dst;
+    case IRInstr_SPAWN:
+      return instr->as.spawn.dst;
     case IRInstr_GETADDR:
       return instr->as.getaddr.dst;
     case IRInstr_LOAD:
@@ -1278,6 +1302,7 @@ static bool ir_instr_is_removable_dead_def(struct IRInstr *instr)
      * - control-flow instructions must stay.
      */
     case IRInstr_CALL:
+    case IRInstr_SPAWN:
     case IRInstr_LOAD:
     case IRInstr_STORE:
     case IRInstr_RET:

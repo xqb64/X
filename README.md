@@ -91,6 +91,12 @@ The primary responsibility of the fixup pass is to enforce the operand constrain
 - C-like enums
 - sizeof
 - varargs
+- stackless async tasks
+  - `async fn` marks a function as spawnable on the scheduler
+  - calling an async function creates a `task` handle
+  - `await task` drives the scheduler until that task completes
+  - `yield;` lets the current task give another runnable task a turn
+  - async runtime waits: `__x_io_wait_read(fd)`, `__x_io_wait_write(fd)`, and `__x_sleep_ms(ms)` suspend the current async task instead of blocking the whole scheduler
 - graph-coloring-based register allocator with conservative coalescing
 - IR optimizations
   - constant folding
@@ -126,6 +132,54 @@ fn main() -> i32 {
     printf("%d\n", x);
     x += 1;
   }
+  ret 0;
+}
+```
+
+
+## Async example
+
+Async functions are lowered to stackless state machines, then driven by a tiny cooperative scheduler.  Each `async fn` becomes two generated functions: a constructor that returns a `task` handle, and a `__async_step` function that polls one state-machine step.  Locals and temporaries that can live across `yield`/`await` are stored in the task frame instead of on a saved C stack.
+
+The first-cut ABI intentionally stays small: async frame values are integer/pointer-sized slots, and `await` returns the completed task result as `i64`; cast it when you need a narrower type.
+
+Async tasks also have a small logical preemption budget.  The async lowering pass injects checkpoint calls into generated step functions; when a task exceeds its per-poll tick budget, the compiler-generated code saves the current async pc and returns pending to the scheduler.  This means a tight async loop can no longer monopolize the scheduler just because it forgot to call `yield;`.  The default budget is `1024` logical ticks per poll.  Set `X_ASYNC_PREEMPT_TICKS=0` to disable it, or set a smaller/larger value to tune fairness versus overhead:
+
+```sh
+X_ASYNC_PREEMPT_TICKS=8 ./program
+```
+
+The runtime also has a tiny event-loop layer built on POSIX `poll(2)`.  Inside an async function, calls to these runtime helpers are treated as suspension points by the compiler:
+
+```rust
+extern fn __x_io_wait_read(fd: i64) -> i64;
+extern fn __x_io_wait_write(fd: i64) -> i64;
+extern fn __x_sleep_ms(ms: i64) -> i64;
+extern fn __x_io_set_nonblocking(fd: i64) -> i64;
+```
+
+`__x_io_wait_read(fd)` parks the current task until `fd` is readable, `__x_io_wait_write(fd)` parks it until `fd` is writable, and `__x_sleep_ms(ms)` parks it until the timer expires.  When no normal tasks are runnable, the scheduler blocks in `poll` until an fd or timer wakes a task.  For real sockets/pipes, pair this with nonblocking file descriptors so the subsequent `read`/`write` call cannot block the whole scheduler.
+
+In synchronous code, the same wait helpers are ordinary blocking calls.
+
+```rust
+extern fn printf(fmt: str, ...) -> i32;
+
+async fn count(name: str, start: i64) -> i64 {
+  printf("%s:%lld\n", name, start);
+  yield;
+  printf("%s:%lld\n", name, start + 1);
+  yield;
+  printf("%s:%lld\n", name, start + 2);
+  ret start + 2;
+}
+
+fn main() -> i32 {
+  let a: task = async count("A", 10);
+  let b: task = async count("B", 20);
+  let av: i64 = await a;
+  let bv: i64 = await b;
+  printf("done %lld %lld\n", av, bv);
   ret 0;
 }
 ```

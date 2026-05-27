@@ -122,6 +122,7 @@ void free_type(Type *t)
     case F32_T:
     case F64_T:
     case STR_T:
+    case TASK_T:
     case BOOL_T:
     case VOID_T:
     case UNKNOWN_T:
@@ -189,6 +190,7 @@ bool types_equal(Type a, Type b)
     case F32_T:
     case F64_T:
     case STR_T:
+    case TASK_T:
     case BOOL_T:
     case UNKNOWN_T:
       return true;
@@ -199,6 +201,10 @@ bool types_equal(Type a, Type b)
       }
 
       if (!types_equal(*a.as.func.retval, *b.as.func.retval)) {
+        return false;
+      }
+
+      if (a.as.func.is_async != b.as.func.is_async) {
         return false;
       }
 
@@ -280,6 +286,7 @@ void get_type_size_and_align(Type *type, int *size, int *align)
     case F64_T:
     case PTR_T:
     case STR_T:
+    case TASK_T:
       *size = 8;
       *align = 8;
       break;
@@ -565,6 +572,7 @@ int get_type_size(Type t)
     case U64_T:
     case F64_T:
     case STR_T:
+    case TASK_T:
     case PTR_T:
       return 8;
     case STRUCT_T: {
@@ -609,7 +617,7 @@ bool is_integer_type(enum TypeKind kind)
 static bool is_scalar_type(Type t)
 {
   return is_integer_type(t.kind) || t.kind == BOOL_T || is_float_type(t.kind) ||
-         t.kind == PTR_T;
+         t.kind == PTR_T || t.kind == TASK_T;
 }
 
 static bool can_explicit_cast(Type src, Type dst)
@@ -670,12 +678,50 @@ static bool is_expr_mutable(struct Expr *expr, struct Symbol *sym_table)
   }
 }
 
+static bool is_async_abi_type(Type t)
+{
+  switch (t.kind) {
+    case VOID_T:
+    case BOOL_T:
+    case I8_T:
+    case I16_T:
+    case I32_T:
+    case I64_T:
+    case U8_T:
+    case U16_T:
+    case U32_T:
+    case U64_T:
+    case PTR_T:
+    case STR_T:
+    case TASK_T:
+      return true;
+    default:
+      return false;
+  }
+}
+
 static struct TypecheckResult typecheck_expr(struct Expr *expr,
                                              struct Symbol *sym_table)
 {
   struct TypecheckResult res = {.is_ok = true, .msg = NULL, .ast = NULL};
 
   switch (expr->kind) {
+    case EXPR_AWAIT: {
+      struct TypecheckResult r =
+          typecheck_expr(expr->as.await_expr.expr, sym_table);
+      if (!r.is_ok) {
+        return r;
+      }
+
+      if (expr->as.await_expr.expr->type.kind != TASK_T &&
+          expr->as.await_expr.expr->type.kind != U64_T) {
+        return (struct TypecheckResult){
+            .is_ok = false, .msg = "await expects a task handle", .ast = NULL};
+      }
+
+      expr->type = (Type){.kind = I64_T};
+      break;
+    }
     case EXPR_SIZEOF: {
       struct TypecheckResult r;
 
@@ -1244,9 +1290,9 @@ static struct TypecheckResult typecheck_expr(struct Expr *expr,
       break;
     }
     case EXPR_CALL: {
-      struct Symbol *callee_sym =
-          sym_get(sym_table, expr->as.call.target->as.var.name);
+      struct Symbol *callee_sym;
 
+      callee_sym = sym_get(sym_table, expr->as.call.target->as.var.name);
       if (!callee_sym) {
         return (struct TypecheckResult){
             .is_ok = false, .msg = "Called an undefined function", .ast = NULL};
@@ -1351,7 +1397,51 @@ static struct TypecheckResult typecheck_expr(struct Expr *expr,
         }
       }
 
-      expr->type = clone_type(*callee_sym->type.as.func.retval);
+      if (callee_sym->type.kind == FN_T && callee_sym->type.as.func.is_async) {
+        if (expr->as.call.arguments.len > 4) {
+          return (struct TypecheckResult){
+              .is_ok = false,
+              .msg = "async spawn supports at most four arguments",
+              .ast = NULL};
+        }
+
+        for (int i = 0; i < expr->as.call.arguments.len; i++) {
+          Type actual_type = expr->as.call.arguments.data[i].type;
+
+          if (!is_async_abi_type(actual_type)) {
+            return (struct TypecheckResult){
+                .is_ok = false,
+                .msg =
+                    "async arguments must fit in one integer/pointer register",
+                .ast = NULL};
+          }
+
+          if (i < expected_args) {
+            Type expected_type = callee_sym->type.as.func.params.data[i];
+
+            if (!is_async_abi_type(expected_type)) {
+              return (struct TypecheckResult){
+                  .is_ok = false,
+                  .msg =
+                      "async parameters must fit in one integer/pointer "
+                      "register",
+                  .ast = NULL};
+            }
+          }
+        }
+
+        if (!is_async_abi_type(*callee_sym->type.as.func.retval)) {
+          return (struct TypecheckResult){.is_ok = false,
+                                          .msg =
+                                              "async return values must fit in "
+                                              "one integer/pointer register",
+                                          .ast = NULL};
+        }
+
+        expr->type = (Type){.kind = TASK_T};
+      } else {
+        expr->type = clone_type(*callee_sym->type.as.func.retval);
+      }
 
       break;
     }
@@ -1362,9 +1452,9 @@ static struct TypecheckResult typecheck_expr(struct Expr *expr,
 }
 
 static struct TypecheckResult typecheck_initializer(struct Expr *init,
-                                                     Type expected_type,
-                                                     struct Symbol **sym_table,
-                                                     char *error_msg)
+                                                    Type expected_type,
+                                                    struct Symbol **sym_table,
+                                                    char *error_msg)
 {
   struct TypecheckResult res;
 
@@ -1549,6 +1639,7 @@ static struct TypecheckResult typecheck_stmt(struct Stmt *stmt,
     case STMT_BREAK:
     case STMT_CONTINUE:
     case STMT_GOTO:
+    case STMT_YIELD:
       break;
     default:
       assert(0);
@@ -1571,6 +1662,7 @@ static Type make_fn_type(struct DeclFn *fn)
   *t.as.func.retval = clone_type(fn->retval);
   t.as.func.params = param_types;
   t.as.func.is_variadic = fn->is_variadic;
+  t.as.func.is_async = fn->is_async;
 
   return t;
 }
@@ -1658,8 +1750,8 @@ static struct TypecheckResult typecheck_fn_decl(struct DeclFn *fn,
   }
 
   for (int i = 0; i < fn->body.len; i++) {
-    struct TypecheckResult res = typecheck_stmt(&fn->body.data[i],
-                                                &fn_sym_table);
+    struct TypecheckResult res =
+        typecheck_stmt(&fn->body.data[i], &fn_sym_table);
     if (!res.is_ok) {
       return res;
     }

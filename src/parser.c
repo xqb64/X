@@ -104,6 +104,11 @@ void free_expr(struct Expr *expr)
       free_expr(expr->as.member.target);
       break;
     }
+    case EXPR_AWAIT: {
+      free_expr(expr->as.await_expr.expr);
+      free(expr->as.await_expr.expr);
+      break;
+    }
     default:
       assert(0);
   }
@@ -202,6 +207,8 @@ void free_stmt(struct Stmt *stmt)
       free_expr(&stmt->as.expr_stmt.expr);
       break;
     }
+    case STMT_YIELD:
+      break;
     default:
       assert(0);
   }
@@ -808,9 +815,9 @@ static Type parse_type(struct Parser *parser)
   }
 
   struct Token *type_token =
-      consume_any(parser, 12, TOKEN_U8, TOKEN_U16, TOKEN_U32, TOKEN_U64,
+      consume_any(parser, 13, TOKEN_U8, TOKEN_U16, TOKEN_U32, TOKEN_U64,
                   TOKEN_I8, TOKEN_I16, TOKEN_I32, TOKEN_I64, TOKEN_F32,
-                  TOKEN_F64, TOKEN_BOOL, TOKEN_STR);
+                  TOKEN_F64, TOKEN_BOOL, TOKEN_STR, TOKEN_TASK);
 
   if (type_token) {
     if (strncmp(type_token->start, "i8", type_token->len) == 0) {
@@ -837,6 +844,8 @@ static Type parse_type(struct Parser *parser)
       return (Type){.kind = BOOL_T};
     } else if (strncmp(type_token->start, "str", type_token->len) == 0) {
       return (Type){.kind = STR_T};
+    } else if (strncmp(type_token->start, "task", type_token->len) == 0) {
+      return (Type){.kind = TASK_T};
     }
   } else if (check(parser, TOKEN_IDENTIFIER)) {
     struct Token *id_token = consume(parser, TOKEN_IDENTIFIER);
@@ -990,6 +999,17 @@ static struct ParseFnResult unary(struct Parser *parser)
     } else {
       assert(0);
     }
+  } else if (match(parser, 1, TOKEN_AWAIT)) {
+    struct ParseFnResult inner_res = unary(parser);
+    if (!inner_res.is_ok) {
+      return inner_res;
+    }
+
+    struct Expr e;
+    e.kind = EXPR_AWAIT;
+    e.as.await_expr.expr = ALLOC(inner_res.as.expr);
+
+    return (struct ParseFnResult){.as.expr = e, .is_ok = true, .msg = NULL};
   } else if (match(parser, 1, TOKEN_SIZEOF)) {
     struct ParseFnResult right_result;
     struct Token *token_lparen, *token_rparen;
@@ -1521,8 +1541,11 @@ static struct ParseFnResult parse_param_list(struct Parser *parser,
             .msg = "Expected `name: type` format for parameters"};
       }
 
+      name = strndup(name_token->start, name_token->len);
+
       colon_token = consume(parser, TOKEN_COLON);
       if (!colon_token) {
+        free(name);
         return (struct ParseFnResult){
             .is_ok = false,
             .as.decl = {0},
@@ -1530,7 +1553,6 @@ static struct ParseFnResult parse_param_list(struct Parser *parser,
       }
 
       type = parse_type(parser);
-      name = strndup(name_token->start, name_token->len);
 
       struct Parameter p;
       p.name = name;
@@ -1556,7 +1578,7 @@ static struct ParseFnResult parse_param_list(struct Parser *parser,
 }
 
 static struct ParseFnResult parse_fn_signature(struct Parser *parser,
-                                               bool is_extern)
+                                               bool is_extern, bool is_async)
 {
   struct Token *token_fn, *token_id, *token_arrow;
   VecParam parameters = {0};
@@ -1600,6 +1622,7 @@ static struct ParseFnResult parse_fn_signature(struct Parser *parser,
   fn.body = (VecStmt){0};
   fn.is_extern = is_extern;
   fn.is_variadic = is_variadic;
+  fn.is_async = is_async;
 
   return (struct ParseFnResult){
       .is_ok = true,
@@ -1609,7 +1632,38 @@ static struct ParseFnResult parse_fn_signature(struct Parser *parser,
 
 static struct ParseFnResult parse_fn_decl(struct Parser *parser)
 {
-  struct ParseFnResult result = parse_fn_signature(parser, false);
+  struct ParseFnResult result = parse_fn_signature(parser, false, false);
+  if (!result.is_ok) {
+    return result;
+  }
+
+  struct DeclFn *fn = &result.as.decl.as.fn;
+  struct DeclFn *prev_fn = parser->current_fn;
+  parser->current_fn = fn;
+
+  struct ParseFnResult block_result = block(parser);
+
+  parser->current_fn = prev_fn;
+
+  if (!block_result.is_ok) {
+    return block_result;
+  }
+
+  struct Stmt body = block_result.as.stmt;
+  fn->body = body.as.block.stmts;
+
+  return result;
+}
+
+static struct ParseFnResult parse_async_fn_decl(struct Parser *parser)
+{
+  struct Token *token_async = consume(parser, TOKEN_ASYNC);
+  if (!token_async) {
+    return (struct ParseFnResult){
+        .is_ok = false, .as.decl = {0}, .msg = "Expected token 'async'"};
+  }
+
+  struct ParseFnResult result = parse_fn_signature(parser, false, true);
   if (!result.is_ok) {
     return result;
   }
@@ -2054,8 +2108,27 @@ static struct ParseFnResult parse_continue_stmt(struct Parser *parser)
   return result;
 }
 
+static struct ParseFnResult parse_yield_stmt(struct Parser *parser)
+{
+  struct Token *token_yield = consume(parser, TOKEN_YIELD);
+  if (!token_yield) {
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Expected 'yield'", .as.stmt = {0}};
+  }
+
+  struct Token *token_semicolon = consume(parser, TOKEN_SEMICOLON);
+  if (!token_semicolon) {
+    return (struct ParseFnResult){
+        .is_ok = false, .msg = "Expected ';' after 'yield'", .as.stmt = {0}};
+  }
+
+  return (struct ParseFnResult){.is_ok = true,
+                                .msg = NULL,
+                                .as.stmt = ((struct Stmt){.kind = STMT_YIELD})};
+}
+
 static struct ParseFnResult parse_variable_decl_after_let(struct Parser *parser,
-                                                         bool is_extern)
+                                                          bool is_extern)
 {
   struct Token *token_id, *token_colon, *token_equal, *token_semicolon;
   bool is_mut = match(parser, 1, TOKEN_MUT);
@@ -2122,7 +2195,8 @@ static struct ParseFnResult parse_variable_decl_after_let(struct Parser *parser,
   return (struct ParseFnResult){
       .is_ok = true,
       .msg = NULL,
-      .as.decl = ((struct Decl){.kind = DECL_VARIABLE, .as.variable = variable})};
+      .as.decl =
+          ((struct Decl){.kind = DECL_VARIABLE, .as.variable = variable})};
 }
 
 static struct ParseFnResult parse_variable_decl(struct Parser *parser)
@@ -2147,7 +2221,7 @@ static struct ParseFnResult parse_extern_decl(struct Parser *parser)
   }
 
   if (check(parser, TOKEN_FN)) {
-    struct ParseFnResult result = parse_fn_signature(parser, true);
+    struct ParseFnResult result = parse_fn_signature(parser, true, false);
     if (!result.is_ok) {
       return result;
     }
@@ -2168,10 +2242,9 @@ static struct ParseFnResult parse_extern_decl(struct Parser *parser)
     return parse_variable_decl_after_let(parser, true);
   }
 
-  return (struct ParseFnResult){
-      .is_ok = false,
-      .as.decl = {0},
-      .msg = "Expected 'fn' or 'let' after 'extern'"};
+  return (struct ParseFnResult){.is_ok = false,
+                                .as.decl = {0},
+                                .msg = "Expected 'fn' or 'let' after 'extern'"};
 }
 
 static struct ParseFnResult parse_expr_stmt(struct Parser *parser)
@@ -2365,8 +2438,7 @@ static struct ParseFnResult parse_enum_decl(struct Parser *parser)
   enum_decl.name = name;
   enum_decl.variants = variants;
 
-  result.as.decl =
-      (struct Decl){.kind = DECL_ENUM, .as.enum_decl = enum_decl};
+  result.as.decl = (struct Decl){.kind = DECL_ENUM, .as.enum_decl = enum_decl};
   return result;
 }
 
@@ -2488,6 +2560,14 @@ static struct ParseFnResult parse_stmt(struct Parser *parser)
       result.as.stmt = goto_res.as.stmt;
       break;
     }
+    case TOKEN_YIELD: {
+      struct ParseFnResult yield_res = parse_yield_stmt(parser);
+      if (!yield_res.is_ok) {
+        return yield_res;
+      }
+      result.as.stmt = yield_res.as.stmt;
+      break;
+    }
     case TOKEN_LBRACE: {
       struct ParseFnResult block_res = block(parser);
       if (!block_res.is_ok) {
@@ -2512,6 +2592,8 @@ static struct ParseFnResult parse_stmt(struct Parser *parser)
 static struct ParseFnResult parse_decl(struct Parser *parser)
 {
   switch (parser->curr->kind) {
+    case TOKEN_ASYNC:
+      return parse_async_fn_decl(parser);
     case TOKEN_FN:
       return parse_fn_decl(parser);
     case TOKEN_EXTERN:
@@ -2557,7 +2639,8 @@ struct ParseResult parse(struct Parser *parser)
   return result;
 }
 
-#if defined(DEBUG_PARSER) || defined(DEBUG_RESOLVER) || defined(DEBUG_TYPECHECKER) || defined(DEBUG_LABELER)
+#if defined(DEBUG_PARSER) || defined(DEBUG_RESOLVER) || \
+    defined(DEBUG_TYPECHECKER) || defined(DEBUG_LABELER)
 void print_type(Type *type, int spaces)
 {
   switch (type->kind) {
@@ -2606,6 +2689,9 @@ void print_type(Type *type, int spaces)
       break;
     case STR_T:
       printf("str");
+      break;
+    case TASK_T:
+      printf("task");
       break;
     case FN_T: {
       printf("fn(\n");
@@ -2950,6 +3036,15 @@ void print_expr(struct Expr *expr, int spaces)
       printf(")");
       break;
     }
+    case EXPR_AWAIT: {
+      printf("Await(\n");
+      print_indent(spaces + 2);
+      print_expr(expr->as.await_expr.expr, spaces + 2);
+      printf("\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
     default:
       assert(0);
   }
@@ -3174,6 +3269,11 @@ void print_stmt(struct Stmt *stmt, int spaces)
       printf(")\n");
       break;
     }
+    case STMT_YIELD: {
+      print_indent(spaces);
+      printf("STMT_YIELD()\n");
+      break;
+    }
     default:
       assert(0 && "Unhandled statement kind in print_stmt");
   }
@@ -3192,8 +3292,9 @@ void print_decl(struct Decl *decl, int spaces)
       print_indent(spaces + 2);
       printf("is_extern = %s,\n", decl->as.fn.is_extern ? "true" : "false");
       print_indent(spaces + 2);
-      printf("is_variadic = %s,\n",
-             decl->as.fn.is_variadic ? "true" : "false");
+      printf("is_variadic = %s,\n", decl->as.fn.is_variadic ? "true" : "false");
+      print_indent(spaces + 2);
+      printf("is_async = %s,\n", decl->as.fn.is_async ? "true" : "false");
 
       print_params(&decl->as.fn.params, spaces + 2);
 
@@ -3285,4 +3386,4 @@ void print_ast(struct AST *ast)
     print_decl(&ast->decls.data[i], 0);
   }
 }
-#endif 
+#endif

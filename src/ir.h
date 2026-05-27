@@ -25,6 +25,7 @@ enum IRInstrKind {
   IRInstr_RET,
   IRInstr_CPY,
   IRInstr_CALL,
+  IRInstr_SPAWN,
   IRInstr_JMP,
   IRInstr_JZ,
   IRInstr_LBL,
@@ -87,6 +88,12 @@ struct IRInstr_Copy {
 typedef Vector(struct IRValue *) VecIRValuePtr;
 
 struct IRInstr_Call {
+  struct Expr target;
+  VecIRValuePtr args;
+  struct IRValue *dst;
+};
+
+struct IRInstr_Spawn {
   struct Expr target;
   VecIRValuePtr args;
   struct IRValue *dst;
@@ -178,6 +185,7 @@ struct IRInstr {
     struct IRInstr_Ret ret;
     struct IRInstr_Copy copy;
     struct IRInstr_Call call;
+    struct IRInstr_Spawn spawn;
     struct IRInstr_Jump jmp;
     struct IRInstr_JumpIfZero jz;
     struct IRInstr_Label label;

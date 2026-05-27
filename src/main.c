@@ -103,8 +103,8 @@ struct AssembleLinkResult {
 };
 
 static struct AssembleLinkResult assemble_and_link(const char *path,
-                                            const char *out_path,
-                                            bool assemble_only)
+                                                   const char *out_path,
+                                                   bool assemble_only)
 {
   struct AssembleLinkResult result;
   result.is_ok = true;
@@ -120,7 +120,12 @@ static struct AssembleLinkResult assemble_and_link(const char *path,
     if (assemble_only) {
       execlp("gcc", "gcc", "-c", path, "-o", out_path, NULL);
     } else {
-      execlp("gcc", "gcc", path, "-o", out_path, NULL);
+      const char *runtime_path = getenv("X_ASYNC_RUNTIME");
+      if (!runtime_path) {
+        runtime_path = "runtime/x_async_runtime.c";
+      }
+      execlp("gcc", "gcc", path, runtime_path, "-D_XOPEN_SOURCE=700", "-o",
+             out_path, NULL);
     }
 
     exit(EXIT_FAILURE);

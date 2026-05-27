@@ -11,6 +11,9 @@ enum TokenKind {
   TOKEN_LET,
   TOKEN_MUT,
   TOKEN_AS,
+  TOKEN_ASYNC,
+  TOKEN_AWAIT,
+  TOKEN_YIELD,
   TOKEN_IF,
   TOKEN_ELSE,
   TOKEN_DO,
@@ -40,6 +43,7 @@ enum TokenKind {
   TOKEN_F32,
   TOKEN_F64,
   TOKEN_STR,
+  TOKEN_TASK,
 
   /* one char */
   TOKEN_LPAREN,

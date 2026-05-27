@@ -31,6 +31,7 @@ static struct AsmType type_to_asm_type(Type type)
     case U64_T:
     case I64_T:
     case PTR_T:
+    case TASK_T:
       return (struct AsmType){.kind = AsmType_QUADWORD};
     case F32_T:
       return (struct AsmType){.kind = AsmType_FLOAT};
@@ -1221,6 +1222,57 @@ static void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
 
       break;
     }
+    case IRInstr_SPAWN: {
+      /* Stackless async constructor helper.  In IR this instruction now means:
+       *
+       *   dst = __x_task_new(&target_step_function, frame_slot_count)
+       *
+       * The target is carried as a symbol so codegen can emit LEA directly.
+       */
+      struct AsmType qword = {.kind = AsmType_QUADWORD};
+
+      struct AsmOperand rdi = {
+          .kind = AsmOperand_REG, .as.reg = DI, .asm_type = qword};
+      struct AsmOperand rsi = {
+          .kind = AsmOperand_REG, .as.reg = SI, .asm_type = qword};
+
+      struct AsmOperand fn_sym = {
+          .kind = AsmOperand_DATA,
+          .as.data = strdup(ir_instr->as.spawn.target.as.var.name),
+          .asm_type = qword};
+
+      vec_insert(instrs,
+                 ((struct AsmInstr){.kind = AsmInstr_LEA,
+                                    .as.lea = {.src = fn_sym, .dst = rdi}}));
+
+      struct AsmOperand slots_src = {
+          .kind = AsmOperand_IMM, .as.imm = 0, .asm_type = qword};
+      if (ir_instr->as.spawn.args.len > 0) {
+        slots_src = codegen_irvalue(ir_instr->as.spawn.args.data[0]);
+      }
+
+      vec_insert(instrs,
+                 ((struct AsmInstr){.kind = AsmInstr_MOV,
+                                    .asm_type = qword,
+                                    .as.mov = {.src = slots_src, .dst = rsi}}));
+
+      struct AsmInstr call_instr = {0};
+      call_instr.kind = AsmInstr_CALL;
+      call_instr.as.call.target = "__x_task_new";
+      vec_insert(instrs, call_instr);
+
+      if (ir_instr->as.spawn.dst) {
+        struct AsmOperand dst_op = codegen_irvalue(ir_instr->as.spawn.dst);
+        struct AsmOperand rax = {
+            .kind = AsmOperand_REG, .as.reg = AX, .asm_type = dst_op.asm_type};
+        vec_insert(instrs,
+                   ((struct AsmInstr){.kind = AsmInstr_MOV,
+                                      .asm_type = dst_op.asm_type,
+                                      .as.mov = {.src = rax, .dst = dst_op}}));
+      }
+
+      break;
+    }
     case IRInstr_JMP: {
       struct AsmInstr i = {0};
       struct AsmInstrJmp jmp;
@@ -2067,7 +2119,8 @@ struct AsmResult codegen(struct IRProgram *ir_prog)
   return result;
 }
 
-#if defined (DEBUG_CODEGEN_RAW) || defined (DEBUG_CODEGEN_REGALLOC) || defined (DEBUG_CODEGEN_FIXUP)
+#if defined(DEBUG_CODEGEN_RAW) || defined(DEBUG_CODEGEN_REGALLOC) || \
+    defined(DEBUG_CODEGEN_FIXUP)
 static void print_asm_type(struct AsmType type)
 {
   switch (type.kind) {

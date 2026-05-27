@@ -160,6 +160,12 @@ struct Token next_token(struct Tokenizer *tokenizer)
 
   switch (*tokenizer->src) {
     case 'a': {
+      if (match_keyword(tokenizer, 4, "sync")) {
+        return mktoken(tokenizer, TOKEN_ASYNC, 5);
+      }
+      if (match_keyword(tokenizer, 4, "wait")) {
+        return mktoken(tokenizer, TOKEN_AWAIT, 5);
+      }
       if (match_keyword(tokenizer, 1, "s")) {
         return mktoken(tokenizer, TOKEN_AS, 2);
       }
@@ -271,6 +277,9 @@ struct Token next_token(struct Tokenizer *tokenizer)
       return identifier(tokenizer);
     }
     case 't': {
+      if (match_keyword(tokenizer, 3, "ask")) {
+        return mktoken(tokenizer, TOKEN_TASK, 4);
+      }
       if (match_keyword(tokenizer, 3, "rue")) {
         return mktoken(tokenizer, TOKEN_TRUE, 4);
       }
@@ -303,6 +312,12 @@ struct Token next_token(struct Tokenizer *tokenizer)
     case 'w': {
       if (match_keyword(tokenizer, 4, "hile")) {
         return mktoken(tokenizer, TOKEN_WHILE, 5);
+      }
+      return identifier(tokenizer);
+    }
+    case 'y': {
+      if (match_keyword(tokenizer, 4, "ield")) {
+        return mktoken(tokenizer, TOKEN_YIELD, 5);
       }
       return identifier(tokenizer);
     }
@@ -429,7 +444,6 @@ struct Token next_token(struct Tokenizer *tokenizer)
   }
 }
 
-
 #ifdef DEBUG_TOKENIZER
 struct TokenizeResult tokenize(struct Tokenizer *tokenizer)
 {
@@ -470,6 +484,15 @@ void print_token(struct Token *token)
       break;
     case TOKEN_AS:
       printf("as");
+      break;
+    case TOKEN_ASYNC:
+      printf("async");
+      break;
+    case TOKEN_AWAIT:
+      printf("await");
+      break;
+    case TOKEN_YIELD:
+      printf("yield");
       break;
     case TOKEN_IF:
       printf("if");
@@ -557,6 +580,9 @@ void print_token(struct Token *token)
       break;
     case TOKEN_STR:
       printf("str");
+      break;
+    case TOKEN_TASK:
+      printf("task");
       break;
     case TOKEN_LPAREN:
       printf("LParen");
