@@ -163,23 +163,34 @@ extern fn __x_io_set_nonblocking(fd: i64) -> i64;
 In synchronous code, the same wait helpers are ordinary blocking calls.
 
 ```rust
+extern fn __x_sleep_ms(ms: i64) -> i64;
 extern fn printf(fmt: str, ...) -> i32;
+extern fn malloc(n: u64) -> *void;
+extern fn free(ptr: *void) -> void;
 
-async fn count(name: str, start: i64) -> i64 {
-  printf("%s:%lld\n", name, start);
-  yield;
-  printf("%s:%lld\n", name, start + 1);
-  yield;
-  printf("%s:%lld\n", name, start + 2);
-  ret start + 2;
+let NUM_TASKS: u64 = 5;
+
+async fn worker(n: u64) -> u64 {
+  loop {
+    printf("hello from worker %lld\n", n);
+    __x_sleep_ms(1000);
+  }
+  ret 0;
 }
 
-fn main() -> i32 {
-  let a: task = async count("A", 10);
-  let b: task = async count("B", 20);
-  let av: i64 = await a;
-  let bv: i64 = await b;
-  printf("done %lld %lld\n", av, bv);
+fn main(void) -> i32 {
+  let mut x: i32 = 0;
+  let mut y: i32 = 0;
+  let mut arr: *task = malloc(NUM_TASKS * sizeofT(task));
+  while (x < NUM_TASKS) {
+    let t: task = worker(x);
+    *(arr+x) = t;
+    x = x+1;
+  }
+  while (y < NUM_TASKS) {
+    await *(arr+y);
+    y = y+1;
+  }
   ret 0;
 }
 ```
