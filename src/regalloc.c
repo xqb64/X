@@ -316,6 +316,7 @@ static void pseudo_set_free(VecPseudo *set)
   set->data = NULL;
 }
 
+#ifdef DEBUG_REGALLOC
 static void pseudo_set_print(VecPseudo *set)
 {
   printf("{");
@@ -330,6 +331,7 @@ static void pseudo_set_print(VecPseudo *set)
 
   printf("}");
 }
+#endif
 
 static struct AsmType *pseudo_type_get(VecPseudoType *types, char *pseudo)
 {
@@ -452,6 +454,7 @@ static void free_pseudo_types(VecPseudoType *types)
   types->data = NULL;
 }
 
+#ifdef DEBUG_REGALLOC
 static int find_live_interval(VecLiveInterval *intervals, char *pseudo)
 {
   for (int i = 0; i < intervals->len; i++) {
@@ -507,7 +510,7 @@ static void touch_pseudo_set(VecLiveInterval *intervals, VecPseudoType *types,
   }
 }
 
-static __attribute__((unused)) VecLiveInterval
+static VecLiveInterval
 build_live_intervals(struct InstrLiveness *lv, int n, VecPseudoType *types)
 {
   VecLiveInterval intervals = {0};
@@ -534,14 +537,14 @@ static int compare_live_intervals(const void *a, const void *b)
   return ia->end - ib->end;
 }
 
-static __attribute__((unused)) void sort_live_intervals(
+static void sort_live_intervals(
     VecLiveInterval *intervals)
 {
   qsort(intervals->data, intervals->len, sizeof(intervals->data[0]),
         compare_live_intervals);
 }
 
-static __attribute__((unused)) void print_live_intervals(
+static void print_live_intervals(
     VecLiveInterval *intervals)
 {
   printf("Live intervals:\n");
@@ -552,7 +555,7 @@ static __attribute__((unused)) void print_live_intervals(
   }
 }
 
-static __attribute__((unused)) void free_live_intervals(
+static free_live_intervals(
     VecLiveInterval *intervals)
 {
   for (int i = 0; i < intervals->len; i++) {
@@ -565,6 +568,7 @@ static __attribute__((unused)) void free_live_intervals(
   intervals->len = 0;
   intervals->data = NULL;
 }
+#endif
 
 static bool asm_type_can_live_in_int_reg(struct AsmType type)
 {
@@ -1936,7 +1940,8 @@ static void add_abi_param_copy_interference(struct InterferenceGraph *graph,
   vec_free(&moves);
 }
 
-static __attribute__((unused)) void print_interference_graph(
+#ifdef DEBUG_REGALLOC
+static void print_interference_graph(
     struct InterferenceGraph *graph)
 {
   printf("Interference graph:\n");
@@ -2002,7 +2007,7 @@ static void dump_interference_graph_dot(FILE *out,
   fprintf(out, "}\n");
 }
 
-static __attribute__((unused)) void write_interference_graph_dot(
+static void write_interference_graph_dot(
     struct InterferenceGraph *graph, const char *path)
 {
   FILE *out = fopen(path, "w");
@@ -2016,6 +2021,7 @@ static __attribute__((unused)) void write_interference_graph_dot(
 
   fclose(out);
 }
+#endif
 
 static void free_interference_graph(struct InterferenceGraph *graph)
 {
@@ -2803,6 +2809,7 @@ static VecPseudoHome color_interference_graph(
   return homes;
 }
 
+#ifdef DEUBG_REGALLOC
 static __attribute__((unused)) void print_pseudo_homes(VecPseudoHome *homes)
 {
   printf("Pseudo homes:\n");
@@ -2826,6 +2833,7 @@ static __attribute__((unused)) void print_pseudo_homes(VecPseudoHome *homes)
     }
   }
 }
+#endif
 
 static void verify_coloring(struct InterferenceGraph *graph,
                             VecPseudoHome *homes)
