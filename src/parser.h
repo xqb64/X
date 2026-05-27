@@ -76,6 +76,7 @@ enum ExprKind {
   EXPR_COMPOUND_ASSIGN,
   EXPR_CALL,
   EXPR_SIZEOF,
+  EXPR_SIZEOF_T,
   EXPR_ADDROF,
   EXPR_DEREF,
   EXPR_CAST,
@@ -150,6 +151,10 @@ struct ExprSizeof {
   struct Expr *expr;
 };
 
+struct ExprSizeofT {
+  Type target_type;
+};
+
 struct ExprCast {
   struct Expr *expr;
   Type target_type;
@@ -195,6 +200,7 @@ struct Expr {
     struct ExprUnary unary;
     struct ExprAddrOf addrof;
     struct ExprSizeof sizeof_expr;
+    struct ExprSizeofT sizeoft_expr;
     struct ExprDeref deref;
     struct ExprCast cast;
     struct ExprStructInit struct_init;

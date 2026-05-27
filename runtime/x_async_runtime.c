@@ -678,3 +678,4 @@ void __x_async_bad_pc(uint64_t handle)
           (unsigned long long) task->pc);
   abort();
 }
+

@@ -577,6 +577,9 @@ int get_type_size(Type t)
       return 8;
     case STRUCT_T: {
       struct StructDef *def = struct_get(struct_table, t.as.struct_name);
+      if (!def) {
+        return -1;
+      }
       return def->size;
     }
     default:
@@ -730,9 +733,25 @@ static struct TypecheckResult typecheck_expr(struct Expr *expr,
         return r;
       }
 
-      expr->type = expr->as.sizeof_expr.expr->type;
+      if (get_type_size(expr->as.sizeof_expr.expr->type) < 0) {
+        return (struct TypecheckResult){.is_ok = false,
+                                        .msg =
+                                            "sizeof operand has incomplete or invalid type",
+                                        .ast = NULL};
+      }
 
-      /* FIXME: is complete? */
+      expr->type = (Type){.kind = U64_T};
+      break;
+    }
+    case EXPR_SIZEOF_T: {
+      if (get_type_size(expr->as.sizeoft_expr.target_type) < 0) {
+        return (struct TypecheckResult){.is_ok = false,
+                                        .msg =
+                                            "sizeofT operand has incomplete or invalid type",
+                                        .ast = NULL};
+      }
+
+      expr->type = (Type){.kind = U64_T};
       break;
     }
     case EXPR_MEMBER: {
@@ -1132,6 +1151,44 @@ static struct TypecheckResult typecheck_expr(struct Expr *expr,
           expr->type = common_type;
         }
         break;
+      }
+
+      if (expr->as.binary.kind == EXPR_BIN_ADD ||
+          expr->as.binary.kind == EXPR_BIN_SUB) {
+        Type lhs_type = expr->as.binary.lhs->type;
+        Type rhs_type = expr->as.binary.rhs->type;
+
+        if (lhs_type.kind == PTR_T && is_integer_type(rhs_type.kind)) {
+          if (!lhs_type.as.base || lhs_type.as.base->kind == VOID_T) {
+            return (struct TypecheckResult){
+                .is_ok = false,
+                .msg = "Type error: pointer arithmetic requires a sized pointee",
+                .ast = NULL};
+          }
+
+          expr->type = clone_type(lhs_type);
+          break;
+        }
+
+        if (expr->as.binary.kind == EXPR_BIN_ADD &&
+            is_integer_type(lhs_type.kind) && rhs_type.kind == PTR_T) {
+          if (!rhs_type.as.base || rhs_type.as.base->kind == VOID_T) {
+            return (struct TypecheckResult){
+                .is_ok = false,
+                .msg = "Type error: pointer arithmetic requires a sized pointee",
+                .ast = NULL};
+          }
+
+          expr->type = clone_type(rhs_type);
+          break;
+        }
+
+        if (lhs_type.kind == PTR_T || rhs_type.kind == PTR_T) {
+          return (struct TypecheckResult){
+              .is_ok = false,
+              .msg = "Type error: invalid pointer arithmetic",
+              .ast = NULL};
+        }
       }
 
       Type common_type;

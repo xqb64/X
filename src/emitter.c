@@ -683,7 +683,7 @@ struct EmitResult emit(struct AsmProgram *prog, char *path)
               } else if (instr->asm_type.kind == AsmType_DOUBLE) {
                 fprintf(f, "mulsd ");
               } else {
-                fprintf(f, "imul ");
+                fprintf(f, "imul");
                 switch (instr->asm_type.kind) {
                   case AsmType_BYTE:
                     fprintf(f, "b ");

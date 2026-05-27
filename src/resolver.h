@@ -14,6 +14,7 @@ struct ResolveResult {
     struct Expr *expr;
     struct Parameter *param;
     struct Decl *decl;
+    Type type;
   } as;
 };
 

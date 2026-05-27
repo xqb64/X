@@ -123,6 +123,6 @@ graph.png: graph.gv
 	dot -Tpng $< -o $@
 
 format:
-	clang-format src/*.c src/*.h runtime/*.c -style=file:.clang-format -i
+	clang-format src/*.c src/*.h -style=file:.clang-format -i
 
 .PHONY: all clean test format 

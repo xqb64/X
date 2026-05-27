@@ -78,6 +78,10 @@ void free_expr(struct Expr *expr)
       free(expr->as.sizeof_expr.expr);
       break;
     }
+    case EXPR_SIZEOF_T: {
+      free_type(&expr->as.sizeoft_expr.target_type);
+      break;
+    }
     case EXPR_DEREF: {
       free_expr(expr->as.deref.expr);
       free(expr->as.deref.expr);
@@ -1017,7 +1021,7 @@ static struct ParseFnResult unary(struct Parser *parser)
     token_lparen = consume(parser, TOKEN_LPAREN);
     if (!token_lparen) {
       return (struct ParseFnResult){
-          .is_ok = false, .msg = "Expected '(' after sizeoef", .as.stmt = {0}};
+          .is_ok = false, .msg = "Expected '(' after sizeof", .as.stmt = {0}};
     }
 
     right_result = unary(parser);
@@ -1040,6 +1044,34 @@ static struct ParseFnResult unary(struct Parser *parser)
 
     e.kind = EXPR_SIZEOF;
     e.as.sizeof_expr = sizeof_expr;
+    return (struct ParseFnResult){.as.expr = e, .is_ok = true, .msg = NULL};
+  } else if (match(parser, 1, TOKEN_SIZEOF_T)) {
+    struct Token *token_lparen, *token_rparen;
+    Type target_type;
+    struct Expr e;
+
+    token_lparen = consume(parser, TOKEN_LPAREN);
+    if (!token_lparen) {
+      return (struct ParseFnResult){
+          .is_ok = false, .msg = "Expected '(' after sizeofT", .as.stmt = {0}};
+    }
+
+    target_type = parse_type(parser);
+    if (target_type.kind == UNKNOWN_T) {
+      return (struct ParseFnResult){
+          .is_ok = false, .msg = "Expected type inside sizeofT", .as.stmt = {0}};
+    }
+
+    token_rparen = consume(parser, TOKEN_RPAREN);
+    if (!token_rparen) {
+      free_type(&target_type);
+      return (struct ParseFnResult){.is_ok = false,
+                                    .msg = "Expected ')' after sizeofT type",
+                                    .as.stmt = {0}};
+    }
+
+    e.kind = EXPR_SIZEOF_T;
+    e.as.sizeoft_expr = (struct ExprSizeofT){.target_type = target_type};
     return (struct ParseFnResult){.as.expr = e, .is_ok = true, .msg = NULL};
   }
 
@@ -2969,6 +3001,16 @@ void print_expr(struct Expr *expr, int spaces)
       printf("SizeOf(\n");
       print_indent(spaces + 2);
       print_expr(expr->as.sizeof_expr.expr, spaces + 2);
+      printf("\n");
+      print_indent(spaces);
+      printf(")");
+      break;
+    }
+    case EXPR_SIZEOF_T: {
+      printf("SizeOfT(\n");
+      print_indent(spaces + 2);
+      printf("type = ");
+      print_type(&expr->as.sizeoft_expr.target_type, spaces + 2);
       printf("\n");
       print_indent(spaces);
       printf(")");

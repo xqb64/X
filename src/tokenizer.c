@@ -265,6 +265,9 @@ struct Token next_token(struct Tokenizer *tokenizer)
       return identifier(tokenizer);
     }
     case 's': {
+      if (match_keyword(tokenizer, 6, "izeofT")) {
+        return mktoken(tokenizer, TOKEN_SIZEOF_T, 7);
+      }
       if (match_keyword(tokenizer, 5, "izeof")) {
         return mktoken(tokenizer, TOKEN_SIZEOF, 6);
       }
@@ -529,6 +532,9 @@ void print_token(struct Token *token)
       break;
     case TOKEN_SIZEOF:
       printf("sizeof");
+      break;
+    case TOKEN_SIZEOF_T:
+      printf("sizeofT");
       break;
     case TOKEN_STRUCT:
       printf("struct");

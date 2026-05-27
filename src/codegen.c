@@ -118,6 +118,18 @@ const char *reg_to_str_64(enum AsmRegister reg)
       return "%r9";
     case R10:
       return "%r10";
+    case R11:
+      return "%r11";
+    case R12:
+      return "%r12";
+    case R13:
+      return "%r13";
+    case R14:
+      return "%r14";
+    case R15:
+      return "%r15";
+    case BX:
+      return "%rbx";
     case BP:
       return "%rbp";
     case SP:
@@ -1406,7 +1418,7 @@ static void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
 
       if (ir_instr->as.store.val->type.kind != STRUCT_T && size <= 8) {
         struct AsmOperand scratch_val = {
-            .kind = AsmOperand_REG, .as.reg = R9, .asm_type = src_val.asm_type};
+            .kind = AsmOperand_REG, .as.reg = R11, .asm_type = src_val.asm_type};
 
         vec_insert(instrs, ((struct AsmInstr){
                                .kind = AsmInstr_MOV,
@@ -1569,19 +1581,34 @@ static void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
       mov1.as.mov.src = codegen_irvalue(ir_instr->as.add_ptr.ptr);
       mov1.as.mov.dst = (struct AsmOperand){
           .kind = AsmOperand_REG,
-          .as.reg = AX,
+          .as.reg = R10,
           .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
       vec_insert(instrs, mov1);
 
-      struct AsmInstr mov2 = {0};
-      mov2.kind = AsmInstr_MOV;
-      mov2.asm_type = (struct AsmType){.kind = AsmType_QUADWORD};
-      mov2.as.mov.src = codegen_irvalue(ir_instr->as.add_ptr.index);
-      mov2.as.mov.dst = (struct AsmOperand){
+      struct AsmOperand index_src = codegen_irvalue(ir_instr->as.add_ptr.index);
+      struct AsmOperand index_dst = {
           .kind = AsmOperand_REG,
-          .as.reg = DX,
+          .as.reg = R11,
           .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
-      vec_insert(instrs, mov2);
+
+      if (index_src.asm_type.kind == AsmType_QUADWORD) {
+        struct AsmInstr mov2 = {0};
+        mov2.kind = AsmInstr_MOV;
+        mov2.asm_type = (struct AsmType){.kind = AsmType_QUADWORD};
+        mov2.as.mov.src = index_src;
+        mov2.as.mov.dst = index_dst;
+        vec_insert(instrs, mov2);
+      } else {
+        struct AsmInstr extend = {0};
+        extend.kind = AsmInstr_CVT;
+        extend.asm_type = (struct AsmType){.kind = AsmType_QUADWORD};
+        extend.as.cvt.kind = is_unsigned(ir_instr->as.add_ptr.index->type.kind)
+                                  ? AsmCast_ZeroExtend
+                                  : AsmCast_SignExtend;
+        extend.as.cvt.src = index_src;
+        extend.as.cvt.dst = index_dst;
+        vec_insert(instrs, extend);
+      }
 
       int scale = ir_instr->as.add_ptr.scale;
       if (scale == 1 || scale == 2 || scale == 4 || scale == 8) {
@@ -1591,7 +1618,7 @@ static void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
         lea_instr.as.lea.src = (struct AsmOperand){
             .kind = AsmOperand_INDEXED,
             .asm_type = (struct AsmType){.kind = AsmType_QUADWORD},
-            .as.indexed = {.base = AX, .index = DX, .scale = scale}};
+            .as.indexed = {.base = R10, .index = R11, .scale = scale}};
         lea_instr.as.lea.dst = codegen_irvalue(ir_instr->as.add_ptr.dst);
         vec_insert(instrs, lea_instr);
       } else {
@@ -1605,7 +1632,7 @@ static void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
             .as.imm = scale};
         imul_instr.as.binary.rhs = (struct AsmOperand){
             .kind = AsmOperand_REG,
-            .as.reg = DX,
+            .as.reg = R11,
             .asm_type = (struct AsmType){.kind = AsmType_QUADWORD}};
         vec_insert(instrs, imul_instr);
 
@@ -1615,7 +1642,7 @@ static void codegen_instr(struct IRInstr *ir_instr, VecAsmInstr *instrs,
         lea_fallback.as.lea.src = (struct AsmOperand){
             .kind = AsmOperand_INDEXED,
             .asm_type = (struct AsmType){.kind = AsmType_QUADWORD},
-            .as.indexed = {.base = AX, .index = DX, .scale = 1}};
+            .as.indexed = {.base = R10, .index = R11, .scale = 1}};
         lea_fallback.as.lea.dst = codegen_irvalue(ir_instr->as.add_ptr.dst);
         vec_insert(instrs, lea_fallback);
       }

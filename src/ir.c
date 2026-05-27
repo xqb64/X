@@ -663,6 +663,59 @@ static struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
       dst = mkirvar();
       dst->type = expr->type;
 
+      /*
+       * Pointer arithmetic must not be lowered as a plain integer ADD/SUB.
+       * A source expression like `arr + x` means:
+       *
+       *     (char *)arr + x * sizeof(*arr)
+       *
+       * If we emit a normal IRInstr_BIN ADD here, codegen may generate invalid
+       * mixed-width assembly such as `addq %ebx, %r8`, and even if that
+       * assembled it would still be wrong because the index would not be scaled.
+       */
+      if ((expr->as.binary.kind == EXPR_BIN_ADD ||
+           expr->as.binary.kind == EXPR_BIN_SUB) &&
+          lhs->type.kind == PTR_T && is_integer_type(rhs->type.kind)) {
+        int scale;
+
+        assert(lhs->type.as.base &&
+               "pointer arithmetic should have a sized pointee after typecheck");
+        scale = get_type_size(*lhs->type.as.base);
+        assert(scale > 0);
+
+        if (expr->as.binary.kind == EXPR_BIN_SUB) {
+          scale = -scale;
+        }
+
+        vec_insert(instrs, ((struct IRInstr){
+                              .kind = IRInstr_ADD_PTR,
+                              .as.add_ptr = {.ptr = lhs,
+                                             .index = rhs,
+                                             .scale = scale,
+                                             .dst = clone_irval(dst)}}));
+
+        return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = dst};
+      }
+
+      if (expr->as.binary.kind == EXPR_BIN_ADD &&
+          is_integer_type(lhs->type.kind) && rhs->type.kind == PTR_T) {
+        int scale;
+
+        assert(rhs->type.as.base &&
+               "pointer arithmetic should have a sized pointee after typecheck");
+        scale = get_type_size(*rhs->type.as.base);
+        assert(scale > 0);
+
+        vec_insert(instrs, ((struct IRInstr){
+                              .kind = IRInstr_ADD_PTR,
+                              .as.add_ptr = {.ptr = rhs,
+                                             .index = lhs,
+                                             .scale = scale,
+                                             .dst = clone_irval(dst)}}));
+
+        return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = dst};
+      }
+
       enum IRInstrBinaryKind kind;
       kind = expr_bin_to_ir_bin(expr->as.binary.kind, expr->type);
 
@@ -865,14 +918,31 @@ static struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
 
       return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = dst};
     }
-    case EXPR_SIZEOF: {
+        case EXPR_SIZEOF: {
       struct ExpResult result;
       struct IRValue sz;
 
       sz.kind = IRValue_CONST;
       sz.as.konst = (struct Literal){
           .kind = LITERAL_NUM,
-          .as.u64 = (unsigned long long) get_type_size(expr->type)};
+          .as.u64 = (unsigned long long) get_type_size(
+              expr->as.sizeof_expr.expr->type)};
+      sz.type = (Type){.kind = U64_T};
+
+      result.kind = EXPRESULT_PLAIN;
+      result.as.plain = ALLOC(sz);
+
+      return result;
+    }
+    case EXPR_SIZEOF_T: {
+      struct ExpResult result;
+      struct IRValue sz;
+
+      sz.kind = IRValue_CONST;
+      sz.as.konst = (struct Literal){
+          .kind = LITERAL_NUM,
+          .as.u64 = (unsigned long long) get_type_size(
+              expr->as.sizeoft_expr.target_type)};
       sz.type = (Type){.kind = U64_T};
 
       result.kind = EXPRESULT_PLAIN;
