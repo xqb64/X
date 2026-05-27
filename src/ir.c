@@ -716,6 +716,53 @@ static struct ExpResult irfy_expr(VecIRInstr *instrs, struct Expr *expr)
         return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = dst};
       }
 
+      if (expr->as.binary.kind == EXPR_BIN_SUB && (lhs->type.kind == PTR_T && rhs->type.kind == PTR_T)) {
+        int scale;
+
+	scale = get_type_size(*lhs->type.as.base);
+
+	struct IRValue *ptr1, *ptr2, *ptrdiff, scale_var, *ptrdiff_dst;
+
+	ptr1 = irfy_expr_and_convert(instrs, expr->as.binary.lhs);
+	ptr2 = irfy_expr_and_convert(instrs, expr->as.binary.rhs);
+
+	ptrdiff = mkirvar();
+	ptrdiff->type = (Type){.kind = I64_T};
+
+	scale_var.kind = IRValue_CONST;
+	scale_var.type = (Type){.kind = I64_T};
+	scale_var.as.konst.as.i64 = (long long) scale;
+
+	ptrdiff_dst = mkirvar();
+	ptrdiff_dst->type = (Type){.kind = I64_T};
+
+	struct IRInstr i1, i2;
+
+	struct IRInstr_Binary sub;
+	sub.kind = IRInstrBinary_SUB;
+	sub.lhs = ptr1;
+	sub.rhs = ptr2;
+	sub.dst = clone_irval(ptrdiff);
+
+	i1.kind = IRInstr_BIN;
+	i1.as.binary = sub;
+
+	vec_insert(instrs, i1);
+
+	struct IRInstr_Binary div;
+	div.kind = IRInstrBinary_DIV;
+	div.lhs = ptrdiff;
+	div.rhs = ALLOC(scale_var);
+	div.dst = clone_irval(ptrdiff_dst);
+
+	i2.kind = IRInstr_BIN;
+	i2.as.binary = div;
+
+	vec_insert(instrs, i2);
+
+	return (struct ExpResult){.kind = EXPRESULT_PLAIN, .as.plain = ptrdiff_dst};
+      }
+
       enum IRInstrBinaryKind kind;
       kind = expr_bin_to_ir_bin(expr->as.binary.kind, expr->type);
 

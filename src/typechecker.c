@@ -7,7 +7,6 @@
 #include <string.h>
 
 #include "parser.h"
-#include "util.h"
 
 struct StructTable *struct_table = NULL;
 struct EnumTypeItem *enum_types = NULL;
@@ -1183,12 +1182,14 @@ static struct TypecheckResult typecheck_expr(struct Expr *expr,
           break;
         }
 
-        if (lhs_type.kind == PTR_T || rhs_type.kind == PTR_T) {
+        if (expr->as.binary.kind == EXPR_BIN_ADD && (lhs_type.kind == PTR_T || rhs_type.kind == PTR_T)) {
           return (struct TypecheckResult){
               .is_ok = false,
               .msg = "Type error: invalid pointer arithmetic",
               .ast = NULL};
-        }
+        } else {
+	  expr->type = (Type){.kind = I64_T};
+	}
       }
 
       Type common_type;

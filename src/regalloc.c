@@ -414,6 +414,7 @@ static VecPseudoType collect_pseudo_types(struct AsmFunction *fn)
         break;
 
       case AsmInstr_LEA:
+        remember_operand_type(&types, &instr->as.lea.src);
         remember_operand_type(&types, &instr->as.lea.dst);
         break;
 
@@ -2030,6 +2031,8 @@ static void free_interference_graph(struct InterferenceGraph *graph)
   graph->nodes.data = NULL;
 }
 
+static int uf_find(int *parent, int x);
+
 static bool pseudo_is_global_constant(char *pseudo)
 {
   for (int k = 0; k < global_constants.len; k++) {
@@ -2039,6 +2042,87 @@ static bool pseudo_is_global_constant(char *pseudo)
   }
 
   return false;
+}
+
+static VecPseudo collect_lea_address_sources(struct AsmFunction *fn)
+{
+  VecPseudo out = {0};
+
+  for (int i = 0; i < fn->body.len; i++) {
+    struct AsmInstr *instr = &fn->body.data[i];
+
+    if (instr->kind != AsmInstr_LEA) {
+      continue;
+    }
+
+    if (instr->as.lea.src.kind != AsmOperand_PSEUDO) {
+      continue;
+    }
+
+    if (pseudo_is_global_constant(instr->as.lea.src.as.pseudo)) {
+      continue;
+    }
+
+    pseudo_set_add(&out, instr->as.lea.src.as.pseudo);
+  }
+
+  return out;
+}
+
+static void add_force_stack_register_interference(struct InterferenceGraph *graph,
+                                                  VecPseudo *force_stack)
+{
+  for (int i = 0; i < force_stack->len; i++) {
+    int pseudo_idx = interference_add_node(graph, force_stack->data[i]);
+
+    for (int r = 0; r < NUM_ALLOCATABLE_INT_REGS; r++) {
+      int reg_idx = interference_add_precolored_reg(graph,
+                                                    allocatable_int_regs[r]);
+
+      interference_add_edge_by_index(graph, pseudo_idx, reg_idx);
+    }
+
+    for (int r = 0; r < NUM_ALLOCATABLE_SSE_REGS; r++) {
+      int reg_idx = interference_add_precolored_reg(graph,
+                                                    allocatable_sse_regs[r]);
+
+      interference_add_edge_by_index(graph, pseudo_idx, reg_idx);
+    }
+  }
+}
+
+static VecPseudo coalesced_force_stack_pseudos(struct InterferenceGraph *orig,
+                                               int *parent,
+                                               VecPseudo *force_stack)
+{
+  VecPseudo out = {0};
+
+  for (int i = 0; i < orig->nodes.len; i++) {
+    int rep_idx;
+
+    if (orig->nodes.data[i].is_precolored) {
+      continue;
+    }
+
+    if (!pseudo_set_contains(force_stack, orig->nodes.data[i].pseudo)) {
+      continue;
+    }
+
+    rep_idx = uf_find(parent, i);
+
+    if (orig->nodes.data[rep_idx].is_precolored) {
+      /*
+       * add_force_stack_register_interference() should make this impossible:
+       * an address-taken pseudo cannot be coalesced with a hardware register,
+       * because LEA needs an addressable stack object.
+       */
+      assert(0 && "address-taken pseudo coalesced with precolored register");
+    }
+
+    pseudo_set_add(&out, orig->nodes.data[rep_idx].pseudo);
+  }
+
+  return out;
 }
 
 static bool convert_global_constant_operand(struct AsmOperand *op)
@@ -2629,10 +2713,15 @@ static VecPseudoHome color_interference_graph(
     assert(asm_type && "interference node has no known AsmType");
 
     if (force_stack && pseudo_set_contains(force_stack, pseudo)) {
-      if (out_spilled) {
-        pseudo_set_add(out_spilled, pseudo);
-      }
-
+      /*
+       * force_stack means this pseudo must remain addressable, usually because
+       * it is the source object of LEA for &local.
+       *
+       * This is not a normal spill.  Give it a final stack home immediately,
+       * but do not add it to out_spilled.  If we report it as spilled,
+       * rewrite_spills() will keep rewriting the same address-taken pseudo on
+       * every allocation retry and regalloc may never converge.
+       */
       assign_stack_home(&homes, types, map, used_stack_bytes, pseudo);
 
       removed[i] = true;
@@ -3820,10 +3909,24 @@ static void rewrite_spills(struct AsmFunction *fn, VecPseudo *spilled,
         break;
 
       case AsmInstr_LEA:
-        rewrite_spilled_use(&before, &instr.as.lea.src, spilled, map,
-                            used_stack_bytes);
-
+        /*
+         * The LEA source is an address expression, not a value use.
+         * If it names a pseudo, that pseudo must stay addressable and be
+         * forced to a stack home by the LEA-source force-stack pass.
+         * Do not rewrite it through a spill temporary here: that would turn
+         * `lea pseudo, dst` into `mov stack, tmp; lea tmp, dst`, and `tmp`
+         * is not addressable.
+         */
         rewrite_spilled_def(&after, &instr.as.lea.dst, spilled, map,
+                            used_stack_bytes);
+        break;
+
+      case AsmInstr_DIV:
+        /*
+         * idiv/div reads the divisor operand.  The implicit AX/DX operands
+         * are precolored machine registers handled elsewhere.
+         */
+        rewrite_spilled_use(&before, &instr.as.div.divisor, spilled, map,
                             used_stack_bytes);
         break;
 
@@ -3833,6 +3936,7 @@ static void rewrite_spills(struct AsmFunction *fn, VecPseudo *spilled,
       case AsmInstr_JmpCC:
       case AsmInstr_LBL:
       case AsmInstr_REP_MOVSB:
+      case AsmInstr_SIGN_EXTEND_AX:
         break;
 
       default:
@@ -3970,6 +4074,8 @@ static struct AsmFunction *regalloc_fn(struct AsmFunction *fn, struct Map *map,
     VecMove moves;
     VecPseudoHome coalesced_homes;
     VecPseudoHome homes;
+    VecPseudo address_taken = {0};
+    VecPseudo coalesced_force_stack = {0};
     VecPseudo spilled = {0};
     VecSpillCost spill_costs;
 
@@ -4005,11 +4111,13 @@ static struct AsmFunction *regalloc_fn(struct AsmFunction *fn, struct Map *map,
      * 3. Collect pseudo types before operands are rewritten.
      */
     types = collect_pseudo_types(fn);
+    address_taken = collect_lea_address_sources(fn);
 
     /*
      * 4. Build interference graph.
      */
     interference = build_interference_graph(fn, &types, lv);
+    add_force_stack_register_interference(&interference, &address_taken);
 
 #ifdef DEBUG_CODEGEN_REGALLOC
     print_interference_graph(&interference);
@@ -4061,6 +4169,9 @@ static struct AsmFunction *regalloc_fn(struct AsmFunction *fn, struct Map *map,
      */
     coalesced_graph =
         build_aliased_interference_graph(&interference, coalesce_parent);
+    coalesced_force_stack =
+        coalesced_force_stack_pseudos(&interference, coalesce_parent,
+                                      &address_taken);
 
 #ifdef DEBUG_CODEGEN_REGALLOC
     printf("Coalesced ");
@@ -4081,8 +4192,9 @@ static struct AsmFunction *regalloc_fn(struct AsmFunction *fn, struct Map *map,
      * `spilled` contains names from the coalesced graph.
      */
     coalesced_homes =
-        color_interference_graph(&coalesced_graph, &types, NULL, &spilled,
-                                 &spill_costs, map, used_stack_bytes);
+        color_interference_graph(&coalesced_graph, &types, &coalesced_force_stack,
+                                 &spilled, &spill_costs, map,
+                                 used_stack_bytes);
 
 #ifdef DEBUG_CODEGEN_REGALLOC
     printf("After coloring: spilled.len = %d\n", spilled.len);
@@ -4115,6 +4227,8 @@ static struct AsmFunction *regalloc_fn(struct AsmFunction *fn, struct Map *map,
       pseudo_set_free(&original_spilled);
 
       free_pseudo_homes(&coalesced_homes);
+      pseudo_set_free(&coalesced_force_stack);
+      pseudo_set_free(&address_taken);
 
       free_interference_graph(&coalesced_graph);
       free_interference_graph(&interference);
@@ -4176,6 +4290,8 @@ static struct AsmFunction *regalloc_fn(struct AsmFunction *fn, struct Map *map,
      */
     free_pseudo_homes(&homes);
     free_pseudo_homes(&coalesced_homes);
+    pseudo_set_free(&coalesced_force_stack);
+    pseudo_set_free(&address_taken);
 
     free_interference_graph(&coalesced_graph);
     free_interference_graph(&interference);
