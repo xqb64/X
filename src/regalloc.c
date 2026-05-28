@@ -1517,65 +1517,6 @@ static void expire_old_intervals(VecActiveInterval *active, int start)
   }
 }
 
-static __attribute__((unused)) VecPseudoHome
-allocate_pseudo_homes(VecLiveInterval *intervals, struct Map *map,
-                      int *used_stack_bytes, struct AsmFunction *fn)
-{
-  (void) fn;
-
-  VecPseudoHome homes = {0};
-  VecActiveInterval active = {0};
-
-  /*
-   * Intervals must already be sorted by start.
-   */
-  for (int i = 0; i < intervals->len; i++) {
-    struct LiveInterval *interval = &intervals->data[i];
-    enum AsmRegister reg;
-
-    expire_old_intervals(&active, interval->start);
-    sort_active_intervals(&active);
-
-    /*
-     * Later we can look up the pseudo's real AsmType here.
-     * For now, we assume your interval list only contains pseudos
-     * that came from AsmOperands and are legal allocation candidates.
-     */
-
-    if (fixed_find_free_reg(&active, &reg)) {
-      struct ActiveInterval active_interval;
-
-      pseudo_home_add_reg(&homes, interval->pseudo, reg);
-
-      active_interval.pseudo = interval->pseudo;
-      active_interval.end = interval->end;
-      active_interval.reg = reg;
-
-      vec_insert(&active, active_interval);
-      continue;
-    }
-
-    /*
-     * No register available.
-     *
-     * For the first fixed-home version, spill the new interval.
-     * This is simple and safe, though not optimal.
-     */
-    {
-      int stack_offset;
-
-      stack_offset = get_offset(map, interval->pseudo, interval->asm_type,
-                                used_stack_bytes);
-
-      pseudo_home_add_stack(&homes, interval->pseudo, stack_offset);
-    }
-  }
-
-  vec_free(&active);
-
-  return homes;
-}
-
 static int interference_node_index(struct InterferenceGraph *graph,
                                    char *pseudo)
 {
@@ -2809,7 +2750,7 @@ static VecPseudoHome color_interference_graph(
   return homes;
 }
 
-#ifdef DEUBG_REGALLOC
+#ifdef DEBUG_REGALLOC
 static __attribute__((unused)) void print_pseudo_homes(VecPseudoHome *homes)
 {
   printf("Pseudo homes:\n");
